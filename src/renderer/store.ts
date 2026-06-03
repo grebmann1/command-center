@@ -1,13 +1,15 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type {
   Project,
   TerminalSession,
   LaunchProfileId,
   ClaudeSessionSummary,
-  GitStatus
+  GitStatus,
+  InboxEntry
 } from '@shared/types';
 
-export type NavId = 'projects' | 'settings';
+export type NavId = 'projects' | 'inbox' | 'settings';
 
 export interface Toast {
   id: string;
@@ -17,8 +19,22 @@ export interface Toast {
 
 export type WorkspaceMode = 'terminals' | 'explorer';
 
+export type SplitLayout = 'single' | 'vertical' | 'horizontal' | 'grid';
+
+/** Max extra panes beside the primary, indexed by layout. */
+const SPLIT_CAPACITY: Record<SplitLayout, number> = {
+  single: 0,
+  vertical: 1,
+  horizontal: 1,
+  grid: 3
+};
+
 interface UiState {
   nav: NavId;
+  /** When true, column 3 shows the workspaces overview instead of the
+   *  per-project Workspace. Cleared when the user selects a project. */
+  overviewOpen: boolean;
+  setOverviewOpen: (open: boolean) => void;
   selectedProjectId: string | null;
   // tabs grouped by project — selected ids per project
   selectedTabId: Record<string, string | undefined>;
@@ -43,6 +59,25 @@ interface UiState {
   explorerDiff: Record<string, boolean>;
   // explorer: per-project tree mode (file tree vs flat changes list)
   explorerTreeMode: Record<string, 'files' | 'changes'>;
+  // sidebar: per-project expansion of the inline terminal sub-list
+  projectExpanded: Record<string, boolean>;
+  toggleProjectExpanded: (projectId: string) => void;
+  // workspace: per-project split layout + the extra tab ids that occupy the
+  // non-primary panes. The primary pane is always `selectedTabId[projectId]`.
+  // - vertical:  [right]
+  // - horizontal:[bottom]
+  // - grid 2x2:  [top-right, bottom-left, bottom-right]
+  // Slots may be undefined; render skips them and the layout collapses
+  // gracefully (CSS grid handles empty cells).
+  splitLayout: Record<string, SplitLayout | undefined>;
+  splitTabIds: Record<string, Array<string | undefined>>;
+  setSplitLayout: (projectId: string, layout: SplitLayout) => void;
+  /** Place a tab in the next free split slot, or replace if already present. */
+  openInSplit: (projectId: string, tabId: string) => void;
+  /** Remove a tab id from the split slots (e.g. when the tab is closed). */
+  removeFromSplit: (projectId: string, tabId: string) => void;
+  /** Reset to single-pane (clears layout and slot ids). */
+  closeSplit: (projectId: string) => void;
   setExplorerDiff: (projectId: string, on: boolean) => void;
   toggleExplorerDiff: (projectId: string) => void;
   setExplorerTreeMode: (projectId: string, mode: 'files' | 'changes') => void;
@@ -61,6 +96,8 @@ interface UiState {
   setResumeOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setFindOpen: (open: boolean) => void;
+  projectSettingsOpen: string | null;
+  setProjectSettingsOpen: (id: string | null) => void;
   pushToast: (message: string, kind?: 'info' | 'error') => void;
   dismissToast: (id: string) => void;
   markUnread: (sessionId: string) => void;
@@ -116,6 +153,8 @@ function pushErrorToast(message: string) {
 
 export const useUi = create<UiState>((set) => ({
   nav: 'projects',
+  overviewOpen: false,
+  setOverviewOpen: (overviewOpen) => set({ overviewOpen }),
   selectedProjectId: null,
   selectedTabId: {},
   paletteOpen: false,
@@ -124,6 +163,7 @@ export const useUi = create<UiState>((set) => ({
   resumeOpen: false,
   searchOpen: false,
   findOpen: false,
+  projectSettingsOpen: null,
   toasts: [],
   unread: {},
   workspaceMode: {},
@@ -132,6 +172,9 @@ export const useUi = create<UiState>((set) => ({
   recentFiles: {},
   explorerDiff: {},
   explorerTreeMode: {},
+  projectExpanded: {},
+  splitLayout: {},
+  splitTabIds: {},
   workbenchEnabled:
     typeof localStorage !== 'undefined' &&
     localStorage.getItem('cc.workbenchEnabled') === '1',
@@ -151,7 +194,7 @@ export const useUi = create<UiState>((set) => ({
   },
   setNav: (nav) => set({ nav }),
   selectProject: (id) => {
-    set({ selectedProjectId: id });
+    set({ selectedProjectId: id, overviewOpen: false });
     if (!id) return;
     window.cc.config.set({ lastProjectId: id }).catch(() => {});
     // Persist the touch to disk so the next launch's auto-sort reflects
@@ -173,6 +216,7 @@ export const useUi = create<UiState>((set) => ({
   setResumeOpen: (resumeOpen) => set({ resumeOpen }),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setFindOpen: (findOpen) => set({ findOpen }),
+  setProjectSettingsOpen: (projectSettingsOpen) => set({ projectSettingsOpen }),
   pushToast: (message, kind = 'info') => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     set((s) => ({ toasts: [...s.toasts, { id, message, kind }] }));
@@ -244,7 +288,69 @@ export const useUi = create<UiState>((set) => ({
         ...s.explorerGoto,
         [projectId]: { line, column, nonce: Date.now() + Math.random() }
       }
-    }))
+    })),
+  toggleProjectExpanded: (projectId) =>
+    set((s) => ({
+      projectExpanded: { ...s.projectExpanded, [projectId]: !s.projectExpanded[projectId] }
+    })),
+  setSplitLayout: (projectId, layout) =>
+    set((s) => {
+      const cap = SPLIT_CAPACITY[layout];
+      const cur = s.splitTabIds[projectId] ?? [];
+      // Truncate or pad to the new layout's capacity (preserve existing ids).
+      const slots = cur.slice(0, cap);
+      while (slots.length < cap) slots.push(undefined);
+      const layouts = { ...s.splitLayout, [projectId]: layout };
+      const ids = { ...s.splitTabIds, [projectId]: slots };
+      if (layout === 'single') delete layouts[projectId];
+      return { splitLayout: layouts, splitTabIds: ids };
+    }),
+  openInSplit: (projectId, tabId) =>
+    set((s) => {
+      // Splitting a tab against itself is a no-op. The user invokes "Open in
+      // split" from the *non-active* tab's context menu, so this branch
+      // should never fire in practice — guard anyway.
+      if (s.selectedTabId[projectId] === tabId) return s;
+      const layout = s.splitLayout[projectId] ?? 'single';
+      // If we're still single-pane, default to a vertical split when the
+      // user picks "Open in split" from the menu — preserves the prior
+      // one-shortcut behavior.
+      const targetLayout: SplitLayout = layout === 'single' ? 'vertical' : layout;
+      const cap = SPLIT_CAPACITY[targetLayout];
+      const prev = s.splitTabIds[projectId] ?? [];
+      const slots = prev.slice(0, cap);
+      while (slots.length < cap) slots.push(undefined);
+      // If the tab is already in a slot, leave it (idempotent).
+      if (slots.includes(tabId)) {
+        return {
+          splitLayout: { ...s.splitLayout, [projectId]: targetLayout },
+          splitTabIds: { ...s.splitTabIds, [projectId]: slots }
+        };
+      }
+      // Drop into the first free slot, else replace the last one.
+      const free = slots.findIndex((x) => x === undefined);
+      const idx = free === -1 ? slots.length - 1 : free;
+      slots[idx] = tabId;
+      return {
+        splitLayout: { ...s.splitLayout, [projectId]: targetLayout },
+        splitTabIds: { ...s.splitTabIds, [projectId]: slots }
+      };
+    }),
+  removeFromSplit: (projectId, tabId) =>
+    set((s) => {
+      const slots = s.splitTabIds[projectId];
+      if (!slots || !slots.includes(tabId)) return s;
+      const next = slots.map((x) => (x === tabId ? undefined : x));
+      return { splitTabIds: { ...s.splitTabIds, [projectId]: next } };
+    }),
+  closeSplit: (projectId) =>
+    set((s) => {
+      const layouts = { ...s.splitLayout };
+      const ids = { ...s.splitTabIds };
+      delete layouts[projectId];
+      delete ids[projectId];
+      return { splitLayout: layouts, splitTabIds: ids };
+    })
 }));
 
 export interface ClosedTab {
@@ -330,6 +436,22 @@ export const useData = create<DataState>((set, get) => ({
     } catch (err) {
       pushErrorToast(errorMessage(err, 'Failed to initialize app state'));
     }
+
+    // Inbox: one-shot history load + push subscriptions. We get pushes for
+    // appended/removed entries, so no polling. Optimistic deletes filter
+    // locally before the IPC round-trip — the onRemoved push reconciles.
+    try {
+      const { entries } = await window.cc.inbox.history({ limit: 100 });
+      useInbox.setState({ entries, loading: false });
+    } catch {
+      useInbox.setState({ loading: false });
+    }
+    window.cc.inbox.onAppended((entry) => {
+      useInbox.getState().prepend(entry);
+    });
+    window.cc.inbox.onRemoved((id) => {
+      useInbox.getState().removeLocal(id);
+    });
   },
 
   async loadProjects() {
@@ -388,8 +510,15 @@ export const useData = create<DataState>((set, get) => ({
     try {
       const updated = await window.cc.projects.update(id, patch);
       if (!updated) return;
+      // Preserve the in-memory lastActiveAt (and sortIndex). Disk may have a
+      // newer lastActiveAt from an earlier `touch`, but adopting it here would
+      // re-sort the sidebar mid-session — same reason selectProject doesn't.
       set((s) => ({
-        projects: s.projects.map((p) => (p.id === id ? updated : p))
+        projects: s.projects.map((p) =>
+          p.id === id
+            ? { ...updated, lastActiveAt: p.lastActiveAt, sortIndex: p.sortIndex }
+            : p
+        )
       }));
     } catch (err) {
       pushErrorToast(errorMessage(err, 'Failed to update project'));
@@ -436,10 +565,23 @@ export const useData = create<DataState>((set, get) => ({
       };
     });
     useUi.setState((s) => {
-      if (!(id in s.workspaceMode)) return s;
-      const next = { ...s.workspaceMode };
-      delete next[id];
-      return { workspaceMode: next };
+      const patch: Partial<UiState> = {};
+      if (id in s.workspaceMode) {
+        const next = { ...s.workspaceMode };
+        delete next[id];
+        patch.workspaceMode = next;
+      }
+      if (id in s.splitLayout) {
+        const next = { ...s.splitLayout };
+        delete next[id];
+        patch.splitLayout = next;
+      }
+      if (id in s.splitTabIds) {
+        const next = { ...s.splitTabIds };
+        delete next[id];
+        patch.splitTabIds = next;
+      }
+      return patch;
     });
     persistWorkspaceModes();
   },
@@ -482,6 +624,8 @@ export const useData = create<DataState>((set, get) => ({
       pushErrorToast(errorMessage(err, 'Failed to close terminal'));
     }
     useUi.getState().clearUnread(sessionId);
+    // If the closed tab occupied any split slot, drop it from the slots.
+    useUi.getState().removeFromSplit(projectId, sessionId);
     if (closing) get().loadGitStatus(projectId);
     set((s) => {
       const remaining = (s.terminals[projectId] || []).filter((t) => t.id !== sessionId);
@@ -600,3 +744,111 @@ export const useData = create<DataState>((set, get) => ({
     }
   }
 }));
+
+// ============================================================================
+// Inbox — entries feed, selection, per-entry read tracking.
+//
+// Adapted from OpenAlice's three live stores (`ui/src/live/inbox*.ts`):
+// - feed: push-driven (onAppended/onRemoved), no polling. Initial load is
+//   one history call from useData.init().
+// - selection: ephemeral, not persisted.
+// - read: per-entry, persisted to localStorage. SELECTION marks read —
+//   never bulk-on-visibility. See OpenAlice's inbox-read.ts for the
+//   rationale: bulk-on-view destroys triage in an inbox-flow product.
+// ============================================================================
+
+interface InboxLiveState {
+  entries: InboxEntry[];
+  loading: boolean;
+  /** Replace the current list (used by initial load + reconciliation). */
+  setEntries: (entries: InboxEntry[]) => void;
+  /** Push a freshly-appended entry to the front. */
+  prepend: (entry: InboxEntry) => void;
+  /** Remove an entry from local state (optimistic delete or push echo). */
+  removeLocal: (id: string) => void;
+}
+
+export const useInbox = create<InboxLiveState>((set) => ({
+  entries: [],
+  loading: true,
+  setEntries: (entries) => set({ entries, loading: false }),
+  prepend: (entry) =>
+    set((s) =>
+      s.entries.some((e) => e.id === entry.id)
+        ? s
+        : { entries: [entry, ...s.entries] }
+    ),
+  removeLocal: (id) =>
+    set((s) => {
+      if (!s.entries.some((e) => e.id === id)) return s;
+      return { entries: s.entries.filter((e) => e.id !== id) };
+    })
+}));
+
+interface InboxSelectionState {
+  selectedEntryId: string | null;
+  select: (id: string | null) => void;
+}
+
+export const useInboxSelection = create<InboxSelectionState>((set) => ({
+  selectedEntryId: null,
+  select: (id) => set({ selectedEntryId: id })
+}));
+
+interface InboxReadState {
+  /** Object-shaped (not Set) so Zustand `persist` can JSON-serialise it. */
+  readIds: Record<string, true>;
+  markRead: (id: string) => void;
+  markUnread: (id: string) => void;
+  /** Reserved for an explicit "Mark all read" affordance — not auto-fired. */
+  markAllRead: (ids: string[]) => void;
+}
+
+export const useInboxRead = create<InboxReadState>()(
+  persist(
+    (set) => ({
+      readIds: {},
+      markRead: (id) =>
+        set((s) => (s.readIds[id] ? s : { readIds: { ...s.readIds, [id]: true } })),
+      markUnread: (id) =>
+        set((s) => {
+          if (!s.readIds[id]) return s;
+          const next = { ...s.readIds };
+          delete next[id];
+          return { readIds: next };
+        }),
+      markAllRead: (ids) =>
+        set((s) => {
+          if (ids.length === 0) return s;
+          const next = { ...s.readIds };
+          for (const id of ids) next[id] = true;
+          return { readIds: next };
+        })
+    }),
+    { name: 'cc.inbox-read.v1', version: 1 }
+  )
+);
+
+/** Sidebar-badge count: entries whose id isn't in the read set. */
+export function useUnreadInboxCount(): number {
+  const entries = useInbox((s) => s.entries);
+  const readIds = useInboxRead((s) => s.readIds);
+  let n = 0;
+  for (const e of entries) if (!readIds[e.id]) n += 1;
+  return n;
+}
+
+/**
+ * Optimistic delete + IPC. Called from the detail view's trash button and
+ * the Delete/Backspace shortcut. Removes locally first so the UI doesn't
+ * lag the IPC round-trip; the main process's onRemoved push echoes back
+ * and is a no-op (already filtered out).
+ */
+export async function deleteInboxEntry(id: string): Promise<void> {
+  useInbox.getState().removeLocal(id);
+  try {
+    await window.cc.inbox.delete(id);
+  } catch (err) {
+    pushErrorToast(errorMessage(err, 'Failed to delete inbox entry'));
+  }
+}

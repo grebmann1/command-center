@@ -1,5 +1,5 @@
-import { FolderGit2, Settings, type LucideIcon } from 'lucide-react';
-import { useUi, type NavId } from '../store';
+import { FolderGit2, Inbox, Settings, type LucideIcon } from 'lucide-react';
+import { useUi, useUnreadInboxCount, type NavId } from '../store';
 
 interface NavEntry {
   id: NavId;
@@ -8,6 +8,7 @@ interface NavEntry {
 }
 
 const navItems: NavEntry[] = [
+  { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'projects', label: 'Projects', icon: FolderGit2 },
   { id: 'settings', label: 'Settings', icon: Settings }
 ];
@@ -15,6 +16,7 @@ const navItems: NavEntry[] = [
 export function Sidebar() {
   const nav = useUi((s) => s.nav);
   const setNav = useUi((s) => s.setNav);
+  const unreadInbox = useUnreadInboxCount();
 
   return (
     <aside className="sidebar">
@@ -26,6 +28,7 @@ export function Sidebar() {
       <div>
         {navItems.map((item) => {
           const Icon = item.icon;
+          const showBadge = item.id === 'inbox' && unreadInbox > 0;
           return (
             <button
               key={item.id}
@@ -35,6 +38,15 @@ export function Sidebar() {
             >
               <Icon size={16} />
               <span>{item.label}</span>
+              {showBadge && (
+                <span
+                  className="nav-badge"
+                  aria-label={`${unreadInbox} unread`}
+                  title={`${unreadInbox} unread`}
+                >
+                  {unreadInbox > 99 ? '99+' : unreadInbox}
+                </span>
+              )}
             </button>
           );
         })}

@@ -10,13 +10,20 @@ import { listClaudeSessions } from './claude.js';
 import { listDir, readFile as fsReadFile, writeFile as fsWriteFile, walkFiles, searchFiles } from './fs.js';
 import { openIn } from './openers.js';
 import { getGitStatus, showHead, discardChanges } from './git.js';
+import { createInboxStore, type IInboxStore, type InboxEntry } from './inbox-store.js';
+import { startMcpServer, type McpServerHandle } from './mcp-server.js';
+import { ensureMcpConfigForProject } from './mcp-config.js';
+import { listMcpServers, setMcpServerEnabled } from './mcp.js';
+import { listSkills, setSkillEnabled, readHooks } from './skills.js';
+import { homedir } from 'node:os';
 import type {
   CreateTerminalRequest,
   Result,
   Project,
   OpenTarget,
   SearchOptions,
-  AppConfig
+  AppConfig,
+  ProjectSettings
 } from '../shared/types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +41,8 @@ function isWithin(child: string, parent: string): boolean {
 
 let win: BrowserWindow | null = null;
 const ptys = new PtyManager();
+const inboxStore: IInboxStore = createInboxStore();
+let mcpServer: McpServerHandle | null = null;
 
 // Resolve packaged or unpackaged icon location. In dev electron-vite runs from
 // repo root with __dirname=out/main, so the parent is the project root. Once
@@ -151,9 +160,16 @@ function createWindow() {
 
 function registerIpc() {
   safeHandle(IPC.projects.list, () => store.listProjects(), () => []);
-  ipcMain.handle(IPC.projects.add, (_e, path: string): Result<Project> => {
+  ipcMain.handle(IPC.projects.add, async (_e, path: string): Promise<Result<Project>> => {
     try {
-      return { ok: true, value: store.addProject(path) };
+      const project = store.addProject(path);
+      // Fire-and-forget the .mcp.json write; failure shouldn't block
+      // adding a project (terminal still works without inbox push). Logged
+      // for visibility.
+      ensureMcpConfigForProject(project.id).catch((err) =>
+        logMainError(`ensureMcpConfigForProject(${project.id})`, err)
+      );
+      return { ok: true, value: project };
     } catch (err) {
       return { ok: false, code: 'ADD_FAILED', message: String(err) };
     }
@@ -202,6 +218,7 @@ function registerIpc() {
         cols: req.cols,
         rows: req.rows,
         config: store.getConfig(),
+        projectSettings: store.getProjectSettings(req.projectId),
         extraArgs: req.extraArgs,
         title: req.title
       });
@@ -227,6 +244,17 @@ function registerIpc() {
     IPC.config.set,
     (patch) => store.setConfig(patch),
     () => store.getConfig()
+  );
+
+  safeHandle(
+    IPC.projectSettings.get,
+    (id: string) => store.getProjectSettings(id),
+    () => ({} as ProjectSettings)
+  );
+  safeHandle<[string, Partial<ProjectSettings>], ProjectSettings>(
+    IPC.projectSettings.set,
+    (id, patch) => store.setProjectSettings(id, patch),
+    (_, id) => store.getProjectSettings(id)
   );
 
   safeHandle(
@@ -256,6 +284,50 @@ function registerIpc() {
   safeHandle(IPC.git.status, (p: string) => getGitStatus(p), () => null);
   safeHandle(IPC.git.showHead, (p: string) => showHead(p), () => ({ ok: false, message: 'git show failed' }));
   safeHandle(IPC.git.discard, (p: string) => discardChanges(p), () => ({ ok: false, message: 'git discard failed' }));
+
+  // Inbox: history/delete RPCs + push subscriptions. We subscribe to the
+  // store once at registration (registerIpc is called exactly once from
+  // app.whenReady) and let `safeSend` no-op if the renderer isn't ready
+  // yet — that way late subscribers in the renderer pick up the next
+  // event without us re-binding listeners on window reactivation.
+  safeHandle(
+    IPC.inbox.history,
+    (opts?: { limit?: number; before?: string; projectId?: string }) =>
+      inboxStore.read(opts),
+    () => ({ entries: [], hasMore: false })
+  );
+  safeHandle(
+    IPC.inbox.delete,
+    (id: string) => inboxStore.delete(id),
+    () => false
+  );
+  inboxStore.onAppended((entry: InboxEntry) => {
+    safeSend(IPC.inbox.onAppended, entry);
+  });
+  inboxStore.onRemoved((id: string) => {
+    safeSend(IPC.inbox.onRemoved, id);
+  });
+
+  safeHandle(
+    IPC.mcp.list,
+    (projectPath: string) => listMcpServers(projectPath),
+    () => []
+  );
+  safeHandle(
+    IPC.mcp.setEnabled,
+    (projectPath: string, name: string, enabled: boolean) =>
+      setMcpServerEnabled(projectPath, name, enabled),
+    () => undefined
+  );
+
+  safeHandle(IPC.skills.list, () => listSkills(), () => []);
+  safeHandle(
+    IPC.skills.setEnabled,
+    (name: string, enabled: boolean) => setSkillEnabled(name, enabled),
+    () => undefined
+  );
+  safeHandle(IPC.skills.readHooks, () => readHooks(), () => null);
+  safeHandle(IPC.app.homedir, () => homedir(), () => '');
 }
 
 function buildAppMenu() {
@@ -399,6 +471,29 @@ app.whenReady().then(() => {
   });
   buildAppMenu();
   registerIpc();
+  // Boot the local MCP server, then plumb its URL into PtyManager so any
+  // claude-family terminal spawns get `CC_MCP_URL` injected. Errors here
+  // are logged but non-fatal — the app still works without inbox push.
+  startMcpServer({
+    inboxStore,
+    projects: {
+      get: (id: string) => store.listProjects().find((p) => p.id === id) ?? null
+    }
+  })
+    .then(async (handle) => {
+      mcpServer = handle;
+      ptys.setMcpBaseUrl(handle.url);
+      // Backfill .mcp.json for any project that doesn't already have one
+      // (idempotent — safe to re-run on every boot).
+      for (const project of store.listProjects()) {
+        try {
+          await ensureMcpConfigForProject(project.id);
+        } catch (err) {
+          logMainError(`ensureMcpConfigForProject(${project.id})`, err);
+        }
+      }
+    })
+    .catch((err) => logMainError('startMcpServer', err));
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -410,7 +505,14 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => ptys.killAll());
+app.on('before-quit', () => {
+  ptys.killAll();
+  if (mcpServer) {
+    const handle = mcpServer;
+    mcpServer = null;
+    handle.close().catch((err) => logMainError('mcpServer.close', err));
+  }
+});
 
 process.on('uncaughtException', (err) => {
   logMainError('uncaughtException', err);

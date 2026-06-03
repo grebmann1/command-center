@@ -2,12 +2,15 @@ import { useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ListPane } from './components/ListPane';
 import { Workspace } from './components/Workspace';
+import { OverviewPanel } from './components/OverviewPanel';
 import { SettingsPanel } from './components/SettingsPanel';
+import { InboxView } from './components/InboxView';
 import { CommandPalette } from './components/CommandPalette';
 import { QuickOpen } from './components/QuickOpen';
 import { ResumePicker } from './components/ResumePicker';
 import { SearchPanel } from './components/SearchPanel';
 import { ShortcutsHelp } from './components/ShortcutsHelp';
+import { ProjectSettingsDrawer } from './components/ProjectSettingsDrawer';
 import { Toaster } from './components/Toaster';
 import { scheduleGitRefresh, useData, useUi } from './store';
 import { installShortcuts } from './shortcuts';
@@ -15,6 +18,7 @@ import { installShortcuts } from './shortcuts';
 export function App() {
   const init = useData((s) => s.init);
   const nav = useUi((s) => s.nav);
+  const overviewOpen = useUi((s) => s.overviewOpen);
   const selectedProjectId = useUi((s) => s.selectedProjectId);
   const selectedTabId = useUi((s) => s.selectedTabId);
   const projects = useData((s) => s.projects);
@@ -26,6 +30,10 @@ export function App() {
     const base = 'Claude Code Terminal Center';
     if (nav === 'settings') {
       document.title = `Settings · ${base}`;
+      return;
+    }
+    if (nav === 'inbox') {
+      document.title = `Inbox · ${base}`;
       return;
     }
     const project = projects.find((p) => p.id === selectedProjectId);
@@ -125,15 +133,18 @@ export function App() {
       <div className="titlebar">Claude Code Terminal Center</div>
       <Sidebar />
       <ListPane />
-      <div className={`main-slot ${nav === 'projects' ? 'show' : 'hide'}`}>
+      <div className={`main-slot ${nav === 'projects' && !overviewOpen ? 'show' : 'hide'}`}>
         <Workspace />
       </div>
+      {nav === 'projects' && overviewOpen && <OverviewPanel />}
+      {nav === 'inbox' && <InboxView />}
       {nav === 'settings' && <SettingsPanel />}
       <CommandPaletteHost />
       <QuickOpenHost />
       <ResumePickerHost />
       <SearchPanelHost />
       <ShortcutsHelpHost />
+      <ProjectSettingsDrawerHost />
       <Toaster />
     </div>
   );
@@ -184,4 +195,14 @@ function ShortcutsHelpHost() {
   const close = () => useUi.getState().setShortcutsOpen(false);
   if (!open) return null;
   return <ShortcutsHelp onClose={close} />;
+}
+
+function ProjectSettingsDrawerHost() {
+  const projectId = useUi((s) => s.projectSettingsOpen);
+  const projects = useData((s) => s.projects);
+  const close = () => useUi.getState().setProjectSettingsOpen(null);
+  if (!projectId) return null;
+  const project = projects.find((p) => p.id === projectId);
+  if (!project) return null;
+  return <ProjectSettingsDrawer project={project} onClose={close} />;
 }

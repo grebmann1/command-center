@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search, Trash2, X, Check, Pencil, MousePointer, Code2, FolderOpen, TerminalSquare } from 'lucide-react';
+import { Plus, Search, Trash2, X, Check, Pencil, MousePointer, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2 } from 'lucide-react';
 import {
   useData,
   useUi,
@@ -9,6 +9,8 @@ import {
   LIST_PANE_MAX
 } from '../store';
 import type { OpenTarget } from '@shared/types';
+import { InboxSidebar } from './InboxSidebar';
+import { profileIcon } from '../util/profileIcon';
 
 const PROJECT_COLORS = [
   '#2f81f7', // blue (default)
@@ -31,12 +33,27 @@ export function ListPane() {
   const nav = useUi((s) => s.nav);
 
   if (nav === 'settings') return <SettingsPane />;
+  if (nav === 'inbox') return <InboxPane />;
   return <ProjectsList />;
+}
+
+function InboxPane() {
+  return (
+    <section className="list-pane inbox-list-pane">
+      <header className="list-header">
+        <h2>Inbox</h2>
+      </header>
+      <div className="list-body">
+        <InboxSidebar />
+      </div>
+    </section>
+  );
 }
 
 function ProjectsList() {
   const projects = useData((s) => s.projects);
   const terminals = useData((s) => s.terminals);
+  const closeTerminal = useData((s) => s.closeTerminal);
   const addProject = useData((s) => s.addProject);
   const addProjectByPath = useData((s) => s.addProjectByPath);
   const removeProject = useData((s) => s.removeProject);
@@ -44,9 +61,16 @@ function ProjectsList() {
   const reorderProjects = useData((s) => s.reorderProjects);
   const selectedId = useUi((s) => s.selectedProjectId);
   const selectProject = useUi((s) => s.selectProject);
+  const setProjectSettingsOpen = useUi((s) => s.setProjectSettingsOpen);
+  const selectTab = useUi((s) => s.selectTab);
+  const selectedTabId = useUi((s) => s.selectedTabId);
   const pushToast = useUi((s) => s.pushToast);
   const unread = useUi((s) => s.unread);
   const gitStatus = useData((s) => s.gitStatus);
+  const projectExpanded = useUi((s) => s.projectExpanded);
+  const toggleProjectExpanded = useUi((s) => s.toggleProjectExpanded);
+  const overviewOpen = useUi((s) => s.overviewOpen);
+  const setOverviewOpen = useUi((s) => s.setOverviewOpen);
 
   const openIn = async (target: OpenTarget, path: string) => {
     try {
@@ -227,6 +251,15 @@ function ProjectsList() {
         </div>
       )}
       <div className="list-body">
+        <button
+          type="button"
+          className={`list-overview ${overviewOpen ? 'active' : ''}`}
+          onClick={() => setOverviewOpen(true)}
+          aria-pressed={overviewOpen}
+        >
+          <LayoutDashboard size={14} />
+          <span>Overview</span>
+        </button>
         {projects.length === 0 ? (
           <div className="list-empty">
             No projects yet.
@@ -237,8 +270,8 @@ function ProjectsList() {
           <div className="list-empty">No projects match &ldquo;{filter}&rdquo;.</div>
         ) : (
           visibleProjects.map((p) => (
+            <div key={p.id} className="project-group">
             <div
-              key={p.id}
               className={`project-item ${selectedId === p.id ? 'active' : ''} ${
                 draggingProjectId === p.id ? 'dragging' : ''
               } ${
@@ -343,47 +376,80 @@ function ProjectsList() {
                     );
                   })()}
                 </div>
+                {p.tag && (
+                  <div className="project-tag" title={`Tag: ${p.tag}`}>
+                    #{p.tag}
+                  </div>
+                )}
               </div>
               {(() => {
                 const list = terminals[p.id] || [];
                 const running = list.filter((t) => t.status !== 'exited').length;
                 const exited = list.filter((t) => t.status === 'exited').length;
                 if (list.length === 0) return null;
-                return (
-                  <span className="project-badge" title={`${running} running, ${exited} exited`}>
-                    {running}
-                    {exited > 0 && <span className="project-badge-exited">·{exited}</span>}
-                  </span>
-                );
-              })()}
-              {(() => {
-                const armed = confirmDeleteId === p.id;
-                const list = terminals[p.id] || [];
-                const running = list.filter((t) => t.status !== 'exited').length;
-                const title = armed
-                  ? running > 0
-                    ? `Click to remove ${p.name} (${running} running)`
-                    : `Click to remove ${p.name}`
-                  : `Remove ${p.name}`;
+                const expanded = !!projectExpanded[p.id];
                 return (
                   <button
-                    className={`icon-btn danger ${armed ? 'project-delete-armed' : ''}`}
-                    aria-label={title}
-                    title={title}
+                    type="button"
+                    className={`project-badge ${expanded ? 'expanded' : ''}`}
+                    title={`${running} running, ${exited} exited — click to ${expanded ? 'collapse' : 'expand'}`}
+                    aria-expanded={expanded}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (armed) {
-                        setConfirmDeleteId(null);
-                        removeProject(p.id);
-                      } else {
-                        setConfirmDeleteId(p.id);
-                      }
+                      toggleProjectExpanded(p.id);
                     }}
                   >
-                    {armed ? <Check size={14} /> : <Trash2 size={14} />}
+                    {running}
+                    {exited > 0 && <span className="project-badge-exited">·{exited}</span>}
                   </button>
                 );
               })()}
+            </div>
+            {(() => {
+              const list = terminals[p.id] || [];
+              if (!projectExpanded[p.id] || list.length === 0) return null;
+              const activeTab = selectedId === p.id ? selectedTabId[p.id] : undefined;
+              return (
+                <div className="project-terminals" role="list">
+                  {list.map((t) => (
+                    <div
+                      key={t.id}
+                      role="listitem"
+                      className={`project-terminal-row ${activeTab === t.id ? 'active' : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        selectProject(p.id);
+                        selectTab(p.id, t.id);
+                      }}
+                      title={t.title}
+                    >
+                      <span
+                        className={`tab-profile-icon profile-${t.profile}`}
+                        aria-hidden="true"
+                      >
+                        {profileIcon(t.profile)}
+                      </span>
+                      <span className="project-terminal-name">{t.title}</span>
+                      {unread[t.id] && activeTab !== t.id && (
+                        <span className="project-terminal-unread" aria-label="Unread output" />
+                      )}
+                      <button
+                        type="button"
+                        className="project-terminal-close"
+                        aria-label={`Close ${t.title}`}
+                        title="Close"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeTerminal(t.id, p.id);
+                        }}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
             </div>
           ))
         )}
@@ -429,11 +495,46 @@ function ProjectsList() {
               <div className="project-menu-sep" />
               <button
                 className="project-menu-item"
+                onClick={() => { setMenu(null); setProjectSettingsOpen(p.id); }}
+              >
+                <Settings2 size={12} />
+                <span>Project settings…</span>
+              </button>
+              <button
+                className="project-menu-item"
                 onClick={() => startRename(p.id, p.name)}
               >
                 <Pencil size={12} />
                 <span>Rename</span>
               </button>
+              {(() => {
+                const armed = confirmDeleteId === p.id;
+                const running = (terminals[p.id] || []).filter((t) => t.status !== 'exited').length;
+                return (
+                  <button
+                    className={`project-menu-item danger ${armed ? 'project-delete-armed' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (armed) {
+                        setConfirmDeleteId(null);
+                        setMenu(null);
+                        removeProject(p.id);
+                      } else {
+                        setConfirmDeleteId(p.id);
+                      }
+                    }}
+                  >
+                    {armed ? <Check size={12} /> : <Trash2 size={12} />}
+                    <span>
+                      {armed
+                        ? running > 0
+                          ? `Click to confirm (${running} running)`
+                          : 'Click to confirm'
+                        : 'Remove project'}
+                    </span>
+                  </button>
+                );
+              })()}
             </>
           )}
           <div className="project-menu-label">Color</div>

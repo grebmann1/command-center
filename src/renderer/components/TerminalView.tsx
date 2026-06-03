@@ -8,9 +8,12 @@ import { posixQuote } from '../util/quote';
 import { registerFinder, registerTerminal } from '../util/findRegistry';
 import { useData } from '../store';
 
+type Area = 'a' | 'b' | 'c' | 'd';
+
 interface Props {
   session: TerminalSession;
-  active: boolean;
+  /** Grid area assigned by TerminalSurface; `undefined` = hidden. */
+  area: Area | undefined;
 }
 
 const THEME = {
@@ -37,7 +40,8 @@ const THEME = {
   brightWhite: '#f0f6fc'
 };
 
-export function TerminalView({ session, active }: Props) {
+export function TerminalView({ session, area }: Props) {
+  const visible = area !== undefined;
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -135,9 +139,12 @@ export function TerminalView({ session, active }: Props) {
     });
   }, [fontSize, session.id]);
 
-  // Refit when becoming visible
+  // Refit when becoming visible OR when area placement changes (split open/
+  // close also resizes the host element under us). The ResizeObserver above
+  // will also catch most pane resizes, but firing here removes a one-frame
+  // mismatch when the layout class changes without a size change yet.
   useEffect(() => {
-    if (active && fitRef.current) {
+    if (visible && fitRef.current) {
       requestAnimationFrame(() => {
         try {
           if (disposedRef.current) return;
@@ -147,13 +154,15 @@ export function TerminalView({ session, active }: Props) {
               .resize(session.id, termRef.current.cols, termRef.current.rows)
               .catch(() => {});
           }
-          termRef.current?.focus();
+          // Only focus the primary area ('a') on transition; secondary panes
+          // get focus only from explicit click.
+          if (area === 'a') termRef.current?.focus();
         } catch {
           /* ignore */
         }
       });
     }
-  }, [active, session.id]);
+  }, [visible, area, session.id]);
 
   const handleDragOver = (e: React.DragEvent) => {
     const types = Array.from(e.dataTransfer.types);
@@ -192,8 +201,8 @@ export function TerminalView({ session, active }: Props) {
   return (
     <div
       ref={ref}
-      className={`term ${dropOver ? 'drop-over' : ''}`}
-      style={{ display: active ? 'block' : 'none' }}
+      className={`term ${dropOver ? 'drop-over' : ''} ${area ? `area-${area}` : ''}`}
+      style={{ display: visible ? 'block' : 'none', gridArea: area }}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}

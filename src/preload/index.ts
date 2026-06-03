@@ -1,8 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from '../shared/ipc.js';
-import type { CcApi, CreateTerminalRequest } from '../shared/types.js';
+import type { CcApi, CreateTerminalRequest, InboxEntry } from '../shared/types.js';
 
 const api: CcApi = {
+  projectSettings: {
+    get: (id) => ipcRenderer.invoke(IPC.projectSettings.get, id),
+    set: (id, patch) => ipcRenderer.invoke(IPC.projectSettings.set, id, patch)
+  },
   projects: {
     list: () => ipcRenderer.invoke(IPC.projects.list),
     add: (path) => ipcRenderer.invoke(IPC.projects.add, path),
@@ -60,6 +64,31 @@ const api: CcApi = {
   files: {
     pathForFile: (file) => webUtils.getPathForFile(file)
   },
+  inbox: {
+    history: (opts) => ipcRenderer.invoke(IPC.inbox.history, opts),
+    delete: (id) => ipcRenderer.invoke(IPC.inbox.delete, id),
+    onAppended: (cb) => {
+      const handler = (_e: unknown, entry: InboxEntry) => cb(entry);
+      ipcRenderer.on(IPC.inbox.onAppended, handler);
+      return () => ipcRenderer.off(IPC.inbox.onAppended, handler);
+    },
+    onRemoved: (cb) => {
+      const handler = (_e: unknown, id: string) => cb(id);
+      ipcRenderer.on(IPC.inbox.onRemoved, handler);
+      return () => ipcRenderer.off(IPC.inbox.onRemoved, handler);
+    }
+  },
+  mcp: {
+    list: (projectPath) => ipcRenderer.invoke(IPC.mcp.list, projectPath),
+    setEnabled: (projectPath, name, enabled) =>
+      ipcRenderer.invoke(IPC.mcp.setEnabled, projectPath, name, enabled)
+  },
+  skills: {
+    list: () => ipcRenderer.invoke(IPC.skills.list),
+    setEnabled: (name: string, enabled: boolean) =>
+      ipcRenderer.invoke(IPC.skills.setEnabled, name, enabled),
+    readHooks: () => ipcRenderer.invoke(IPC.skills.readHooks)
+  },
   app: {
     onMenuEvent: (cb: (event: string) => void) => {
       const events = [
@@ -79,7 +108,8 @@ const api: CcApi = {
       return () => {
         for (const { name, h } of handlers) ipcRenderer.off(name, h);
       };
-    }
+    },
+    homedir: () => ipcRenderer.invoke(IPC.app.homedir)
   }
 };
 

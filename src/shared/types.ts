@@ -1,4 +1,4 @@
-export type LaunchProfileId = 'shell' | 'claude' | 'claude-resume' | 'claude-continue';
+export type LaunchProfileId = 'shell' | 'claude' | 'claude-resume' | 'claude-yolo';
 
 export interface Project {
   id: string;
@@ -8,6 +8,39 @@ export interface Project {
   createdAt: number;
   lastActiveAt: number;
   sortIndex?: number;
+  /**
+   * Stable, regex-validated handle for the project (URL-safe slug).
+   * Pattern: ^[a-z0-9][a-z0-9_-]{0,32}$ (matches OpenAlice's workspace tag).
+   * Backfilled from `name` on first touch when absent.
+   */
+  tag?: string;
+  /**
+   * Ordered list of `LaunchProfileId` values. The first entry is used as
+   * the default for one-click "+" terminal creation.
+   */
+  defaultAgents?: string[];
+  /** Reserved for future templates work; no logic yet. */
+  template?: string;
+  /** Reserved for future lineage / upgrade-hint work; no logic yet. */
+  spawnedFromVersion?: string;
+}
+
+/** Pointer to a project file. Rendered live at view time, never snapshotted. */
+export interface InboxDoc {
+  /** Path relative to the project root. */
+  path: string;
+}
+
+export interface InboxEntry {
+  id: string;
+  ts: number;
+  projectId: string;
+  /** Display snapshot of the project label. Optional; readers fall back to projectId. */
+  projectLabel?: string;
+  /** Project files to render. Each entry is a pointer — content is fetched live at view time. */
+  docs?: InboxDoc[];
+  /** Agent's message body (markdown). Renders below docs. */
+  comments?: string;
 }
 
 export interface TerminalSession {
@@ -34,6 +67,30 @@ export interface AppConfig {
   workspaceModes?: Record<string, 'terminals' | 'explorer'>;
   listPaneWidth?: number;
   windowBounds?: { x?: number; y?: number; width: number; height: number };
+  /** Global default model passed to claude CLI (absent = let claude decide). */
+  defaultModel?: 'opus' | 'sonnet' | 'haiku' | 'default';
+  /** Global default permission mode for new claude sessions. */
+  defaultPermissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+  /** Show inbox guidance hints in the UI (default true). */
+  inboxGuidanceEnabled?: boolean;
+}
+
+/** Per-project overrides passed to the claude CLI when launching a session. */
+export interface ProjectSettings {
+  /** Text appended to the system prompt (--append-system-prompt). */
+  appendSystemPrompt?: string;
+  /** Extra CLI arguments appended verbatim. */
+  extraArgs?: string[];
+  /** Additional directories to add to the context (--add-dir). */
+  addDirs?: string[];
+  /** Allowed tools (--allowedTools). */
+  allowedTools?: string[];
+  /** Denied tools (--deniedTools). */
+  deniedTools?: string[];
+  /** Model override for this project (--model). */
+  model?: string;
+  /** Permission mode override for this project. */
+  permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
 }
 
 export interface CreateTerminalRequest {
@@ -150,7 +207,26 @@ export type Result<T> =
   | { ok: true; value: T }
   | { ok: false; code: string; message: string };
 
+export interface SkillEntry {
+  name: string;
+  path: string;
+  enabled: boolean;
+}
+
+export interface McpServer {
+  name: string;
+  scope: 'user' | 'project' | 'session';
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled: boolean;
+}
+
 export interface CcApi {
+  projectSettings: {
+    get(id: string): Promise<ProjectSettings>;
+    set(id: string, patch: Partial<ProjectSettings>): Promise<ProjectSettings>;
+  };
   projects: {
     list(): Promise<Project[]>;
     add(path: string): Promise<Result<Project>>;
@@ -197,6 +273,26 @@ export interface CcApi {
   };
   app: {
     onMenuEvent(cb: (event: string) => void): () => void;
+    homedir(): Promise<string>;
+  };
+  skills: {
+    list(): Promise<SkillEntry[]>;
+    setEnabled(name: string, enabled: boolean): Promise<void>;
+    readHooks(): Promise<unknown>;
+  };
+  inbox: {
+    history(opts?: {
+      limit?: number;
+      before?: string;
+      projectId?: string;
+    }): Promise<{ entries: InboxEntry[]; hasMore: boolean }>;
+    delete(id: string): Promise<boolean>;
+    onAppended(cb: (entry: InboxEntry) => void): () => void;
+    onRemoved(cb: (id: string) => void): () => void;
+  };
+  mcp: {
+    list(projectPath: string): Promise<McpServer[]>;
+    setEnabled(projectPath: string, name: string, enabled: boolean): Promise<void>;
   };
 }
 

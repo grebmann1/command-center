@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Folder, TerminalSquare, Plus, ChevronRight, MousePointer, Code2, FolderOpen, FileSearch, Sparkles, Play, RotateCcw, Keyboard, History, Search } from 'lucide-react';
+import { Folder, TerminalSquare, Plus, ChevronRight, MousePointer, Code2, FolderOpen, FileSearch, Sparkles, Play, Zap, Keyboard, History, Search } from 'lucide-react';
 import { useData, useUi } from '../store';
 import type { LaunchProfileId, OpenTarget, Project } from '@shared/types';
 
@@ -123,10 +123,10 @@ export function CommandPalette({ onClose }: Props) {
           run: () => { onClose(); launch('claude'); }
         },
         {
-          key: 'action:new-claude-continue',
-          icon: <RotateCcw size={14} />,
-          label: `New claude -c tab in ${selectedProject.name}`,
-          run: () => { onClose(); launch('claude-continue'); }
+          key: 'action:new-claude-yolo',
+          icon: <Zap size={14} />,
+          label: `New claude --yolo tab in ${selectedProject.name}`,
+          run: () => { onClose(); launch('claude-yolo'); }
         },
         {
           key: 'action:resume-claude',

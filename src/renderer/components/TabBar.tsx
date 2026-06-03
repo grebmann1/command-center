@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, X, Sparkles, RotateCcw, History, Play, Pin } from 'lucide-react';
+import { Plus, X, Pin } from 'lucide-react';
 import type { LaunchProfileId, TerminalSession } from '@shared/types';
 import { useUi } from '../store';
 import { getTerminal } from '../util/findRegistry';
+import { profileIcon } from '../util/profileIcon';
 
 interface Props {
   tabs: TerminalSession[];
@@ -14,6 +15,19 @@ interface Props {
   onRename?: (id: string, title: string) => void;
   onDuplicate?: (id: string) => void;
   onPin?: (id: string, pinned: boolean) => void;
+  /**
+   * If set, a plain click on the "+" button spawns this profile directly
+   * (one-click semantics). Cmd/Ctrl/Alt-click or right-click still opens
+   * the picker menu so users can override per-spawn.
+   */
+  defaultProfile?: LaunchProfileId;
+  /** Tab ids currently mounted in non-primary split panes. */
+  splitTabIds?: ReadonlyArray<string | undefined>;
+  /** Whether a split layout is active (any layout != single). */
+  splitActive?: boolean;
+  onOpenInSplit?: (id: string) => void;
+  onRemoveFromSplit?: (id: string) => void;
+  onCloseSplit?: () => void;
 }
 
 interface TabContextMenu {
@@ -22,20 +36,8 @@ interface TabContextMenu {
   y: number;
 }
 
-function profileIcon(profile: LaunchProfileId) {
-  switch (profile) {
-    case 'claude':
-      return <Sparkles size={11} />;
-    case 'claude-continue':
-      return <RotateCcw size={11} />;
-    case 'claude-resume':
-      return <History size={11} />;
-    case 'shell':
-      return <Play size={11} />;
-  }
-}
-
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder, onRename, onDuplicate, onPin }: Props) {
+export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder, onRename, onDuplicate, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
+  const splitSet = new Set((splitTabIds ?? []).filter((x): x is string => !!x));
   const [menuOpen, setMenuOpen] = useState(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -100,7 +102,7 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
             draggingId === t.id ? 'dragging' : ''
           } ${dragOverId === t.id && draggingId && draggingId !== t.id ? 'drag-over' : ''} ${
             t.pinned ? 'pinned' : ''
-          }`}
+          } ${splitSet.has(t.id) ? 'split' : ''}`}
           role="tab"
           aria-selected={activeTabId === t.id}
           onClick={() => onSelect(t.id)}
@@ -198,8 +200,22 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
         ref={anchor}
         className="tab-add"
         aria-label="New tab"
+        title={defaultProfile ? `New ${defaultProfile} tab (hold ⌥/⌘ or right-click for picker)` : 'New tab'}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setMenuOpen((v) => !v);
+        }}
         onClick={(e) => {
           e.stopPropagation();
+          // One-click default: if the project has a configured default agent
+          // and the user clicked plainly (no modifier), spawn that profile
+          // directly. Modifier-click or right-click falls through to the
+          // picker so users can still pick a different profile.
+          if (defaultProfile && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+            onNew(defaultProfile);
+            return;
+          }
           setMenuOpen((v) => !v);
         }}
       >
@@ -256,6 +272,37 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
             >
               Clear scrollback
             </button>
+            {onOpenInSplit && !splitSet.has(t.id) && t.id !== activeTabId && (
+              <button
+                onClick={() => {
+                  setTabMenu(null);
+                  onOpenInSplit(t.id);
+                }}
+                title="Open this tab in the next free split pane"
+              >
+                Open in split
+              </button>
+            )}
+            {onRemoveFromSplit && splitSet.has(t.id) && (
+              <button
+                onClick={() => {
+                  setTabMenu(null);
+                  onRemoveFromSplit(t.id);
+                }}
+              >
+                Remove from split
+              </button>
+            )}
+            {onCloseSplit && splitActive && (
+              <button
+                onClick={() => {
+                  setTabMenu(null);
+                  onCloseSplit();
+                }}
+              >
+                Close split (single pane)
+              </button>
+            )}
             <div className="tab-context-sep" />
             <button
               onClick={() => { setTabMenu(null); onClose(t.id); }}
@@ -309,10 +356,11 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
           <button
             onClick={() => {
               setMenuOpen(false);
-              onNew('claude-continue');
+              onNew('claude-yolo');
             }}
+            title="claude --dangerously-skip-permissions"
           >
-            claude -c
+            claude --yolo
           </button>
           <button
             onClick={() => {

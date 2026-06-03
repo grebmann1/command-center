@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { TerminalSquare, FolderTree, GitBranch } from 'lucide-react';
+import { TerminalSquare, FolderTree, GitBranch, Columns2, Rows2, LayoutGrid, Square } from 'lucide-react';
+import type { SplitLayout } from '../store';
 import { useData, useUi } from '../store';
 import { TabBar } from './TabBar';
 import { TerminalSurface } from './TerminalSurface';
@@ -31,6 +32,12 @@ export function Workspace() {
   const workspaceModeMap = useUi((s) => s.workspaceMode);
   const toggleWorkspaceMode = useUi((s) => s.toggleWorkspaceMode);
   const workbenchEnabled = useUi((s) => s.workbenchEnabled);
+  const splitLayoutMap = useUi((s) => s.splitLayout);
+  const splitTabIdsMap = useUi((s) => s.splitTabIds);
+  const setSplitLayout = useUi((s) => s.setSplitLayout);
+  const openInSplit = useUi((s) => s.openInSplit);
+  const removeFromSplit = useUi((s) => s.removeFromSplit);
+  const closeSplit = useUi((s) => s.closeSplit);
   const createTerminal = useData((s) => s.createTerminal);
   const closeTerminal = useData((s) => s.closeTerminal);
   const reorderTerminal = useData((s) => s.reorderTerminal);
@@ -45,6 +52,9 @@ export function Workspace() {
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
   const mode = project ? workspaceModeMap[project.id] ?? 'terminals' : 'terminals';
   const isExplorer = mode === 'explorer' && !!project;
+  const splitLayout: SplitLayout = (project && splitLayoutMap[project.id]) || 'single';
+  const splitTabIds = (project && splitTabIdsMap[project.id]) || [];
+  const splitActive = splitLayout !== 'single';
 
   useEffect(() => {
     const off = window.cc.terminals.onExit((id) => markExited(id));
@@ -70,6 +80,61 @@ export function Workspace() {
     const session = await createTerminal(project.id, profile, 80, 24, opts);
     if (session) selectTab(project.id, session.id);
   };
+
+  // First entry in defaultAgents wins for one-click "+" semantics. We trust
+  // the value as a LaunchProfileId only if it matches the known set; an
+  // unknown string falls back to the picker.
+  const KNOWN_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
+  const projectDefaultProfile = (() => {
+    const first = project?.defaultAgents?.[0];
+    if (!first) return undefined;
+    return (KNOWN_PROFILES as string[]).includes(first) ? (first as LaunchProfileId) : undefined;
+  })();
+
+  // Split layouts (vertical/horizontal/grid) are wired up in the store and
+  // TerminalSurface but the toolbar picker is hidden for now — feels off in
+  // practice. Flip this to re-enable. Right-click "Open in split" entries on
+  // the TabBar are also gated below.
+  const SPLIT_UI_ENABLED = false;
+
+  // Layout picker: only meaningful when terminals are visible (not explorer
+  // mode) and the project has at least one tab. Hidden otherwise.
+  const layoutPicker = SPLIT_UI_ENABLED && project && !isExplorer && tabs.length > 0 && (
+    <div className="workspace-layout-picker" role="group" aria-label="Terminal layout">
+      <button
+        type="button"
+        className={splitLayout === 'single' ? 'active' : ''}
+        title="Single pane"
+        onClick={() => closeSplit(project.id)}
+      >
+        <Square size={13} />
+      </button>
+      <button
+        type="button"
+        className={splitLayout === 'vertical' ? 'active' : ''}
+        title="Vertical split"
+        onClick={() => setSplitLayout(project.id, 'vertical')}
+      >
+        <Columns2 size={13} />
+      </button>
+      <button
+        type="button"
+        className={splitLayout === 'horizontal' ? 'active' : ''}
+        title="Horizontal split"
+        onClick={() => setSplitLayout(project.id, 'horizontal')}
+      >
+        <Rows2 size={13} />
+      </button>
+      <button
+        type="button"
+        className={splitLayout === 'grid' ? 'active' : ''}
+        title="2×2 grid"
+        onClick={() => setSplitLayout(project.id, 'grid')}
+      >
+        <LayoutGrid size={13} />
+      </button>
+    </div>
+  );
 
   const modeToggle = project && (
     <button
@@ -104,12 +169,19 @@ export function Workspace() {
               handleNewTab(src.profile, { extraArgs: src.extraArgs, title: src.title });
             }}
             onPin={(id, pinned) => project && setPinned(project.id, id, pinned)}
+            defaultProfile={projectDefaultProfile}
+            splitTabIds={SPLIT_UI_ENABLED ? splitTabIds : undefined}
+            splitActive={SPLIT_UI_ENABLED && splitActive}
+            onOpenInSplit={SPLIT_UI_ENABLED ? (id) => project && openInSplit(project.id, id) : undefined}
+            onRemoveFromSplit={SPLIT_UI_ENABLED ? (id) => project && removeFromSplit(project.id, id) : undefined}
+            onCloseSplit={SPLIT_UI_ENABLED && project ? () => closeSplit(project.id) : undefined}
           />
         ) : (
           <div className="explorer-topbar">
             <span className="explorer-topbar-label">Explorer</span>
           </div>
         )}
+        {layoutPicker}
         {modeToggle}
       </div>
       <div className="workspace-body">
@@ -135,8 +207,12 @@ export function Workspace() {
                   <button className="btn primary" onClick={() => handleNewTab('claude')}>
                     claude
                   </button>
-                  <button className="btn" onClick={() => handleNewTab('claude-continue')}>
-                    claude -c
+                  <button
+                    className="btn"
+                    onClick={() => handleNewTab('claude-yolo')}
+                    title="claude --dangerously-skip-permissions"
+                  >
+                    claude --yolo
                   </button>
                   <button className="btn" onClick={() => handleNewTab('shell')}>
                     shell

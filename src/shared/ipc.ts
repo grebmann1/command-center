@@ -22,6 +22,10 @@ export const IPC = {
     get: 'config:get',
     set: 'config:set'
   },
+  projectSettings: {
+    get: 'projectSettings:get',
+    set: 'projectSettings:set'
+  },
   claude: {
     listSessions: 'claude:listSessions'
   },
@@ -39,5 +43,23 @@ export const IPC = {
     status: 'git:status',
     showHead: 'git:showHead',
     discard: 'git:discard'
+  },
+  inbox: {
+    history: 'inbox:history',
+    delete: 'inbox:delete',
+    onAppended: 'inbox:onAppended',
+    onRemoved: 'inbox:onRemoved'
+  },
+  mcp: {
+    list: 'mcp:list',
+    setEnabled: 'mcp:setEnabled'
+  },
+  skills: {
+    list: 'skills:list',
+    setEnabled: 'skills:setEnabled',
+    readHooks: 'skills:readHooks'
+  },
+  app: {
+    homedir: 'app:homedir'
   }
 } as const;
