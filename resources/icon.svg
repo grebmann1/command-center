@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a2333"/>
+      <stop offset="100%" stop-color="#0b0f15"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ff8c5a"/>
+      <stop offset="100%" stop-color="#ff5e3a"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- rounded square background -->
+  <rect x="32" y="32" width="960" height="960" rx="200" ry="200" fill="url(#bg)"/>
+  <rect x="32" y="32" width="960" height="960" rx="200" ry="200"
+        fill="none" stroke="#2a3a55" stroke-width="4"/>
+
+  <!-- terminal prompt chevron -->
+  <g stroke="#2f81f7" stroke-width="60" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <polyline points="280,400 460,512 280,624"/>
+  </g>
+  <!-- caret/cursor bar -->
+  <rect x="520" y="600" width="220" height="44" rx="14" fill="#2f81f7"/>
+
+  <!-- Claude spark in upper-right -->
+  <g filter="url(#glow)">
+    <path d="M760 240
+             L800 320
+             L880 360
+             L800 400
+             L760 480
+             L720 400
+             L640 360
+             L720 320 Z"
+          fill="url(#spark)"/>
+  </g>
+</svg>

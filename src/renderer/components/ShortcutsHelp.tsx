@@ -1,0 +1,114 @@
+import { useEffect } from 'react';
+import { X } from 'lucide-react';
+
+interface Props {
+  onClose: () => void;
+}
+
+interface Row {
+  keys: string[];
+  label: string;
+}
+
+interface Section {
+  title: string;
+  rows: Row[];
+}
+
+const SECTIONS: Section[] = [
+  {
+    title: 'Navigation',
+    rows: [
+      { keys: ['⌘', 'P'], label: 'Command palette / project switcher' },
+      { keys: ['⌘', '⇧', '1'], label: 'Switch to project 1 (… up to ⌘⇧9)' },
+      { keys: ['⌘', '⇧', ']'], label: 'Next project' },
+      { keys: ['⌘', '⇧', '['], label: 'Previous project' },
+      { keys: ['⌘', 'E'], label: 'Find file in selected project' },
+      { keys: ['⌘', '⇧', 'F'], label: 'Search file contents in selected project' },
+      { keys: ['⌘', 'R'], label: 'Resume Claude session…' },
+      { keys: ['⌘', 'B'], label: 'Toggle Terminals / Explorer' },
+      { keys: ['⌘', ','], label: 'Toggle Settings' },
+      { keys: ['⌘', '?'], label: 'This help' }
+    ]
+  },
+  {
+    title: 'Tabs',
+    rows: [
+      { keys: ['⌘', 'T'], label: 'New claude tab' },
+      { keys: ['⌘', '⇧', 'T'], label: 'Reopen last closed tab' },
+      { keys: ['⌘', 'W'], label: 'Close active tab' },
+      { keys: ['⌘', '1'], label: 'Switch to tab 1 (… up to ⌘9)' },
+      { keys: ['⌘', ']'], label: 'Next tab' },
+      { keys: ['⌘', '['], label: 'Previous tab' }
+    ]
+  },
+  {
+    title: 'Terminal',
+    rows: [
+      { keys: ['⌘', 'F'], label: 'Find in active terminal' },
+      { keys: ['⌘', 'K'], label: 'Clear active terminal scrollback' },
+      { keys: ['Enter'], label: 'Find: next match' },
+      { keys: ['⇧', 'Enter'], label: 'Find: previous match' },
+      { keys: ['Esc'], label: 'Close find / palette' }
+    ]
+  },
+  {
+    title: 'Explorer',
+    rows: [
+      { keys: ['⌘', 'S'], label: 'Save edited file' },
+      { keys: ['⌘', 'D'], label: 'Toggle diff vs HEAD on open file' },
+      { keys: ['⌘', '⇧', 'G'], label: 'Toggle Changes view (modified files only)' }
+    ]
+  },
+  {
+    title: 'Tab actions (right-click)',
+    rows: [
+      { keys: ['Middle-click'], label: 'Close tab' },
+      { keys: ['Rename'], label: 'Or double-click tab title' },
+      { keys: ['Duplicate'], label: 'Spawn another tab with same profile' },
+      { keys: ['Close others'], label: 'Close every other tab' },
+      { keys: ['Close to right'], label: 'Close all tabs after this one' },
+      { keys: ['Close exited'], label: 'Clean up dead tabs' }
+    ]
+  }
+];
+
+export function ShortcutsHelp({ onClose }: Props) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="palette-backdrop" onMouseDown={onClose}>
+      <div className="shortcuts-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="shortcuts-header">
+          <h3>Keyboard Shortcuts</h3>
+          <button className="icon-btn" aria-label="Close" onClick={onClose}>
+            <X size={14} />
+          </button>
+        </header>
+        <div className="shortcuts-body">
+          {SECTIONS.map((s) => (
+            <section key={s.title} className="shortcuts-section">
+              <h4>{s.title}</h4>
+              {s.rows.map((r, i) => (
+                <div key={i} className="shortcut-row">
+                  <span className="shortcut-keys">
+                    {r.keys.map((k, j) => (
+                      <kbd key={j}>{k}</kbd>
+                    ))}
+                  </span>
+                  <span className="shortcut-label">{r.label}</span>
+                </div>
+              ))}
+            </section>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,52 @@
+appId: dev.grebmann.claude-code-terminal-center
+productName: Claude Code Terminal Center
+copyright: © 2026 grebmann
+
+directories:
+  buildResources: resources
+  output: dist
+
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.{md,markdown,d.ts.map,js.map}"
+
+extraResources:
+  - from: resources/icon.icns
+    to: icon.icns
+  - from: resources/icon-1024.png
+    to: icon-1024.png
+
+asar: true
+asarUnpack:
+  # node-pty ships a native .node binary that can't run from inside asar
+  - "node_modules/node-pty/**/*"
+
+mac:
+  category: public.app-category.developer-tools
+  icon: resources/icon.icns
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+
+dmg:
+  sign: false
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+
+win:
+  icon: resources/icon-1024.png
+  target:
+    - target: nsis
+      arch: [x64]
+
+linux:
+  icon: resources/icon-1024.png
+  category: Development
+  target:
+    - target: AppImage
+      arch: [x64]
