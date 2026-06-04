@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Folder, TerminalSquare, Plus, ChevronRight, MousePointer, Code2, FolderOpen, FileSearch, Sparkles, Play, Zap, Keyboard, History, Search } from 'lucide-react';
+import { Folder, TerminalSquare, Plus, ChevronRight, Code2, FolderOpen, FileSearch, Sparkles, Play, Zap, Keyboard, History, Search, Inbox, RotateCcw, Trash2, Copy, Pin, PinOff, Globe } from 'lucide-react';
+import { CursorIcon } from './icons/CursorIcon';
 import { useData, useUi } from '../store';
 import type { LaunchProfileId, OpenTarget, Project } from '@shared/types';
 
@@ -17,15 +18,24 @@ interface Props {
 
 export function CommandPalette({ onClose }: Props) {
   const projects = useData((s) => s.projects);
+  const terminals = useData((s) => s.terminals);
   const addProject = useData((s) => s.addProject);
   const createTerminal = useData((s) => s.createTerminal);
+  const restartTerminal = useData((s) => s.restartTerminal);
+  const closeTerminal = useData((s) => s.closeTerminal);
+  const setPinned = useData((s) => s.setPinned);
   const selectProject = useUi((s) => s.selectProject);
   const selectTab = useUi((s) => s.selectTab);
   const setNav = useUi((s) => s.setNav);
+  const setSettingsTab = useUi((s) => s.setSettingsTab);
   const setWorkspaceMode = useUi((s) => s.setWorkspaceMode);
   const selectedProjectId = useUi((s) => s.selectedProjectId);
+  const selectedTabId = useUi((s) => s.selectedTabId);
   const pushToast = useUi((s) => s.pushToast);
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
+  const selectedProjectTabs = selectedProject ? terminals[selectedProject.id] ?? [] : [];
+  const activeTabId = selectedProject ? selectedTabId[selectedProject.id] : undefined;
+  const activeTab = selectedProjectTabs.find((t) => t.id === activeTabId);
 
   const launch = async (profile: LaunchProfileId) => {
     if (!selectedProject) return;
@@ -39,10 +49,21 @@ export function CommandPalette({ onClose }: Props) {
   const [query, setQuery] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Keep the highlighted row in view when arrow-keying past the visible
+  // window. `block: 'nearest'` avoids jumpy centering when the row is
+  // already on-screen.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const el = list.querySelector<HTMLElement>(`[data-idx="${activeIdx}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [activeIdx]);
 
   const items = useMemo<PaletteItem[]>(() => {
     const projectItems: PaletteItem[] = projects.map((p: Project) => ({
@@ -86,8 +107,33 @@ export function CommandPalette({ onClose }: Props) {
           onClose();
           useUi.getState().setShortcutsOpen(true);
         }
+      },
+      {
+        key: 'action:inbox',
+        icon: <Inbox size={14} />,
+        label: 'Open Inbox',
+        hint: '⌘I',
+        run: () => {
+          setNav('inbox');
+          onClose();
+        }
       }
     ];
+    const tabItems: PaletteItem[] = selectedProject
+      ? selectedProjectTabs.map((t) => ({
+          key: `tab:${t.id}`,
+          icon: <TerminalSquare size={14} />,
+          label: `${t.title}${t.status === 'exited' ? ' · exited' : ''}`,
+          hint: `${selectedProject.name} · ${t.profile}`,
+          run: () => {
+            selectProject(selectedProject.id);
+            selectTab(selectedProject.id, t.id);
+            setWorkspaceMode(selectedProject.id, 'terminals');
+            setNav('projects');
+            onClose();
+          }
+        }))
+      : [];
     if (selectedProject) {
       const path = selectedProject.path;
       const open = async (target: OpenTarget) => {
@@ -95,6 +141,28 @@ export function CommandPalette({ onClose }: Props) {
         if (!r.ok) pushToast(r.message ?? `Failed to open in ${target}`, 'error');
       };
       actions.push(
+        {
+          key: 'action:preview-browser',
+          icon: <Globe size={14} />,
+          label: `Open Preview Browser in ${selectedProject.name}`,
+          hint: '⌘L',
+          run: () => {
+            setWorkspaceMode(selectedProject.id, 'preview');
+            setNav('projects');
+            onClose();
+          }
+        },
+        {
+          key: 'action:project-settings',
+          icon: <TerminalSquare size={14} />,
+          label: `Open ${selectedProject.name} settings…`,
+          hint: 'CLI flags, MCP, allowed tools',
+          run: () => {
+            setSettingsTab('project');
+            setNav('settings');
+            onClose();
+          }
+        },
         {
           key: 'action:quick-open',
           icon: <FileSearch size={14} />,
@@ -146,7 +214,7 @@ export function CommandPalette({ onClose }: Props) {
         },
         {
           key: 'action:open-cursor',
-          icon: <MousePointer size={14} />,
+          icon: <CursorIcon size={14} />,
           label: `Open ${selectedProject.name} in Cursor`,
           hint: path,
           run: () => { onClose(); open('cursor'); }
@@ -173,9 +241,70 @@ export function CommandPalette({ onClose }: Props) {
           run: () => { onClose(); open('terminal'); }
         }
       );
+      if (activeTab) {
+        actions.push({
+          key: 'action:pin-active',
+          icon: activeTab.pinned ? <PinOff size={14} /> : <Pin size={14} />,
+          label: activeTab.pinned
+            ? `Unpin "${activeTab.title}"`
+            : `Pin "${activeTab.title}"`,
+          hint: activeTab.pinned ? 'remove from pinned zone' : 'keep at top',
+          run: () => {
+            const sid = activeTab.id;
+            const pid = selectedProject.id;
+            const next = !activeTab.pinned;
+            onClose();
+            setPinned(pid, sid, next);
+          }
+        });
+        actions.push({
+          key: 'action:duplicate-active',
+          icon: <Copy size={14} />,
+          label: `Duplicate "${activeTab.title}"`,
+          hint: `new ${activeTab.profile} tab`,
+          run: () => {
+            const profile = activeTab.profile;
+            onClose();
+            launch(profile);
+          }
+        });
+        actions.push({
+          key: 'action:restart-active',
+          icon: <RotateCcw size={14} />,
+          label: `Restart "${activeTab.title}"`,
+          hint: activeTab.status === 'exited' ? 'exited' : 'kill and restart',
+          run: () => {
+            const sid = activeTab.id;
+            const pid = selectedProject.id;
+            const live = activeTab.status !== 'exited';
+            onClose();
+            if (live && !window.confirm(`Kill and restart "${activeTab.title}"?`)) return;
+            void restartTerminal(sid, pid);
+          }
+        });
+      }
+      const exitedNonPinned = selectedProjectTabs.filter(
+        (t) => t.status === 'exited' && !t.pinned
+      );
+      if (exitedNonPinned.length > 0) {
+        actions.push({
+          key: 'action:close-exited',
+          icon: <Trash2 size={14} />,
+          label: `Close ${exitedNonPinned.length} exited tab${
+            exitedNonPinned.length === 1 ? '' : 's'
+          } in ${selectedProject.name}`,
+          hint: 'cleanup',
+          run: () => {
+            const pid = selectedProject.id;
+            const ids = exitedNonPinned.map((t) => t.id);
+            onClose();
+            for (const id of ids) void closeTerminal(id, pid);
+          }
+        });
+      }
     }
-    return [...projectItems, ...actions];
-  }, [projects, addProject, selectProject, setNav, onClose, selectedProject, pushToast, launch]);
+    return [...projectItems, ...tabItems, ...actions];
+  }, [projects, addProject, selectProject, selectTab, setWorkspaceMode, setNav, setSettingsTab, onClose, selectedProject, selectedProjectTabs, activeTab, restartTerminal, closeTerminal, setPinned, pushToast, launch]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -207,6 +336,26 @@ export function CommandPalette({ onClose }: Props) {
       setActiveIdx((i) => Math.max(i - 1, 0));
       return;
     }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      setActiveIdx(0);
+      return;
+    }
+    if (e.key === 'End') {
+      e.preventDefault();
+      setActiveIdx(Math.max(0, filtered.length - 1));
+      return;
+    }
+    if (e.key === 'PageDown') {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 8, filtered.length - 1));
+      return;
+    }
+    if (e.key === 'PageUp') {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 8, 0));
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       filtered[activeIdx]?.run();
@@ -224,13 +373,14 @@ export function CommandPalette({ onClose }: Props) {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
         />
-        <div className="palette-list">
+        <div className="palette-list" ref={listRef}>
           {filtered.length === 0 ? (
             <div className="palette-empty">No matches</div>
           ) : (
             filtered.map((it, i) => (
               <button
                 key={it.key}
+                data-idx={i}
                 className={`palette-item ${i === activeIdx ? 'active' : ''}`}
                 onMouseEnter={() => setActiveIdx(i)}
                 onClick={() => it.run()}

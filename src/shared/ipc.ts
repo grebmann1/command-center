@@ -6,7 +6,11 @@ export const IPC = {
     update: 'projects:update',
     touch: 'projects:touch',
     reorder: 'projects:reorder',
-    pickDirectory: 'projects:pickDirectory'
+    pickDirectory: 'projects:pickDirectory',
+    addRemote: 'projects:addRemote'
+  },
+  ssh: {
+    listHosts: 'ssh:listHosts'
   },
   terminals: {
     list: 'terminals:list',
@@ -53,6 +57,10 @@ export const IPC = {
   mcp: {
     list: 'mcp:list',
     setEnabled: 'mcp:setEnabled'
+  },
+  claudeSettings: {
+    read: 'claudeSettings:read',
+    write: 'claudeSettings:write'
   },
   skills: {
     list: 'skills:list',

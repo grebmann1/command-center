@@ -29,11 +29,19 @@ export function ResumePicker({ project, onClose }: Props) {
   const [query, setQuery] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     load(project.id);
     inputRef.current?.focus();
   }, [project.id, load]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const el = list.querySelector<HTMLElement>(`[data-idx="${activeIdx}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [activeIdx]);
 
   const filtered = useMemo<ClaudeSessionSummary[]>(() => {
     if (!sessions) return [];
@@ -78,6 +86,26 @@ export function ResumePicker({ project, onClose }: Props) {
       setActiveIdx((i) => Math.max(i - 1, 0));
       return;
     }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      setActiveIdx(0);
+      return;
+    }
+    if (e.key === 'End') {
+      e.preventDefault();
+      setActiveIdx(Math.max(0, filtered.length - 1));
+      return;
+    }
+    if (e.key === 'PageDown') {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 8, filtered.length - 1));
+      return;
+    }
+    if (e.key === 'PageUp') {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 8, 0));
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       const s = filtered[activeIdx];
@@ -101,7 +129,7 @@ export function ResumePicker({ project, onClose }: Props) {
           onKeyDown={onKeyDown}
           disabled={sessions === undefined}
         />
-        <div className="palette-list">
+        <div className="palette-list" ref={listRef}>
           {sessions === undefined ? (
             <div className="palette-empty">Loading…</div>
           ) : sessions.length === 0 ? (
@@ -112,6 +140,7 @@ export function ResumePicker({ project, onClose }: Props) {
             filtered.map((s, i) => (
               <button
                 key={s.id}
+                data-idx={i}
                 className={`palette-item resume-item ${i === activeIdx ? 'active' : ''}`}
                 onMouseEnter={() => setActiveIdx(i)}
                 onClick={() => resume(s)}

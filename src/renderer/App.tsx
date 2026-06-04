@@ -10,9 +10,11 @@ import { QuickOpen } from './components/QuickOpen';
 import { ResumePicker } from './components/ResumePicker';
 import { SearchPanel } from './components/SearchPanel';
 import { ShortcutsHelp } from './components/ShortcutsHelp';
-import { ProjectSettingsDrawer } from './components/ProjectSettingsDrawer';
 import { Toaster } from './components/Toaster';
-import { scheduleGitRefresh, useData, useUi } from './store';
+import { scheduleGitRefresh, useData, useUi, useUnreadInboxCount } from './store';
+import type { LaunchProfileId } from '@shared/types';
+
+const KNOWN_LAUNCH_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
 import { installShortcuts } from './shortcuts';
 
 export function App() {
@@ -23,13 +25,15 @@ export function App() {
   const selectedTabId = useUi((s) => s.selectedTabId);
   const projects = useData((s) => s.projects);
   const terminals = useData((s) => s.terminals);
+  const unreadInbox = useUnreadInboxCount();
 
   // Reflect the current project + active tab into the OS window title so
   // ⌘-Tab / Mission Control disambiguates Command Center across projects.
   useEffect(() => {
     const base = 'Claude Code Terminal Center';
+    const inboxBadge = unreadInbox > 0 && nav !== 'inbox' ? `(${unreadInbox}) ` : '';
     if (nav === 'settings') {
-      document.title = `Settings · ${base}`;
+      document.title = `${inboxBadge}Settings · ${base}`;
       return;
     }
     if (nav === 'inbox') {
@@ -38,16 +42,16 @@ export function App() {
     }
     const project = projects.find((p) => p.id === selectedProjectId);
     if (!project) {
-      document.title = base;
+      document.title = `${inboxBadge}${base}`;
       return;
     }
     const tabs = terminals[project.id] || [];
     const activeId = selectedTabId[project.id];
     const active = tabs.find((t) => t.id === activeId);
     document.title = active
-      ? `${active.title} · ${project.name} — ${base}`
-      : `${project.name} — ${base}`;
-  }, [nav, selectedProjectId, selectedTabId, projects, terminals]);
+      ? `${inboxBadge}${active.title} · ${project.name} — ${base}`
+      : `${inboxBadge}${project.name} — ${base}`;
+  }, [nav, selectedProjectId, selectedTabId, projects, terminals, unreadInbox]);
 
   useEffect(() => {
     init();
@@ -86,6 +90,9 @@ export function App() {
         case 'app:openSettings':
           ui.setNav(ui.nav === 'settings' ? 'projects' : 'settings');
           return;
+        case 'app:toggleInbox':
+          ui.setNav(ui.nav === 'inbox' ? 'projects' : 'inbox');
+          return;
         case 'app:openPalette':
           ui.setPaletteOpen(true);
           return;
@@ -97,7 +104,13 @@ export function App() {
           return;
         case 'app:newClaudeTab':
           if (projectId) {
-            data.createTerminal(projectId, 'claude', 80, 24).then((s) => {
+            const project = data.projects.find((p) => p.id === projectId);
+            const first = project?.defaultAgents?.[0];
+            const profile: LaunchProfileId =
+              first && (KNOWN_LAUNCH_PROFILES as string[]).includes(first)
+                ? (first as LaunchProfileId)
+                : 'claude';
+            data.createTerminal(projectId, profile, 80, 24).then((s) => {
               if (s) ui.selectTab(projectId, s.id);
             });
           }
@@ -144,7 +157,6 @@ export function App() {
       <ResumePickerHost />
       <SearchPanelHost />
       <ShortcutsHelpHost />
-      <ProjectSettingsDrawerHost />
       <Toaster />
     </div>
   );
@@ -197,12 +209,3 @@ function ShortcutsHelpHost() {
   return <ShortcutsHelp onClose={close} />;
 }
 
-function ProjectSettingsDrawerHost() {
-  const projectId = useUi((s) => s.projectSettingsOpen);
-  const projects = useData((s) => s.projects);
-  const close = () => useUi.getState().setProjectSettingsOpen(null);
-  if (!projectId) return null;
-  const project = projects.find((p) => p.id === projectId);
-  if (!project) return null;
-  return <ProjectSettingsDrawer project={project} onClose={close} />;
-}

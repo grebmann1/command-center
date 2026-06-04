@@ -14,7 +14,11 @@ const api: CcApi = {
     update: (id, patch) => ipcRenderer.invoke(IPC.projects.update, id, patch),
     touch: (id) => ipcRenderer.invoke(IPC.projects.touch, id),
     reorder: (orderedIds) => ipcRenderer.invoke(IPC.projects.reorder, orderedIds),
-    pickDirectory: () => ipcRenderer.invoke(IPC.projects.pickDirectory)
+    pickDirectory: () => ipcRenderer.invoke(IPC.projects.pickDirectory),
+    addRemote: (input) => ipcRenderer.invoke(IPC.projects.addRemote, input)
+  },
+  ssh: {
+    listHosts: () => ipcRenderer.invoke(IPC.ssh.listHosts)
   },
   terminals: {
     list: (projectId) => ipcRenderer.invoke(IPC.terminals.list, projectId),
@@ -82,6 +86,11 @@ const api: CcApi = {
     list: (projectPath) => ipcRenderer.invoke(IPC.mcp.list, projectPath),
     setEnabled: (projectPath, name, enabled) =>
       ipcRenderer.invoke(IPC.mcp.setEnabled, projectPath, name, enabled)
+  },
+  claudeSettings: {
+    read: (projectPath, scope) => ipcRenderer.invoke(IPC.claudeSettings.read, projectPath, scope),
+    write: (projectPath, scope, patch) =>
+      ipcRenderer.invoke(IPC.claudeSettings.write, projectPath, scope, patch)
   },
   skills: {
     list: () => ipcRenderer.invoke(IPC.skills.list),

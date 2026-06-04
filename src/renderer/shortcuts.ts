@@ -1,5 +1,17 @@
 import { useData, useUi, sortProjectsForDisplay } from './store';
 import { getTerminal } from './util/findRegistry';
+import type { LaunchProfileId } from '@shared/types';
+
+const KNOWN_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
+
+function defaultProfileForProject(projectId: string): LaunchProfileId {
+  const project = useData.getState().projects.find((p) => p.id === projectId);
+  const first = project?.defaultAgents?.[0];
+  if (first && (KNOWN_PROFILES as string[]).includes(first)) {
+    return first as LaunchProfileId;
+  }
+  return 'claude';
+}
 
 function isMac() {
   return navigator.platform.toUpperCase().includes('MAC');
@@ -20,11 +32,31 @@ export function installShortcuts(): () => void {
     const activeTabId = projectId ? ui.selectedTabId[projectId] : undefined;
     const activeIdx = activeTabId ? tabs.findIndex((t) => t.id === activeTabId) : -1;
 
-    // cmd+b — toggle terminals/explorer mode
+    // cmd+b — toggle terminals/explorer mode (preview is set explicitly via
+    // ⌘L; ⌘B intentionally only flips between the two text-editing modes so
+    // muscle memory doesn't surprise users with a 3-stop cycle).
     if (e.key === 'b' && !e.shiftKey) {
       if (!projectId) return;
       e.preventDefault();
-      ui.toggleWorkspaceMode(projectId);
+      const cur = ui.workspaceMode[projectId] ?? 'terminals';
+      ui.setWorkspaceMode(projectId, cur === 'explorer' ? 'terminals' : 'explorer');
+      return;
+    }
+    // cmd+l — jump to the preview browser pane. If already in preview,
+    // browser-style: focus and select the address bar (don't toggle away).
+    if (e.key === 'l' && !e.shiftKey) {
+      if (!projectId) return;
+      e.preventDefault();
+      const cur = ui.workspaceMode[projectId] ?? 'terminals';
+      if (cur === 'preview') {
+        window.dispatchEvent(new CustomEvent('preview:focus-address'));
+      } else {
+        ui.setWorkspaceMode(projectId, 'preview');
+        // Address bar may not be mounted yet — fire after the next paint.
+        requestAnimationFrame(() => {
+          window.dispatchEvent(new CustomEvent('preview:focus-address'));
+        });
+      }
       return;
     }
     // cmd+p — project switcher / command palette
@@ -51,6 +83,13 @@ export function installShortcuts(): () => void {
     if (e.key === ',') {
       e.preventDefault();
       ui.setNav(ui.nav === 'settings' ? 'projects' : 'settings');
+      return;
+    }
+    // cmd+i — toggle Inbox. Returns to Projects when already on inbox so it
+    // works as a single round-trip key from anywhere in the app.
+    if (e.key === 'i' && !e.shiftKey) {
+      e.preventDefault();
+      ui.setNav(ui.nav === 'inbox' ? 'projects' : 'inbox');
       return;
     }
     // cmd+/ or cmd+? — keyboard shortcuts help
@@ -101,11 +140,24 @@ export function installShortcuts(): () => void {
       getTerminal(activeTabId)?.clear();
       return;
     }
-    // cmd+t — new claude tab
+    // cmd+t — new tab using project's preferred default profile (falls back
+    // to 'claude' when no per-project default is set).
     if (e.key === 't' && !e.shiftKey) {
       if (!projectId) return;
       e.preventDefault();
-      data.createTerminal(projectId, 'claude', 80, 24).then((s) => {
+      const profile = defaultProfileForProject(projectId);
+      data.createTerminal(projectId, profile, 80, 24).then((s) => {
+        if (s) ui.selectTab(projectId, s.id);
+      }).catch(() => {});
+      return;
+    }
+    // cmd+shift+d — duplicate active tab (same launch profile)
+    if ((e.key === 'D' || (e.key === 'd' && e.shiftKey)) && e.shiftKey) {
+      if (!projectId || !activeTabId) return;
+      const active = tabs.find((t) => t.id === activeTabId);
+      if (!active) return;
+      e.preventDefault();
+      data.createTerminal(projectId, active.profile, 80, 24).then((s) => {
         if (s) ui.selectTab(projectId, s.id);
       }).catch(() => {});
       return;

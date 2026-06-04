@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search, Trash2, X, Check, Pencil, MousePointer, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2 } from 'lucide-react';
+import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy } from 'lucide-react';
+import { CursorIcon } from './icons/CursorIcon';
 import {
   useData,
   useUi,
+  useInbox,
+  useInboxRead,
   sortProjectsForDisplay,
   applyListPaneWidth,
   LIST_PANE_MIN,
@@ -10,6 +13,7 @@ import {
 } from '../store';
 import type { OpenTarget } from '@shared/types';
 import { InboxSidebar } from './InboxSidebar';
+import { AddRemoteProjectDialog } from './AddRemoteProjectDialog';
 import { profileIcon } from '../util/profileIcon';
 
 const PROJECT_COLORS = [
@@ -38,10 +42,24 @@ export function ListPane() {
 }
 
 function InboxPane() {
+  const entries = useInbox((s) => s.entries);
+  const readIds = useInboxRead((s) => s.readIds);
+  const markAllRead = useInboxRead((s) => s.markAllRead);
+  const unreadCount = entries.reduce((n, e) => (readIds[e.id] ? n : n + 1), 0);
   return (
     <section className="list-pane inbox-list-pane">
       <header className="list-header">
         <h2>Inbox</h2>
+        {unreadCount > 0 && (
+          <button
+            type="button"
+            className="icon-btn inbox-mark-read-all"
+            title={`Mark ${unreadCount} as read`}
+            onClick={() => markAllRead(entries.map((e) => e.id))}
+          >
+            <Check size={14} />
+          </button>
+        )}
       </header>
       <div className="list-body">
         <InboxSidebar />
@@ -56,12 +74,14 @@ function ProjectsList() {
   const closeTerminal = useData((s) => s.closeTerminal);
   const addProject = useData((s) => s.addProject);
   const addProjectByPath = useData((s) => s.addProjectByPath);
+  const addRemoteProject = useData((s) => s.addRemoteProject);
   const removeProject = useData((s) => s.removeProject);
   const updateProject = useData((s) => s.updateProject);
   const reorderProjects = useData((s) => s.reorderProjects);
   const selectedId = useUi((s) => s.selectedProjectId);
   const selectProject = useUi((s) => s.selectProject);
-  const setProjectSettingsOpen = useUi((s) => s.setProjectSettingsOpen);
+  const setNav = useUi((s) => s.setNav);
+  const setSettingsTab = useUi((s) => s.setSettingsTab);
   const selectTab = useUi((s) => s.selectTab);
   const selectedTabId = useUi((s) => s.selectedTabId);
   const pushToast = useUi((s) => s.pushToast);
@@ -88,6 +108,7 @@ function ProjectsList() {
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [showRemoteDialog, setShowRemoteDialog] = useState(false);
 
   const startRename = (id: string, name: string) => {
     setRenamingId(id);
@@ -227,6 +248,14 @@ function ProjectsList() {
     >
       <header className="list-header">
         <h2>Projects</h2>
+        <button
+          className="icon-btn"
+          aria-label="Add remote project"
+          title="Add remote (SSH) project"
+          onClick={() => setShowRemoteDialog(true)}
+        >
+          <Network size={16} />
+        </button>
         <button className="icon-btn" aria-label="Add project" onClick={() => addProject()}>
           <Plus size={16} />
         </button>
@@ -381,18 +410,34 @@ function ProjectsList() {
                     #{p.tag}
                   </div>
                 )}
+                {p.remote && (
+                  <div
+                    className="project-remote-chip"
+                    title={`Remote SSH: ${p.remote.user ? `${p.remote.user}@` : ''}${p.remote.host}`}
+                  >
+                    <Network size={10} strokeWidth={2} />
+                    <span>{p.remote.host}</span>
+                  </div>
+                )}
               </div>
               {(() => {
                 const list = terminals[p.id] || [];
                 const running = list.filter((t) => t.status !== 'exited').length;
                 const exited = list.filter((t) => t.status === 'exited').length;
+                const crashed = list.filter(
+                  (t) => t.status === 'exited' && (t.exitCode ?? 0) !== 0
+                ).length;
                 if (list.length === 0) return null;
                 const expanded = !!projectExpanded[p.id];
+                const titleParts = [`${running} running`, `${exited} exited`];
+                if (crashed > 0) titleParts.push(`${crashed} crashed`);
                 return (
                   <button
                     type="button"
-                    className={`project-badge ${expanded ? 'expanded' : ''}`}
-                    title={`${running} running, ${exited} exited — click to ${expanded ? 'collapse' : 'expand'}`}
+                    className={`project-badge ${expanded ? 'expanded' : ''} ${
+                      crashed > 0 ? 'has-crashed' : ''
+                    }`}
+                    title={`${titleParts.join(', ')} — click to ${expanded ? 'collapse' : 'expand'}`}
                     aria-expanded={expanded}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -401,6 +446,9 @@ function ProjectsList() {
                   >
                     {running}
                     {exited > 0 && <span className="project-badge-exited">·{exited}</span>}
+                    {crashed > 0 && (
+                      <span className="project-badge-crashed" aria-hidden="true" />
+                    )}
                   </button>
                 );
               })()}
@@ -411,17 +459,26 @@ function ProjectsList() {
               const activeTab = selectedId === p.id ? selectedTabId[p.id] : undefined;
               return (
                 <div className="project-terminals" role="list">
-                  {list.map((t) => (
+                  {list.map((t) => {
+                    const exited = t.status === 'exited';
+                    const bad = exited && (t.exitCode ?? 0) !== 0;
+                    return (
                     <div
                       key={t.id}
                       role="listitem"
-                      className={`project-terminal-row ${activeTab === t.id ? 'active' : ''}`}
+                      className={`project-terminal-row ${activeTab === t.id ? 'active' : ''} ${
+                        exited ? 'exited' : ''
+                      } ${bad ? 'exited-bad' : ''}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         selectProject(p.id);
                         selectTab(p.id, t.id);
                       }}
-                      title={t.title}
+                      title={
+                        exited && t.exitCode != null
+                          ? `${t.title} · exited (code ${t.exitCode})`
+                          : t.title
+                      }
                     >
                       <span
                         className={`tab-profile-icon profile-${t.profile}`}
@@ -430,6 +487,11 @@ function ProjectsList() {
                         {profileIcon(t.profile)}
                       </span>
                       <span className="project-terminal-name">{t.title}</span>
+                      {bad && (
+                        <span className="project-terminal-exit-bad" aria-label={`Exit code ${t.exitCode}`}>
+                          ✗{t.exitCode}
+                        </span>
+                      )}
                       {unread[t.id] && activeTab !== t.id && (
                         <span className="project-terminal-unread" aria-label="Unread output" />
                       )}
@@ -446,7 +508,8 @@ function ProjectsList() {
                         <X size={13} />
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               );
             })()}
@@ -468,7 +531,7 @@ function ProjectsList() {
                 className="project-menu-item"
                 onClick={() => { setMenu(null); openIn('cursor', p.path); }}
               >
-                <MousePointer size={12} />
+                <CursorIcon size={12} />
                 <span>Open in Cursor</span>
               </button>
               <button
@@ -492,10 +555,28 @@ function ProjectsList() {
                 <TerminalSquare size={12} />
                 <span>Open in external Terminal</span>
               </button>
+              <button
+                className="project-menu-item"
+                onClick={() => {
+                  setMenu(null);
+                  void navigator.clipboard.writeText(p.path).then(
+                    () => pushToast('Path copied', 'info'),
+                    () => pushToast('Failed to copy path', 'error')
+                  );
+                }}
+              >
+                <ClipboardCopy size={12} />
+                <span>Copy path</span>
+              </button>
               <div className="project-menu-sep" />
               <button
                 className="project-menu-item"
-                onClick={() => { setMenu(null); setProjectSettingsOpen(p.id); }}
+                onClick={() => {
+                  setMenu(null);
+                  selectProject(p.id);
+                  setSettingsTab('project');
+                  setNav('settings');
+                }}
               >
                 <Settings2 size={12} />
                 <span>Project settings…</span>
@@ -575,20 +656,101 @@ function ProjectsList() {
         onMouseDown={onResizeMouseDown}
         onDoubleClick={onResizeDoubleClick}
       />
+      {showRemoteDialog && (
+        <AddRemoteProjectDialog
+          onClose={() => setShowRemoteDialog(false)}
+          onSubmit={async (input) => {
+            const p = await addRemoteProject(input);
+            setShowRemoteDialog(false);
+            if (p) selectProject(p.id);
+          }}
+        />
+      )}
     </section>
   );
 }
 
 function SettingsPane() {
+  const projects = useData((s) => s.projects);
+  const selectedProjectId = useUi((s) => s.selectedProjectId);
+  const selectProject = useUi((s) => s.selectProject);
+  const settingsTab = useUi((s) => s.settingsTab);
+  const setSettingsTab = useUi((s) => s.setSettingsTab);
+  const sortedProjects = sortProjectsForDisplay(projects);
+  const [filter, setFilter] = useState('');
+  const q = filter.trim().toLowerCase();
+  const visibleProjects = q
+    ? sortedProjects.filter(
+        (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q)
+      )
+    : sortedProjects;
+
   return (
     <section className="list-pane">
       <header className="list-header">
         <h2>Settings</h2>
       </header>
-      <div className="list-body">
-        <div className="list-empty">
-          Configure shell, Claude binary, and appearance in the main pane.
+      {projects.length > 4 && (
+        <div className="list-filter">
+          <Search size={12} className="list-filter-icon" />
+          <input
+            placeholder="Filter projects"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          {filter && (
+            <button
+              className="list-filter-clear"
+              aria-label="Clear filter"
+              onClick={() => setFilter('')}
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
+      )}
+      <div className="list-body">
+        <div className="settings-scope-label">Scope</div>
+        <div
+          className={`project-item ${settingsTab === 'global' ? 'active' : ''}`}
+          onClick={() => setSettingsTab('global')}
+        >
+          <Settings2 size={14} className="settings-scope-icon" />
+          <div className="project-meta">
+            <div className="project-name">Global</div>
+            <div className="project-path">App-wide defaults</div>
+          </div>
+        </div>
+        <div className="settings-scope-label">Project</div>
+        {sortedProjects.length === 0 ? (
+          <div className="list-empty">No projects yet.</div>
+        ) : visibleProjects.length === 0 ? (
+          <div className="list-empty">No projects match &ldquo;{filter}&rdquo;.</div>
+        ) : (
+          visibleProjects.map((p) => {
+            const active = settingsTab === 'project' && selectedProjectId === p.id;
+            return (
+              <div
+                key={p.id}
+                className={`project-item ${active ? 'active' : ''}`}
+                onClick={() => {
+                  selectProject(p.id);
+                  setSettingsTab('project');
+                }}
+                title={p.path}
+              >
+                <span
+                  className="project-dot"
+                  style={p.color ? { background: p.color } : undefined}
+                />
+                <div className="project-meta">
+                  <div className="project-name">{p.name}</div>
+                  <div className="project-path">{p.path}</div>
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
     </section>
   );

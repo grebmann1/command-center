@@ -1,12 +1,13 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { TerminalSquare, FolderTree, GitBranch, Columns2, Rows2, LayoutGrid, Square } from 'lucide-react';
-import type { SplitLayout } from '../store';
+import { TerminalSquare, FolderTree, GitBranch, Columns2, Rows2, LayoutGrid, Square, Globe } from 'lucide-react';
+import type { SplitLayout, WorkspaceMode } from '../store';
 import { useData, useUi } from '../store';
 import { TabBar } from './TabBar';
 import { TerminalSurface } from './TerminalSurface';
 import { ClaudeSessionsList } from './ClaudeSessionsList';
 import { FindBar } from './FindBar';
 import { OpenerButtons } from './OpenerButtons';
+import { PreviewPane } from './PreviewPane';
 
 // Lazy-load both editor surfaces. monaco-editor (legacy) and monaco-vscode-api
 // (workbench) both register default editor extensions into the same global
@@ -30,7 +31,7 @@ export function Workspace() {
   const selectTab = useUi((s) => s.selectTab);
   const findOpen = useUi((s) => s.findOpen);
   const workspaceModeMap = useUi((s) => s.workspaceMode);
-  const toggleWorkspaceMode = useUi((s) => s.toggleWorkspaceMode);
+  const setWorkspaceMode = useUi((s) => s.setWorkspaceMode);
   const workbenchEnabled = useUi((s) => s.workbenchEnabled);
   const splitLayoutMap = useUi((s) => s.splitLayout);
   const splitTabIdsMap = useUi((s) => s.splitTabIds);
@@ -42,6 +43,7 @@ export function Workspace() {
   const closeTerminal = useData((s) => s.closeTerminal);
   const reorderTerminal = useData((s) => s.reorderTerminal);
   const renameTerminal = useData((s) => s.renameTerminal);
+  const restartTerminal = useData((s) => s.restartTerminal);
   const setPinned = useData((s) => s.setPinned);
   const markExited = useData((s) => s.markExited);
 
@@ -50,14 +52,18 @@ export function Workspace() {
   const tabs = project ? terminals[project.id] || [] : [];
   const activeTabId = project ? selectedTabId[project.id] : undefined;
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
-  const mode = project ? workspaceModeMap[project.id] ?? 'terminals' : 'terminals';
+  const mode: WorkspaceMode = project
+    ? workspaceModeMap[project.id] ?? 'terminals'
+    : 'terminals';
   const isExplorer = mode === 'explorer' && !!project;
+  const isPreview = mode === 'preview' && !!project;
+  const isTerminals = !isExplorer && !isPreview;
   const splitLayout: SplitLayout = (project && splitLayoutMap[project.id]) || 'single';
   const splitTabIds = (project && splitTabIdsMap[project.id]) || [];
   const splitActive = splitLayout !== 'single';
 
   useEffect(() => {
-    const off = window.cc.terminals.onExit((id) => markExited(id));
+    const off = window.cc.terminals.onExit((id, code) => markExited(id, code));
     return off;
   }, [markExited]);
 
@@ -99,7 +105,7 @@ export function Workspace() {
 
   // Layout picker: only meaningful when terminals are visible (not explorer
   // mode) and the project has at least one tab. Hidden otherwise.
-  const layoutPicker = SPLIT_UI_ENABLED && project && !isExplorer && tabs.length > 0 && (
+  const layoutPicker = SPLIT_UI_ENABLED && project && isTerminals && tabs.length > 0 && (
     <div className="workspace-layout-picker" role="group" aria-label="Terminal layout">
       <button
         type="button"
@@ -137,15 +143,38 @@ export function Workspace() {
   );
 
   const modeToggle = project && (
-    <button
-      type="button"
-      className="workspace-mode-toggle"
-      onClick={() => toggleWorkspaceMode(project.id)}
-      title={isExplorer ? 'Switch to Terminals (⌘B)' : 'Switch to Explorer (⌘B)'}
-    >
-      {isExplorer ? <TerminalSquare size={14} /> : <FolderTree size={14} />}
-      <span>{isExplorer ? 'Terminals' : 'Explorer'}</span>
-    </button>
+    <div className="workspace-mode-segmented" role="group" aria-label="Workspace mode">
+      <button
+        type="button"
+        className={isTerminals ? 'active' : ''}
+        onClick={() => setWorkspaceMode(project.id, 'terminals')}
+        title="Terminals (⌘B toggles vs Explorer)"
+        aria-pressed={isTerminals}
+      >
+        <TerminalSquare size={13} />
+        <span>Terminals</span>
+      </button>
+      <button
+        type="button"
+        className={isExplorer ? 'active' : ''}
+        onClick={() => setWorkspaceMode(project.id, 'explorer')}
+        title="Explorer (⌘B toggles vs Terminals)"
+        aria-pressed={isExplorer}
+      >
+        <FolderTree size={13} />
+        <span>Explorer</span>
+      </button>
+      <button
+        type="button"
+        className={isPreview ? 'active' : ''}
+        onClick={() => setWorkspaceMode(project.id, 'preview')}
+        title="Preview browser (⌘L)"
+        aria-pressed={isPreview}
+      >
+        <Globe size={13} />
+        <span>Preview</span>
+      </button>
+    </div>
   );
 
   // Always mount TerminalSurface (preserves scrollback). When in explorer mode
@@ -153,7 +182,7 @@ export function Workspace() {
   return (
     <main className="workspace">
       <div className="workspace-topbar">
-        {!isExplorer ? (
+        {isTerminals ? (
           <TabBar
             tabs={tabs}
             activeTabId={activeTab?.id}
@@ -168,6 +197,18 @@ export function Workspace() {
               if (!src) return;
               handleNewTab(src.profile, { extraArgs: src.extraArgs, title: src.title });
             }}
+            onRestart={(id) => {
+              if (!project) return;
+              const src = tabs.find((t) => t.id === id);
+              if (!src) return;
+              if (
+                src.status !== 'exited' &&
+                !window.confirm(`Kill and restart "${src.title}"?`)
+              ) {
+                return;
+              }
+              void restartTerminal(id, project.id);
+            }}
             onPin={(id, pinned) => project && setPinned(project.id, id, pinned)}
             defaultProfile={projectDefaultProfile}
             splitTabIds={SPLIT_UI_ENABLED ? splitTabIds : undefined}
@@ -176,9 +217,13 @@ export function Workspace() {
             onRemoveFromSplit={SPLIT_UI_ENABLED ? (id) => project && removeFromSplit(project.id, id) : undefined}
             onCloseSplit={SPLIT_UI_ENABLED && project ? () => closeSplit(project.id) : undefined}
           />
-        ) : (
+        ) : isExplorer ? (
           <div className="explorer-topbar">
             <span className="explorer-topbar-label">Explorer</span>
+          </div>
+        ) : (
+          <div className="explorer-topbar">
+            <span className="explorer-topbar-label">Preview</span>
           </div>
         )}
         {layoutPicker}
@@ -187,7 +232,7 @@ export function Workspace() {
       <div className="workspace-body">
         <div
           className="terminal-host"
-          style={{ display: isExplorer ? 'none' : undefined }}
+          style={{ display: isTerminals ? undefined : 'none' }}
         >
           <TerminalSurface />
           {findOpen && activeTab && <FindBar sessionId={activeTab.id} />}
@@ -245,6 +290,7 @@ export function Workspace() {
             )}
           </Suspense>
         )}
+        {isPreview && project && <PreviewPane projectId={project.id} />}
       </div>
       <div className="statusbar">
         <span>{project?.path ?? '—'}</span>
@@ -265,7 +311,7 @@ export function Workspace() {
           </span>
         )}
         <span className="grow" />
-        {!isExplorer && activeTab && (
+        {isTerminals && activeTab && (
           <>
             <span>{activeTab.profile}</span>
             <span>pid {activeTab.pid ?? '—'}</span>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowRight, MessageSquare, Trash2 } from 'lucide-react';
+import { ArrowRight, ExternalLink, MessageSquare, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -10,6 +10,7 @@ import {
   useInboxSelection,
   useUi
 } from '../store';
+import { InboxGuidance } from './InboxGuidance';
 import type { InboxDoc, InboxEntry, FsReadResult, Project } from '@shared/types';
 
 interface InboxDetailProps {
@@ -100,6 +101,7 @@ function EmptyState() {
         Projects will push status updates here as they work — finished
         analyses, blocked tasks, questions back to you.
       </p>
+      <InboxGuidance />
     </div>
   );
 }
@@ -222,11 +224,30 @@ function DocBlock({ project, doc }: { project: Project | null; doc: InboxDoc }) 
     };
   }, [project, doc.path]);
 
+  const pushToast = useUi((s) => s.pushToast);
+  const openInEditor = async () => {
+    if (!project) return;
+    const abs = joinPath(project.path, doc.path);
+    const r = await window.cc.openers.openIn('cursor', abs);
+    if (!r.ok) pushToast(r.message ?? 'Failed to open in Cursor', 'error');
+  };
+
   return (
     <div className="inbox-doc">
       <div className="inbox-doc-header">
         <span className="inbox-doc-icon">📄</span>
         <span className="inbox-doc-path">{doc.path}</span>
+        {project && (
+          <button
+            type="button"
+            className="inbox-doc-open"
+            onClick={openInEditor}
+            title="Open in Cursor"
+            aria-label={`Open ${doc.path} in Cursor`}
+          >
+            <ExternalLink size={12} strokeWidth={1.75} />
+          </button>
+        )}
       </div>
       <div className="inbox-doc-body">
         {result === null ? (

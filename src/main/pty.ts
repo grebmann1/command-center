@@ -1,7 +1,7 @@
 import * as pty from 'node-pty';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import type { LaunchProfileId, TerminalSession, AppConfig, ProjectSettings } from '../shared/types.js';
+import type { LaunchProfileId, TerminalSession, AppConfig, ProjectSettings, ProjectRemote } from '../shared/types.js';
 import { mcpConfigPathForProject } from './mcp-config.js';
 
 interface Live {
@@ -69,7 +69,11 @@ export class PtyManager extends EventEmitter {
     projectSettings?: ProjectSettings;
     extraArgs?: string[];
     title?: string;
+    remote?: ProjectRemote;
   }): TerminalSession {
+    if (opts.remote) {
+      return this.createRemote({ ...opts, remote: opts.remote });
+    }
     const { command, args } = resolveLaunch(opts.profile, opts.config);
     // For claude-family profiles, point the CLI at the launcher-owned
     // .mcp.json so the agent picks up the cc-inbox server. The URL in
@@ -80,12 +84,6 @@ export class PtyManager extends EventEmitter {
       ? [
           '--mcp-config',
           mcpConfigPathForProject(opts.projectId),
-          // Pre-approve the inbox push tool so the agent can use it without
-          // prompting. The MCP-tool name format Claude expects is
-          // `mcp__<server-name>__<tool-name>`; our server is `cc-inbox`
-          // (see mcp-config.ts) and the tool is `inbox_push`.
-          '--allowedTools',
-          'mcp__cc-inbox__inbox_push',
           // Teach the agent when to use inbox_push. Appended to the system
           // prompt at spawn so it doesn't pollute the user's global claude
           // config — the guidance only applies to launcher-spawned tabs.
@@ -97,7 +95,18 @@ export class PtyManager extends EventEmitter {
       isClaudeProfile(opts.profile) && opts.projectSettings
         ? projectSettingsArgs(opts.projectSettings, opts.profile)
         : [];
-    const fullArgs = [...args, ...claudeMcpArgs, ...psArgs, ...(opts.extraArgs ?? [])];
+    // Pre-approve the inbox push tool so the agent can use it without
+    // prompting. We merge into the allowedTools list (rather than emit a
+    // second --allowedTools flag) because some claude-cli versions take
+    // last-occurrence-wins, which would silently drop this permission when
+    // the project also configures allowedTools.
+    const inboxAllow = isClaudeProfile(opts.profile) && this.mcpBaseUrl
+      ? ['mcp__cc-inbox__inbox_push']
+      : [];
+    const fullArgs = mergeAllowedTools(
+      [...args, ...claudeMcpArgs, ...psArgs, ...(opts.extraArgs ?? [])],
+      inboxAllow
+    );
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       TERM: 'xterm-256color'
@@ -127,6 +136,76 @@ export class PtyManager extends EventEmitter {
 
     this.live.set(session.id, { session, proc });
 
+    proc.onData((data) => this.emit('data', session.id, data));
+    proc.onExit(({ exitCode }) => {
+      const live = this.live.get(session.id);
+      if (live) {
+        live.session.status = 'exited';
+        live.session.exitCode = exitCode;
+      }
+      this.emit('exit', session.id, exitCode);
+      this.live.delete(session.id);
+    });
+
+    return session;
+  }
+
+  /**
+   * Spawn a local `ssh` subprocess that allocates a PTY on the remote host
+   * (`-t`) and runs either the user's login shell or a claude CLI session.
+   *
+   * For claude-family profiles we apply the same global / per-project
+   * flag stack as local spawns, but we deliberately skip MCP injection
+   * (`--mcp-config`, `CC_MCP_URL`, the inbox allowlist) — those point at
+   * our local http listener and aren't reachable from the remote without
+   * a reverse tunnel. Inbox push is a local-only feature in v1.
+   */
+  private createRemote(opts: {
+    projectId: string;
+    profile: LaunchProfileId;
+    cwd: string;
+    cols: number;
+    rows: number;
+    config: AppConfig;
+    projectSettings?: ProjectSettings;
+    extraArgs?: string[];
+    title?: string;
+    remote: ProjectRemote;
+  }): TerminalSession {
+    const { remote } = opts;
+    // Defense in depth: addRemoteProject already rejects leading-dash values,
+    // but reject again here so a hand-edited projects.json can't smuggle
+    // `-oProxyCommand=...` into ssh's argv as a flag.
+    if (remote.host.startsWith('-')) throw new Error(`refusing ssh host starting with '-': ${remote.host}`);
+    if (remote.user && remote.user.startsWith('-')) throw new Error(`refusing ssh user starting with '-': ${remote.user}`);
+    const target = remote.user ? `${remote.user}@${remote.host}` : remote.host;
+    const remoteCmd = buildRemoteCmd(opts);
+    const sshArgs = ['-t', target, remoteCmd];
+
+    const proc = pty.spawn('ssh', sshArgs, {
+      name: 'xterm-256color',
+      cols: opts.cols,
+      rows: opts.rows,
+      cwd: process.env.HOME ?? '/',
+      env: {
+        ...(process.env as Record<string, string>),
+        TERM: 'xterm-256color'
+      }
+    });
+
+    const session: TerminalSession = {
+      id: randomUUID(),
+      projectId: opts.projectId,
+      title: opts.title ?? `${titleFor(opts.profile)} · ${remote.host}`,
+      profile: opts.profile,
+      cwd: opts.cwd,
+      pid: proc.pid,
+      status: 'running',
+      createdAt: Date.now(),
+      extraArgs: opts.extraArgs
+    };
+
+    this.live.set(session.id, { session, proc });
     proc.onData((data) => this.emit('data', session.id, data));
     proc.onExit(({ exitCode }) => {
       const live = this.live.get(session.id);
@@ -234,6 +313,83 @@ function projectSettingsArgs(s: ProjectSettings, profile: LaunchProfileId): stri
     args.push(...s.extraArgs);
   }
   return args;
+}
+
+/**
+ * Ensure a single `--allowedTools` flag in the argv with `extras` (plus any
+ * existing values from earlier flags) merged and deduped. Pure: returns a
+ * new array. If neither side mentions allowed tools, returns argv unchanged.
+ */
+function mergeAllowedTools(argv: string[], extras: string[]): string[] {
+  if (extras.length === 0 && !argv.includes('--allowedTools')) return argv;
+  const collected: string[] = [];
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === '--allowedTools' && i + 1 < argv.length) {
+      const next = argv[i + 1];
+      next.split(',').map((s) => s.trim()).filter(Boolean).forEach((v) => collected.push(v));
+      i += 1;
+      continue;
+    }
+    out.push(argv[i]);
+  }
+  for (const v of extras) collected.push(v);
+  if (collected.length === 0) return out;
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const v of collected) {
+    if (!seen.has(v)) { seen.add(v); merged.push(v); }
+  }
+  out.push('--allowedTools', merged.join(','));
+  return out;
+}
+
+/**
+ * POSIX shell quoting — wrap `s` in single quotes and escape any embedded
+ * single quote. Used to safely inject `cd <path>` and to assemble argv
+ * into the remote command line we hand to ssh.
+ */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+function shellQuoteArgv(argv: string[]): string {
+  return argv.map(shellQuote).join(' ');
+}
+
+/**
+ * Build the single command string we hand to the remote sshd. For shell
+ * profiles we exec the login shell; for claude profiles we run the
+ * claude CLI with the same global / per-project flag stack the local
+ * path uses, minus MCP injection (the cc-inbox server isn't reachable
+ * from the remote in v1).
+ */
+function buildRemoteCmd(opts: {
+  profile: LaunchProfileId;
+  config: AppConfig;
+  projectSettings?: ProjectSettings;
+  extraArgs?: string[];
+  remote: ProjectRemote;
+}): string {
+  const cdPrefix = opts.remote.remotePath
+    ? `cd ${shellQuote(opts.remote.remotePath)} && `
+    : '';
+
+  if (opts.profile === 'shell') {
+    // The remote shell expands ${SHELL:-/bin/sh}; we keep the braces literal
+    // here by building the string outside a template literal so a future
+    // edit can't accidentally interpolate it locally.
+    const shellExec = 'exec "${SHELL:-/bin/sh}" -l';
+    const tail = shellQuoteArgv(opts.extraArgs ?? []);
+    return `${cdPrefix}${shellExec}${tail ? ' ' + tail : ''}`;
+  }
+
+  // Claude family: build argv locally, ship as a quoted command. We rely
+  // on `claude` being on the remote PATH (default for sfwork workspaces).
+  const { args: baseArgs } = resolveLaunch(opts.profile, opts.config);
+  const psArgs = opts.projectSettings ? projectSettingsArgs(opts.projectSettings, opts.profile) : [];
+  const argv = ['claude', ...baseArgs, ...psArgs, ...(opts.extraArgs ?? [])];
+  return `${cdPrefix}exec ${shellQuoteArgv(argv)}`;
 }
 
 function titleFor(profile: LaunchProfileId): string {

@@ -6,7 +6,8 @@ import { SearchAddon } from '@xterm/addon-search';
 import type { TerminalSession } from '@shared/types';
 import { posixQuote } from '../util/quote';
 import { registerFinder, registerTerminal } from '../util/findRegistry';
-import { useData } from '../store';
+import { scrapeUrls } from '../util/urlScrape';
+import { useData, useUi } from '../store';
 
 type Area = 'a' | 'b' | 'c' | 'd';
 
@@ -54,8 +55,11 @@ export function TerminalView({ session, area }: Props) {
     if (!ref.current) return;
     const term = new Terminal({
       cursorBlink: true,
+      // Prefer Nerd Font / Powerline-capable families first so prompts
+       // like agnoster / powerlevel10k render their private-use-area
+       // glyphs instead of falling back to box-drawing tofu.
       fontFamily:
-        'JetBrains Mono, SF Mono, Menlo, Consolas, "Liberation Mono", monospace',
+        '"MesloLGS NF", "JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", "Source Code Pro for Powerline", "Menlo for Powerline", JetBrains Mono, SF Mono, Menlo, Consolas, "Liberation Mono", monospace',
       fontSize: useData.getState().fontSize,
       theme: THEME,
       allowProposedApi: true,
@@ -64,7 +68,23 @@ export function TerminalView({ session, area }: Props) {
     const fit = new FitAddon();
     const search = new SearchAddon();
     term.loadAddon(fit);
-    term.loadAddon(new WebLinksAddon());
+    // Custom click handler so localhost links open in the in-app preview pane
+    // instead of the system browser. Anything else (https, remote http) falls
+    // through to shell.openExternal via window.open.
+    term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey) {
+          window.open(uri, '_blank', 'noopener');
+          return;
+        }
+        const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(uri);
+        if (isLocal) {
+          useUi.getState().requestPreviewNav(session.projectId, uri);
+          return;
+        }
+        window.open(uri, '_blank', 'noopener');
+      })
+    );
     term.loadAddon(search);
     term.open(ref.current);
 
@@ -78,7 +98,8 @@ export function TerminalView({ session, area }: Props) {
       clear: () => search.clearDecorations()
     });
     const offHandle = registerTerminal(session.id, {
-      clear: () => term.clear()
+      clear: () => term.clear(),
+      getUrls: () => scrapeUrls(term)
     });
 
     // Initial fit + resize
@@ -90,8 +111,13 @@ export function TerminalView({ session, area }: Props) {
     const offData = window.cc.terminals.onData((id, data) => {
       if (id === session.id) term.write(data);
     });
-    const offExit = window.cc.terminals.onExit((id) => {
-      if (id === session.id) term.write('\r\n\x1b[2m[session exited]\x1b[0m\r\n');
+    const offExit = window.cc.terminals.onExit((id, code) => {
+      if (id !== session.id) return;
+      // 0 / undefined → dim "[session exited]"; non-zero → red "[exited code N]".
+      const bad = typeof code === 'number' && code !== 0;
+      const sgr = bad ? '\x1b[31m' : '\x1b[2m';
+      const label = bad ? `[exited code ${code}]` : '[session exited]';
+      term.write(`\r\n${sgr}${label}\x1b[0m\r\n`);
     });
     offsRef.current = [offData, offExit];
 

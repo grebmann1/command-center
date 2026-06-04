@@ -1,13 +1,21 @@
-import { useEffect, useState, useCallback } from 'react';
-import type { AppConfig, McpServer, SkillEntry } from '@shared/types';
-import { useData, useUi } from '../store';
-
-type TabId = 'global' | 'project';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { X } from 'lucide-react';
+import type {
+  AppConfig,
+  McpServer,
+  SkillEntry,
+  ProjectSettings,
+  ClaudeProjectSettings,
+  ClaudeSettingsScope,
+  ClaudeSettingsResult
+} from '@shared/types';
+import { applyTheme, useData, useUi } from '../store';
 
 export function SettingsPanel() {
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [tab, setTab] = useState<TabId>('global');
+  const [savedFlash, setSavedFlash] = useState(false);
+  const savedTimer = useRef<number | null>(null);
+  const tab = useUi((s) => s.settingsTab);
   const workbenchEnabled = useUi((s) => s.workbenchEnabled);
   const setWorkbenchEnabled = useUi((s) => s.setWorkbenchEnabled);
 
@@ -48,6 +56,21 @@ export function SettingsPanel() {
     window.cc.skills.readHooks().then(setHooks).catch(() => {});
   }, []);
 
+  const markSaved = useCallback(() => {
+    setSavedFlash(true);
+    if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+    savedTimer.current = window.setTimeout(() => {
+      setSavedFlash(false);
+      savedTimer.current = null;
+    }, 1600);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+    };
+  }, []);
+
   if (!config) {
     return (
       <main className="settings-panel">
@@ -60,6 +83,7 @@ export function SettingsPanel() {
     try {
       await window.cc.skills.setEnabled(name, enabled);
       setSkills((prev) => prev.map((s) => (s.name === name ? { ...s, enabled } : s)));
+      markSaved();
     } catch {
       // noop
     }
@@ -75,7 +99,11 @@ export function SettingsPanel() {
       const next = await window.cc.config.set(patch);
       setConfig(next);
       if (typeof patch.fontSize === 'number') useData.getState().setFontSize(patch.fontSize);
-      setSavedAt(Date.now());
+      if (typeof patch.inboxGuidanceEnabled === 'boolean') {
+        useData.getState().setInboxGuidanceEnabled(patch.inboxGuidanceEnabled);
+      }
+      if (patch.theme) applyTheme(patch.theme);
+      markSaved();
     } catch {
       // noop
     }
@@ -85,30 +113,13 @@ export function SettingsPanel() {
     <main className="settings-panel">
       <div className="settings-inner">
         <header className="settings-header">
-          <h2>Settings</h2>
-          <div className="settings-tabs" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === 'global'}
-              className={`settings-tab ${tab === 'global' ? 'is-active' : ''}`}
-              onClick={() => setTab('global')}
-            >
-              Global
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === 'project'}
-              className={`settings-tab ${tab === 'project' ? 'is-active' : ''}`}
-              onClick={() => setTab('project')}
-            >
-              Project
-              {selectedProject && (
-                <span className="settings-tab-hint">{selectedProject.name}</span>
-              )}
-            </button>
-          </div>
+          <h2>
+            Settings
+            <span className="settings-header-sep">›</span>
+            <span className="settings-header-scope">
+              {tab === 'global' ? 'Global' : selectedProject?.name ?? 'Project'}
+            </span>
+          </h2>
         </header>
 
         {tab === 'global' ? (
@@ -133,12 +144,14 @@ export function SettingsPanel() {
               if (!selectedProject) return;
               await window.cc.mcp.setEnabled(selectedProject.path, name, enabled);
               await loadMcpServers(selectedProject.path);
+              markSaved();
             }}
             onOpen={openFile}
+            onSaved={markSaved}
           />
         )}
 
-        {savedAt && <div className="settings-saved">Saved · {timeAgo(savedAt)}</div>}
+        {savedFlash && <div className="settings-saved">Saved</div>}
       </div>
     </main>
   );
@@ -322,11 +335,12 @@ function GlobalTab({
 }
 
 interface ProjectTabProps {
-  project: { id: string; name: string; path: string } | null;
+  project: { id: string; name: string; path: string; remote?: unknown } | null;
   mcpServers: McpServer[];
   mcpLoading: boolean;
   onToggleMcp: (name: string, enabled: boolean) => Promise<void>;
   onOpen: (path: string) => void;
+  onSaved: () => void;
 }
 
 function ProjectTab({
@@ -334,13 +348,14 @@ function ProjectTab({
   mcpServers,
   mcpLoading,
   onToggleMcp,
-  onOpen
+  onOpen,
+  onSaved
 }: ProjectTabProps) {
   if (!project) {
     return (
       <Section title="No project selected">
         <p className="settings-help">
-          Select a project in the sidebar to manage its MCP servers and config files.
+          Select a project in the sidebar to manage its CLI flags, MCP servers, and config files.
         </p>
       </Section>
     );
@@ -348,6 +363,12 @@ function ProjectTab({
 
   return (
     <>
+      <ProjectClaudeFlags projectId={project.id} onSaved={onSaved} />
+
+      {!project.remote && (
+        <ProjectClaudeSettings projectPath={project.path} onSaved={onSaved} onOpen={onOpen} />
+      )}
+
       <Section
         title="MCP servers"
         help="Merged from ~/.claude.json (user) and <project>/.mcp.json (project). Toggling writes the disabled flag to .claude/settings.local.json."
@@ -386,6 +407,511 @@ function ProjectTab({
         </div>
       </Section>
     </>
+  );
+}
+
+function ProjectClaudeFlags({
+  projectId,
+  onSaved
+}: {
+  projectId: string;
+  onSaved: () => void;
+}) {
+  const [settings, setSettings] = useState<ProjectSettings>({});
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    window.cc.projectSettings.get(projectId)
+      .then((s) => { if (!cancelled) { setSettings(s); setLoaded(true); } })
+      .catch(() => { if (!cancelled) setLoaded(true); });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  const save = (patch: Partial<ProjectSettings>) => {
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    window.cc.projectSettings.set(projectId, patch)
+      .then(() => onSaved())
+      .catch(() => {});
+  };
+
+  if (!loaded) {
+    return (
+      <Section title="Claude CLI overrides">
+        <p className="settings-help">Loading…</p>
+      </Section>
+    );
+  }
+
+  return (
+    <Section
+      title="Claude CLI overrides"
+      help="Applied when launching claude tabs in this project. Override the global defaults."
+    >
+      <Field
+        label="Append system prompt"
+        help="Text appended via --append-system-prompt for every session in this project."
+      >
+        <textarea
+          className="settings-textarea"
+          rows={4}
+          value={settings.appendSystemPrompt ?? ''}
+          onChange={(e) =>
+            setSettings((s) => ({ ...s, appendSystemPrompt: e.target.value }))
+          }
+          onBlur={(e) => {
+            const val = e.target.value.trim() || undefined;
+            save({ appendSystemPrompt: val });
+          }}
+          placeholder="Optional"
+        />
+      </Field>
+
+      <Field label="Model override" help="“Use default” falls back to the global default.">
+        <select
+          value={settings.model ?? ''}
+          onChange={(e) => save({ model: e.target.value || undefined })}
+        >
+          <option value="">Use default</option>
+          <option value="opus">Opus</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="haiku">Haiku</option>
+        </select>
+      </Field>
+
+      <Field label="Permission mode override">
+        <select
+          value={settings.permissionMode ?? ''}
+          onChange={(e) =>
+            save({ permissionMode: (e.target.value as ProjectSettings['permissionMode']) || undefined })
+          }
+        >
+          <option value="">Use default</option>
+          <option value="default">Default</option>
+          <option value="acceptEdits">Accept Edits</option>
+          <option value="plan">Plan</option>
+          <option value="bypassPermissions">Bypass Permissions</option>
+        </select>
+      </Field>
+
+      <ChipField
+        label="Extra args"
+        help="Forwarded verbatim to claude. Wins over per-tab and global flags."
+        values={settings.extraArgs ?? []}
+        placeholder="--verbose"
+        onChange={(vals) => save({ extraArgs: vals.length ? vals : undefined })}
+      />
+
+      <ChipField
+        label="Add dirs"
+        help="Each value becomes a --add-dir flag."
+        values={settings.addDirs ?? []}
+        placeholder="/path/to/dir"
+        onChange={(vals) => save({ addDirs: vals.length ? vals : undefined })}
+      />
+
+      <ChipField
+        label="Allowed tools"
+        help="Joined with commas into --allowedTools. Examples: Bash, Edit, Write, Read, Task, mcp__<server>__<tool>, Bash(git:*)."
+        values={settings.allowedTools ?? []}
+        placeholder="Bash(git:*)"
+        onChange={(vals) => save({ allowedTools: vals.length ? vals : undefined })}
+      />
+
+      <ChipField
+        label="Denied tools"
+        help="Joined with commas into --disallowedTools. Examples: Bash(rm:*)."
+        values={settings.deniedTools ?? []}
+        placeholder="Bash(rm:*)"
+        onChange={(vals) => save({ deniedTools: vals.length ? vals : undefined })}
+      />
+    </Section>
+  );
+}
+
+/**
+ * Editor for `<project>/.claude/settings.json` (shared, committed) and
+ * `<project>/.claude/settings.local.json` (personal, gitignored). Surfaces
+ * `permissions.allow/deny/defaultMode/additionalDirectories` and the
+ * top-level `model`. Anything else round-trips untouched via _unknown.
+ */
+function ProjectClaudeSettings({
+  projectPath,
+  onSaved,
+  onOpen
+}: {
+  projectPath: string;
+  onSaved: () => void;
+  onOpen: (path: string) => void;
+}) {
+  const [shared, setShared] = useState<ClaudeSettingsResult | null>(null);
+  const [local, setLocal] = useState<ClaudeSettingsResult | null>(null);
+  const [bindingError, setBindingError] = useState<string | null>(null);
+  const [activeScope, setActiveScope] = useState<ClaudeSettingsScope>('shared');
+
+  const load = useCallback(async () => {
+    // Guard against a stale preload (electron-vite HMRs the renderer but
+    // not the preload — devs hitting save before a full app restart see
+    // window.cc.claudeSettings undefined). Surfacing a clear hint beats
+    // a hanging spinner.
+    if (!window.cc?.claudeSettings?.read) {
+      setBindingError('claudeSettings binding not loaded — quit (⌘Q) and relaunch the app.');
+      // Mark both scopes as "not present" so the cards render and the
+      // user can still see the path / open in Cursor.
+      const placeholder = (scope: 'shared' | 'local'): ClaudeSettingsResult => ({
+        exists: false,
+        path: `${projectPath}/.claude/${scope === 'shared' ? 'settings.json' : 'settings.local.json'}`,
+        settings: {}
+      });
+      setShared(placeholder('shared'));
+      setLocal(placeholder('local'));
+      return;
+    }
+    setBindingError(null);
+    try {
+      const [s, l] = await Promise.all([
+        window.cc.claudeSettings.read(projectPath, 'shared'),
+        window.cc.claudeSettings.read(projectPath, 'local')
+      ]);
+      setShared(s);
+      setLocal(l);
+    } catch (err) {
+      setBindingError(err instanceof Error ? err.message : 'Failed to load .claude/ settings');
+    }
+  }, [projectPath]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const save = async (scope: ClaudeSettingsScope, patch: ClaudeProjectSettings) => {
+    try {
+      const next = await window.cc.claudeSettings.write(projectPath, scope, patch);
+      if (scope === 'shared') setShared(next);
+      else setLocal(next);
+      onSaved();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return (
+    <Section
+      title="Project .claude/ settings"
+      help={
+        <>
+          Reads <code>.claude/settings.json</code> (shared, committed) and{' '}
+          <code>.claude/settings.local.json</code> (personal, gitignored).
+          Edits preserve unknown keys (env, hooks, outputStyle, …) verbatim.
+        </>
+      }
+    >
+      {bindingError && <p className="modal-error">{bindingError}</p>}
+      <div className="claude-scope-toggle" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeScope === 'shared'}
+          className={activeScope === 'shared' ? 'active' : ''}
+          onClick={() => setActiveScope('shared')}
+        >
+          Shared
+          {shared?.exists && <span className="claude-scope-dot" aria-hidden />}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeScope === 'local'}
+          className={activeScope === 'local' ? 'active' : ''}
+          onClick={() => setActiveScope('local')}
+        >
+          Local
+          {local?.exists && <span className="claude-scope-dot" aria-hidden />}
+        </button>
+      </div>
+      {activeScope === 'shared' ? (
+        <ClaudeScopeCard
+          title="Shared (settings.json)"
+          subtitle="Committed — for everyone on the project"
+          result={shared}
+          onSave={(patch) => save('shared', patch)}
+          onOpen={onOpen}
+        />
+      ) : (
+        <ClaudeScopeCard
+          title="Local (settings.local.json)"
+          subtitle="Personal — gitignored by claude-code"
+          result={local}
+          onSave={(patch) => save('local', patch)}
+          onOpen={onOpen}
+        />
+      )}
+    </Section>
+  );
+}
+
+function ClaudeScopeCard({
+  title,
+  subtitle,
+  result,
+  onSave,
+  onOpen
+}: {
+  title: string;
+  subtitle: string;
+  result: ClaudeSettingsResult | null;
+  onSave: (patch: ClaudeProjectSettings) => Promise<void>;
+  onOpen: (path: string) => void;
+}) {
+  if (!result) {
+    return (
+      <div className="claude-scope-card">
+        <header>
+          <h4>{title}</h4>
+          <p className="settings-help">{subtitle}</p>
+        </header>
+        <p className="settings-help">Loading…</p>
+      </div>
+    );
+  }
+
+  const s = result.settings;
+  const perm = s.permissions ?? {};
+  return (
+    <ClaudeScopeCardInner
+      title={title}
+      subtitle={subtitle}
+      result={result}
+      view={s}
+      perm={perm}
+      onSave={onSave}
+      onOpen={onOpen}
+    />
+  );
+}
+
+function ClaudeScopeCardInner({
+  title,
+  subtitle,
+  result,
+  view: s,
+  perm,
+  onSave,
+  onOpen
+}: {
+  title: string;
+  subtitle: string;
+  result: ClaudeSettingsResult;
+  view: ClaudeProjectSettings;
+  perm: NonNullable<ClaudeProjectSettings['permissions']>;
+  onSave: (patch: ClaudeProjectSettings) => Promise<void>;
+  onOpen: (path: string) => void;
+}) {
+  const [modelDraft, setModelDraft] = useState(s.model ?? '');
+  // Re-sync the draft when the persisted value changes (e.g. another save lands).
+  useEffect(() => {
+    setModelDraft(s.model ?? '');
+  }, [s.model]);
+  // Show "Other keys" when the user has hand-edited fields we don't surface
+  // (env, hooks, outputStyle, etc.). Read-only — they edit raw.
+  const hasUnknown =
+    (s._unknown && Object.keys(s._unknown).length > 0) ||
+    (s._unknownPermissions && Object.keys(s._unknownPermissions).length > 0);
+
+  return (
+    <div className="claude-scope-card">
+      <header>
+        <h4>
+          {title}
+          {!result.exists && <span className="claude-scope-badge">not present</span>}
+        </h4>
+        <p className="settings-help">{subtitle}</p>
+      </header>
+
+      <Field label="Default permission mode">
+        <select
+          value={perm.defaultMode ?? ''}
+          onChange={(e) =>
+            onSave({
+              permissions: {
+                ...perm,
+                defaultMode: (e.target.value || undefined) as
+                  | 'default'
+                  | 'acceptEdits'
+                  | 'plan'
+                  | 'bypassPermissions'
+                  | undefined
+              }
+            })
+          }
+        >
+          <option value="">Unset</option>
+          <option value="default">Default</option>
+          <option value="acceptEdits">Accept Edits</option>
+          <option value="plan">Plan</option>
+          <option value="bypassPermissions">Bypass Permissions</option>
+        </select>
+      </Field>
+
+      <Field label="Model" help="Top-level `model` override (e.g. opus, sonnet, haiku).">
+        <input
+          type="text"
+          value={modelDraft}
+          onChange={(e) => setModelDraft(e.target.value)}
+          onBlur={(e) => {
+            const next = e.target.value.trim();
+            if ((s.model ?? '') === next) return;
+            onSave({ model: next || undefined });
+          }}
+          placeholder="unset"
+          spellCheck={false}
+        />
+      </Field>
+
+      <ChipField
+        label="Allow"
+        help="permissions.allow — pre-approved tool patterns. Examples: Bash(git:*), Edit, Read."
+        values={perm.allow ?? []}
+        placeholder="Bash(git:*)"
+        onChange={(vals) =>
+          onSave({
+            permissions: {
+              ...perm,
+              allow: vals.length ? vals : undefined
+            }
+          })
+        }
+      />
+
+      <ChipField
+        label="Deny"
+        help="permissions.deny — blocked tool patterns. Examples: Bash(rm:*)."
+        values={perm.deny ?? []}
+        placeholder="Bash(rm:*)"
+        onChange={(vals) =>
+          onSave({
+            permissions: {
+              ...perm,
+              deny: vals.length ? vals : undefined
+            }
+          })
+        }
+      />
+
+      <ChipField
+        label="Additional directories"
+        help="permissions.additionalDirectories — extra paths claude can read/write outside the project root."
+        values={perm.additionalDirectories ?? []}
+        placeholder="/abs/path"
+        onChange={(vals) =>
+          onSave({
+            permissions: {
+              ...perm,
+              additionalDirectories: vals.length ? vals : undefined
+            }
+          })
+        }
+      />
+
+      {hasUnknown && (
+        <div className="settings-field">
+          <span className="settings-label">Other keys (read-only)</span>
+          <pre className="settings-code-block">
+            {JSON.stringify(
+              {
+                ...(s._unknown ?? {}),
+                ...(s._unknownPermissions ? { permissions: s._unknownPermissions } : {})
+              },
+              null,
+              2
+            )}
+          </pre>
+        </div>
+      )}
+
+      <div className="settings-btn-row">
+        <button className="settings-btn" onClick={() => onOpen(result.path)}>
+          Edit raw JSON in Cursor
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ChipField({
+  label,
+  help,
+  values,
+  placeholder,
+  onChange
+}: {
+  label: string;
+  help?: React.ReactNode;
+  values: string[];
+  placeholder?: string;
+  onChange: (vals: string[]) => void;
+}) {
+  const [input, setInput] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const commit = () => {
+    const raw = input.trim();
+    if (!raw) return;
+    const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    if (parts.length) {
+      onChange([...values, ...parts]);
+      setInput('');
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      commit();
+    } else if (e.key === 'Backspace' && input === '' && values.length > 0) {
+      onChange(values.slice(0, -1));
+    }
+  };
+
+  const remove = (i: number) => onChange(values.filter((_, idx) => idx !== i));
+
+  return (
+    <div className="settings-field">
+      <span className="settings-label">{label}</span>
+      <div
+        className="settings-chip-input"
+        role="group"
+        aria-label={label}
+        onClick={() => inputRef.current?.focus()}
+      >
+        {values.map((v, i) => (
+          <span key={i} className="settings-chip">
+            <span className="settings-chip-text">{v}</span>
+            <button
+              type="button"
+              className="settings-chip-remove"
+              aria-label={`Remove ${v}`}
+              onClick={(e) => { e.stopPropagation(); remove(i); }}
+            >
+              <X size={10} />
+            </button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          className="settings-chip-field"
+          value={input}
+          placeholder={values.length === 0 ? (placeholder ?? 'Type and press Enter or ,') : ''}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onBlur={commit}
+          aria-label={`Add ${label}`}
+        />
+      </div>
+      {help && <p className="settings-help">{help}</p>}
+    </div>
   );
 }
 
@@ -502,8 +1028,3 @@ function McpServerRow({
   );
 }
 
-function timeAgo(ts: number) {
-  const s = Math.max(1, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return `${s}s ago`;
-  return `${Math.round(s / 60)}m ago`;
-}

@@ -14,6 +14,7 @@ interface Props {
   onReorder?: (fromId: string, toId: string) => void;
   onRename?: (id: string, title: string) => void;
   onDuplicate?: (id: string) => void;
+  onRestart?: (id: string) => void;
   onPin?: (id: string, pinned: boolean) => void;
   /**
    * If set, a plain click on the "+" button spawns this profile directly
@@ -36,7 +37,7 @@ interface TabContextMenu {
   y: number;
 }
 
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder, onRename, onDuplicate, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
+export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder, onRename, onDuplicate, onRestart, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
   const splitSet = new Set((splitTabIds ?? []).filter((x): x is string => !!x));
   const [menuOpen, setMenuOpen] = useState(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -102,9 +103,16 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
             draggingId === t.id ? 'dragging' : ''
           } ${dragOverId === t.id && draggingId && draggingId !== t.id ? 'drag-over' : ''} ${
             t.pinned ? 'pinned' : ''
-          } ${splitSet.has(t.id) ? 'split' : ''}`}
+          } ${splitSet.has(t.id) ? 'split' : ''} ${t.status === 'exited' ? 'exited' : ''} ${
+            t.status === 'exited' && (t.exitCode ?? 0) !== 0 ? 'exited-bad' : ''
+          }`}
           role="tab"
           aria-selected={activeTabId === t.id}
+          title={
+            t.status === 'exited'
+              ? `${t.title} · exited${t.exitCode != null ? ` (code ${t.exitCode})` : ''}`
+              : undefined
+          }
           onClick={() => onSelect(t.id)}
           onAuxClick={(e) => {
             // Middle-click closes the tab (skipping pinned ones).
@@ -175,7 +183,11 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
           ) : (
             <span className="tab-title" onDoubleClick={() => startRename(t)}>
               {t.title}
-              {t.status === 'exited' ? ' ·exited' : ''}
+              {t.status === 'exited' && (
+                <span className="tab-exit-marker">
+                  {(t.exitCode ?? 0) !== 0 ? ` ✗${t.exitCode}` : ' ·exited'}
+                </span>
+              )}
             </span>
           )}
           {t.pinned ? (
@@ -252,6 +264,21 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
                 }}
               >
                 Duplicate
+              </button>
+            )}
+            {onRestart && (
+              <button
+                onClick={() => {
+                  setTabMenu(null);
+                  onRestart(t.id);
+                }}
+                title={
+                  t.status === 'exited'
+                    ? 'Restart this session'
+                    : 'Kill and restart this session with the same profile and args'
+                }
+              >
+                {t.status === 'exited' ? 'Restart' : 'Restart…'}
               </button>
             )}
             {onPin && (

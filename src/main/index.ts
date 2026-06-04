@@ -14,7 +14,9 @@ import { createInboxStore, type IInboxStore, type InboxEntry } from './inbox-sto
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import { ensureMcpConfigForProject } from './mcp-config.js';
 import { listMcpServers, setMcpServerEnabled } from './mcp.js';
+import { readClaudeProjectSettings, writeClaudeProjectSettings } from './claude-settings.js';
 import { listSkills, setSkillEnabled, readHooks } from './skills.js';
+import { listSshHosts } from './ssh-config.js';
 import { homedir } from 'node:os';
 import type {
   CreateTerminalRequest,
@@ -23,7 +25,9 @@ import type {
   OpenTarget,
   SearchOptions,
   AppConfig,
-  ProjectSettings
+  ProjectSettings,
+  ClaudeProjectSettings,
+  ClaudeSettingsScope
 } from '../shared/types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -122,8 +126,27 @@ function createWindow() {
       preload: join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      webviewTag: true
     }
+  });
+
+  // Harden every <webview> the renderer attaches: rewrite their preferences to
+  // safe defaults and reject schemes other than http(s)/file/about. The user
+  // never points the preview pane at app:// or javascript:, so any such URL is
+  // either a typo or untrusted scrollback content — we drop it.
+  win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    webPreferences.contextIsolation = true;
+    webPreferences.nodeIntegration = false;
+    webPreferences.sandbox = true;
+    delete (webPreferences as { preload?: string }).preload;
+    const src = params.src ?? '';
+    const ok =
+      src === 'about:blank' ||
+      src.startsWith('http://') ||
+      src.startsWith('https://') ||
+      src.startsWith('file://');
+    if (!ok) event.preventDefault();
   });
 
   // Persist bounds on resize/move (debounced) so a relaunch restores them.
@@ -174,6 +197,21 @@ function registerIpc() {
       return { ok: false, code: 'ADD_FAILED', message: String(err) };
     }
   });
+  ipcMain.handle(
+    IPC.projects.addRemote,
+    async (
+      _e,
+      input: { host: string; user?: string; remotePath?: string; name?: string }
+    ): Promise<Result<Project>> => {
+      try {
+        const project = store.addRemoteProject(input);
+        return { ok: true, value: project };
+      } catch (err) {
+        return { ok: false, code: 'ADD_REMOTE_FAILED', message: String(err) };
+      }
+    }
+  );
+  safeHandle(IPC.ssh.listHosts, () => listSshHosts(), () => []);
   safeHandle(
     IPC.projects.remove,
     (id: string) => {
@@ -210,7 +248,14 @@ function registerIpc() {
     const project = store.listProjects().find((p) => p.id === req.projectId);
     if (!project) return { ok: false, code: 'NOT_FOUND', message: 'project not found' };
     try {
-      const cwd = req.cwd && isWithin(req.cwd, project.path) ? req.cwd : project.path;
+      // Remote projects ignore req.cwd entirely — the cwd is on the remote
+      // host and is set via the in-shell `cd` we inject into the ssh argv.
+      const cwd =
+        project.remote
+          ? project.path
+          : req.cwd && isWithin(req.cwd, project.path)
+          ? req.cwd
+          : project.path;
       const session = ptys.create({
         projectId: req.projectId,
         profile: req.profile,
@@ -220,7 +265,8 @@ function registerIpc() {
         config: store.getConfig(),
         projectSettings: store.getProjectSettings(req.projectId),
         extraArgs: req.extraArgs,
-        title: req.title
+        title: req.title,
+        remote: project.remote
       });
       return { ok: true, value: session };
     } catch (err) {
@@ -320,6 +366,27 @@ function registerIpc() {
     () => undefined
   );
 
+  safeHandle(
+    IPC.claudeSettings.read,
+    (projectPath: string, scope: ClaudeSettingsScope) =>
+      readClaudeProjectSettings(projectPath, scope),
+    (_err, projectPath: string, scope: ClaudeSettingsScope) => ({
+      exists: false,
+      path: `${projectPath}/.claude/${scope === 'shared' ? 'settings.json' : 'settings.local.json'}`,
+      settings: {}
+    })
+  );
+  safeHandle(
+    IPC.claudeSettings.write,
+    (projectPath: string, scope: ClaudeSettingsScope, patch: ClaudeProjectSettings) =>
+      writeClaudeProjectSettings(projectPath, scope, patch),
+    (_err, projectPath: string, scope: ClaudeSettingsScope) => ({
+      exists: false,
+      path: `${projectPath}/.claude/${scope === 'shared' ? 'settings.json' : 'settings.local.json'}`,
+      settings: {}
+    })
+  );
+
   safeHandle(IPC.skills.list, () => listSkills(), () => []);
   safeHandle(
     IPC.skills.setEnabled,
@@ -398,6 +465,11 @@ function buildAppMenu() {
           label: 'Toggle Terminals / Explorer',
           accelerator: 'CmdOrCtrl+B',
           click: () => win?.webContents.send('app:toggleWorkspaceMode')
+        },
+        {
+          label: 'Toggle Inbox',
+          accelerator: 'CmdOrCtrl+I',
+          click: () => win?.webContents.send('app:toggleInbox')
         },
         {
           label: 'Command Palette…',

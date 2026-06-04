@@ -7,6 +7,8 @@ export interface TerminalFinder {
 export interface TerminalHandle {
   /** Clear the xterm scrollback buffer for this session. */
   clear: () => void;
+  /** Scrape http(s) URLs from the visible buffer (deduped, most-recent-first). */
+  getUrls?: () => string[];
 }
 
 const finders = new Map<string, TerminalFinder>();

@@ -1,8 +1,8 @@
 import { app } from 'electron';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, renameSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, renameSync, rmSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { Project, AppConfig, ProjectSettings } from '../shared/types.js';
+import type { Project, ProjectRemote, AppConfig, ProjectSettings } from '../shared/types.js';
 
 const dataDir = join(app.getPath('home'), '.cc-center');
 const projectsFile = join(dataDir, 'projects.json');
@@ -129,6 +129,31 @@ export function backfillProjectTag(project: Project, taken: Set<string>): Projec
   return { ...project, tag };
 }
 
+/**
+ * Validate a free-text remote-project field. Trims, length-caps at 256, and
+ * rejects ASCII control chars so the value can't smuggle newlines/escapes
+ * through the JSON round-trip or into shell argv.
+ */
+function sanitizeRemoteField(
+  value: string | undefined,
+  field: string,
+  opts: { required?: boolean } = {}
+): string | undefined {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) {
+    if (opts.required) throw new Error(`${field} is required`);
+    return undefined;
+  }
+  if (trimmed.length > 256) throw new Error(`${field} too long (max 256)`);
+  for (let i = 0; i < trimmed.length; i++) {
+    const code = trimmed.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      throw new Error(`${field} contains control characters`);
+    }
+  }
+  return trimmed;
+}
+
 function normalizeBounds(
   bounds: AppConfig['windowBounds'] | undefined
 ): AppConfig['windowBounds'] | undefined {
@@ -193,6 +218,54 @@ export const store = {
   listProjects(): Project[] {
     return readProjectsFile().projects;
   },
+  /**
+   * Create a Project that points at a remote SSH host instead of a local
+   * folder. We still write a placeholder local path so existing
+   * path-touching call sites keep working — `~/.cc-center/remote-projects/<id>`,
+   * created empty. Terminal spawns branch on `project.remote` and skip the
+   * local cwd entirely.
+   */
+  addRemoteProject(input: { host: string; user?: string; remotePath?: string; name?: string }): Project {
+    const host = sanitizeRemoteField(input.host, 'host', { required: true })!;
+    const user = sanitizeRemoteField(input.user, 'user');
+    const remotePath = sanitizeRemoteField(input.remotePath, 'remotePath');
+    const rawName = (input.name ?? '').trim() || host;
+    if (rawName.length > 256) throw new Error('name too long (max 256)');
+    // Reject ASCII control chars (0x00-0x1f) and DEL (0x7f) so the name
+    // can't smuggle newlines or escapes into the projects.json round-trip
+    // or the rendered UI.
+    for (let i = 0; i < rawName.length; i++) {
+      const code = rawName.charCodeAt(i);
+      if (code < 0x20 || code === 0x7f) throw new Error('name contains control characters');
+    }
+    // Reject argv-flag-shaped host/user — would otherwise be treated as ssh
+    // options when we splice them into `${user}@${host}`.
+    if (host.startsWith('-')) throw new Error(`host cannot start with '-'`);
+    if (user && user.startsWith('-')) throw new Error(`user cannot start with '-'`);
+    const projects = this.listProjects();
+    const taken = new Set(projects.map((p) => p.tag).filter((t): t is string => !!t));
+    const tag = pickTag(rawName, taken);
+    const id = randomUUID();
+    const placeholder = join(dataDir, 'remote-projects', id);
+    const remote: ProjectRemote = { host };
+    if (user) remote.user = user;
+    if (remotePath) remote.remotePath = remotePath;
+    const project: Project = {
+      id,
+      name: rawName,
+      path: placeholder,
+      createdAt: Date.now(),
+      lastActiveAt: Date.now(),
+      tag,
+      remote
+    };
+    // Persist first; only mkdir the placeholder once the JSON write succeeds,
+    // so a failed write doesn't orphan a directory on disk.
+    projects.push(project);
+    writeProjects(projects);
+    if (!existsSync(placeholder)) mkdirSync(placeholder, { recursive: true });
+    return project;
+  },
   addProject(path: string): Project {
     const stat = statSync(path);
     if (!stat.isDirectory()) throw new Error('not a directory');
@@ -219,8 +292,29 @@ export const store = {
     return project;
   },
   removeProject(id: string) {
-    const projects = this.listProjects().filter((p) => p.id !== id);
-    writeProjects(projects);
+    const projects = this.listProjects();
+    const removed = projects.find((p) => p.id === id);
+    writeProjects(projects.filter((p) => p.id !== id));
+    // Drop any orphaned per-project settings so project-settings.json
+    // doesn't grow unbounded as projects come and go.
+    const all = readJsonRaw<Record<string, ProjectSettings>>(projectSettingsFile, {});
+    if (id in all) {
+      delete all[id];
+      writeJson(projectSettingsFile, all);
+    }
+    // Clean up the remote-project placeholder dir we mkdir'd in addRemoteProject.
+    // We only nuke paths under our own data dir — never anything user-supplied.
+    if (removed?.remote) {
+      const placeholderRoot = join(dataDir, 'remote-projects');
+      const expected = join(placeholderRoot, id);
+      if (removed.path === expected && existsSync(expected)) {
+        try {
+          rmSync(expected, { recursive: true, force: true });
+        } catch {
+          /* best-effort cleanup */
+        }
+      }
+    }
   },
   updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'color'>>): Project | null {
     const projects = this.listProjects();

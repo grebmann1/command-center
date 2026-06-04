@@ -188,14 +188,20 @@ export function ExplorerView({ project }: Props) {
 
   // When the user changes file, drop any cached HEAD content. Diff mode
   // sticks across navigations so power-users can scan changes file by file.
+  // headLoading is also reset so a stale in-flight load from the previous
+  // file can't leave the spinner stuck on.
   useEffect(() => {
     setHeadResult(null);
+    setHeadLoading(false);
   }, [explorerFile]);
 
   // Lazily fetch HEAD blob the first time diff mode is on for a given file.
+  // headLoading is intentionally NOT a dep: it's set inside this effect, and
+  // including it would cause cleanup → cancel → finally clears it → effect
+  // re-runs → endless refetch loop where setHeadResult is always cancelled.
   useEffect(() => {
     if (!diffMode || !explorerFile) return;
-    if (headResult || headLoading) return;
+    if (headResult) return;
     let cancelled = false;
     setHeadLoading(true);
     window.cc.git.showHead(explorerFile)
@@ -208,12 +214,12 @@ export function ExplorerView({ project }: Props) {
         setHeadResult({ ok: false, message: err instanceof Error ? err.message : 'Failed to read HEAD' });
       })
       .finally(() => {
-        if (!cancelled) setHeadLoading(false);
+        setHeadLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [diffMode, explorerFile, headResult, headLoading]);
+  }, [diffMode, explorerFile, headResult]);
 
   // load file contents when explorerFile changes
   useEffect(() => {

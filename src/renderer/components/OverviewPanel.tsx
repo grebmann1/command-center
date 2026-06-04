@@ -1,4 +1,4 @@
-import { GitBranch } from 'lucide-react';
+import { AlertTriangle, GitBranch } from 'lucide-react';
 import { sortProjectsForDisplay, useData, useUi } from '../store';
 import { profileIcon } from '../util/profileIcon';
 import type { Project, TerminalSession } from '@shared/types';
@@ -9,12 +9,23 @@ export function OverviewPanel() {
   const gitStatus = useData((s) => s.gitStatus);
   const selectProject = useUi((s) => s.selectProject);
   const selectTab = useUi((s) => s.selectTab);
+  const selectedTabId = useUi((s) => s.selectedTabId);
 
   const sorted = sortProjectsForDisplay(projects);
 
   const open = (p: Project, sessionId?: string) => {
     selectProject(p.id);
-    if (sessionId) selectTab(p.id, sessionId);
+    if (sessionId) {
+      selectTab(p.id, sessionId);
+      return;
+    }
+    // No explicit pick: if the project's currently-selected tab is gone or
+    // exited, land on a more useful default — the first running session.
+    const list = terminals[p.id] || [];
+    const current = list.find((t) => t.id === selectedTabId[p.id]);
+    if (current && current.status !== 'exited') return;
+    const fallback = list.find((t) => t.status !== 'exited') ?? list[0];
+    if (fallback) selectTab(p.id, fallback.id);
   };
 
   return (
@@ -35,10 +46,13 @@ export function OverviewPanel() {
             {sorted.map((p) => {
               const sessions = terminals[p.id] || [];
               const git = gitStatus[p.id];
+              const crashed = sessions.filter(
+                (s) => s.status === 'exited' && (s.exitCode ?? 0) !== 0
+              ).length;
               return (
                 <article
                   key={p.id}
-                  className="overview-card"
+                  className={`overview-card ${crashed > 0 ? 'has-crashed' : ''}`}
                   onClick={() => open(p)}
                 >
                   <header className="overview-card-head">
@@ -52,6 +66,15 @@ export function OverviewPanel() {
                         Active {timeAgo(p.lastActiveAt)}
                       </div>
                     </div>
+                    {crashed > 0 && (
+                      <span
+                        className="overview-card-crashed"
+                        title={`${crashed} crashed session${crashed === 1 ? '' : 's'}`}
+                      >
+                        <AlertTriangle size={12} />
+                        {crashed}
+                      </span>
+                    )}
                   </header>
 
                   <SessionsBlock
@@ -97,28 +120,43 @@ function SessionsBlock({
   return (
     <div className="overview-card-sessions">
       <div className="overview-card-label">Sessions · {sessions.length}</div>
-      {sessions.map((s) => (
-        <button
-          key={s.id}
-          type="button"
-          className="overview-session-row"
-          onClick={(e) => {
-            e.stopPropagation();
-            onPick(s);
-          }}
-          title={s.title}
-        >
-          <span className={`tab-profile-icon profile-${s.profile}`} aria-hidden="true">
-            {profileIcon(s.profile)}
-          </span>
-          <span className="overview-session-name">{s.title}</span>
-          <span
-            className={`overview-session-status ${s.status === 'exited' ? 'exited' : 'running'}`}
+      {sessions.map((s) => {
+        const exited = s.status === 'exited';
+        const bad = exited && (s.exitCode ?? 0) !== 0;
+        const statusLabel = exited
+          ? bad
+            ? `exited ✗${s.exitCode}`
+            : 'exited'
+          : 'running';
+        return (
+          <button
+            key={s.id}
+            type="button"
+            className="overview-session-row"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPick(s);
+            }}
+            title={
+              exited && s.exitCode != null
+                ? `${s.title} · exited (code ${s.exitCode})`
+                : s.title
+            }
           >
-            {s.status === 'exited' ? 'exited' : 'running'}
-          </span>
-        </button>
-      ))}
+            <span className={`tab-profile-icon profile-${s.profile}`} aria-hidden="true">
+              {profileIcon(s.profile)}
+            </span>
+            <span className="overview-session-name">{s.title}</span>
+            <span
+              className={`overview-session-status ${exited ? 'exited' : 'running'} ${
+                bad ? 'bad' : ''
+              }`}
+            >
+              {statusLabel}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }

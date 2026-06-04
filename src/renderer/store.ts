@@ -17,7 +17,7 @@ export interface Toast {
   kind?: 'info' | 'error';
 }
 
-export type WorkspaceMode = 'terminals' | 'explorer';
+export type WorkspaceMode = 'terminals' | 'explorer' | 'preview';
 
 export type SplitLayout = 'single' | 'vertical' | 'horizontal' | 'grid';
 
@@ -53,6 +53,9 @@ interface UiState {
   explorerFile: Record<string, string | undefined>;
   // explorer: pending goto request per project (consumed by ExplorerView)
   explorerGoto: Record<string, { line: number; column: number; nonce: number } | undefined>;
+  // preview: pending navigation request per project (consumed by PreviewPane).
+  // Nonce-bumped so the same URL can be re-requested.
+  previewNav: Record<string, { url: string; nonce: number } | undefined>;
   // explorer: per-project MRU of opened file paths (most recent at index 0)
   recentFiles: Record<string, string[]>;
   // explorer: per-project diff-vs-HEAD toggle for the open file
@@ -96,8 +99,9 @@ interface UiState {
   setResumeOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setFindOpen: (open: boolean) => void;
-  projectSettingsOpen: string | null;
-  setProjectSettingsOpen: (id: string | null) => void;
+  /** Which tab is active in the Settings panel. */
+  settingsTab: 'global' | 'project';
+  setSettingsTab: (tab: 'global' | 'project') => void;
   pushToast: (message: string, kind?: 'info' | 'error') => void;
   dismissToast: (id: string) => void;
   markUnread: (sessionId: string) => void;
@@ -106,6 +110,8 @@ interface UiState {
   toggleWorkspaceMode: (projectId: string) => void;
   setExplorerFile: (projectId: string, path: string | undefined) => void;
   requestExplorerGoto: (projectId: string, line: number, column: number) => void;
+  /** Switch the project to preview mode and load the given URL. */
+  requestPreviewNav: (projectId: string, url: string) => void;
 }
 
 export const LIST_PANE_MIN = 200;
@@ -116,6 +122,11 @@ export function applyListPaneWidth(px: number) {
   document.documentElement.style.setProperty('--col-list', `${clamped}px`);
 }
 
+export function applyTheme(theme: 'dark' | 'light' | undefined) {
+  const t = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = t;
+}
+
 // Debounced write of workspaceMode -> AppConfig.workspaceModes.
 let persistTimer: number | null = null;
 function persistWorkspaceModes() {
@@ -123,7 +134,13 @@ function persistWorkspaceModes() {
   persistTimer = window.setTimeout(() => {
     persistTimer = null;
     const map = useUi.getState().workspaceMode;
-    window.cc.config.set({ workspaceModes: map }).catch(() => {});
+    // 'preview' is intentionally not persisted — landing in an empty preview
+    // pane after relaunch is jarring; restart should drop back to terminals.
+    const persisted: Record<string, 'terminals' | 'explorer'> = {};
+    for (const [k, v] of Object.entries(map)) {
+      if (v === 'terminals' || v === 'explorer') persisted[k] = v;
+    }
+    window.cc.config.set({ workspaceModes: persisted }).catch(() => {});
   }, 200);
 }
 
@@ -163,12 +180,13 @@ export const useUi = create<UiState>((set) => ({
   resumeOpen: false,
   searchOpen: false,
   findOpen: false,
-  projectSettingsOpen: null,
+  settingsTab: 'global',
   toasts: [],
   unread: {},
   workspaceMode: {},
   explorerFile: {},
   explorerGoto: {},
+  previewNav: {},
   recentFiles: {},
   explorerDiff: {},
   explorerTreeMode: {},
@@ -216,7 +234,7 @@ export const useUi = create<UiState>((set) => ({
   setResumeOpen: (resumeOpen) => set({ resumeOpen }),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setFindOpen: (findOpen) => set({ findOpen }),
-  setProjectSettingsOpen: (projectSettingsOpen) => set({ projectSettingsOpen }),
+  setSettingsTab: (settingsTab) => set({ settingsTab }),
   pushToast: (message, kind = 'info') => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     set((s) => ({ toasts: [...s.toasts, { id, message, kind }] }));
@@ -289,6 +307,16 @@ export const useUi = create<UiState>((set) => ({
         [projectId]: { line, column, nonce: Date.now() + Math.random() }
       }
     })),
+  requestPreviewNav: (projectId, url) => {
+    set((s) => ({
+      workspaceMode: { ...s.workspaceMode, [projectId]: 'preview' },
+      previewNav: {
+        ...s.previewNav,
+        [projectId]: { url, nonce: Date.now() + Math.random() }
+      }
+    }));
+    persistWorkspaceModes();
+  },
   toggleProjectExpanded: (projectId) =>
     set((s) => ({
       projectExpanded: { ...s.projectExpanded, [projectId]: !s.projectExpanded[projectId] }
@@ -366,15 +394,23 @@ interface DataState {
   closedTabs: Record<string, ClosedTab[]>; // by project id, most recent at end
   gitStatus: Record<string, GitStatus | null>; // by project id
   fontSize: number;
+  inboxGuidanceEnabled: boolean;
   init: () => Promise<void>;
   loadGitStatus: (projectId: string) => Promise<void>;
   refreshAllGitStatus: () => Promise<void>;
   setFontSize: (n: number) => void;
+  setInboxGuidanceEnabled: (on: boolean) => void;
   reopenLastClosed: (projectId: string) => Promise<TerminalSession | null>;
   loadProjects: () => Promise<void>;
   loadClaudeSessions: (projectId: string) => Promise<void>;
   addProject: () => Promise<Project | null>;
   addProjectByPath: (path: string) => Promise<Project | null>;
+  addRemoteProject: (input: {
+    host: string;
+    user?: string;
+    remotePath?: string;
+    name?: string;
+  }) => Promise<Project | null>;
   updateProject: (id: string, patch: { name?: string; color?: string }) => Promise<void>;
   reorderProjects: (orderedIds: string[]) => Promise<void>;
   removeProject: (id: string) => Promise<void>;
@@ -386,10 +422,11 @@ interface DataState {
     opts?: { extraArgs?: string[]; title?: string; cwd?: string }
   ) => Promise<TerminalSession | null>;
   closeTerminal: (sessionId: string, projectId: string) => Promise<void>;
+  restartTerminal: (sessionId: string, projectId: string) => Promise<TerminalSession | null>;
   reorderTerminal: (projectId: string, fromId: string, toId: string) => void;
   renameTerminal: (projectId: string, sessionId: string, title: string) => void;
   setPinned: (projectId: string, sessionId: string, pinned: boolean) => void;
-  markExited: (sessionId: string) => void;
+  markExited: (sessionId: string, exitCode?: number) => void;
 }
 
 export function sortProjectsForDisplay(projects: Project[]): Project[] {
@@ -411,9 +448,14 @@ export const useData = create<DataState>((set, get) => ({
   closedTabs: {},
   gitStatus: {},
   fontSize: 13,
+  inboxGuidanceEnabled: true,
 
   setFontSize(n) {
     set({ fontSize: n });
+  },
+
+  setInboxGuidanceEnabled(on) {
+    set({ inboxGuidanceEnabled: on });
   },
 
   async init() {
@@ -422,7 +464,12 @@ export const useData = create<DataState>((set, get) => ({
         window.cc.projects.list(),
         window.cc.config.get()
       ]);
-      set({ projects, fontSize: config.fontSize });
+      set({
+        projects,
+        fontSize: config.fontSize,
+        inboxGuidanceEnabled: config.inboxGuidanceEnabled ?? true
+      });
+      applyTheme(config.theme);
       if (typeof config.listPaneWidth === 'number') {
         applyListPaneWidth(config.listPaneWidth);
       }
@@ -506,6 +553,21 @@ export const useData = create<DataState>((set, get) => ({
     }
   },
 
+  async addRemoteProject(input) {
+    try {
+      const result = await window.cc.projects.addRemote(input);
+      if (!result.ok) {
+        pushErrorToast(result.message);
+        return null;
+      }
+      await get().loadProjects();
+      return result.value;
+    } catch (err) {
+      pushErrorToast(errorMessage(err, 'Failed to add remote project'));
+      return null;
+    }
+  },
+
   async updateProject(id, patch) {
     try {
       const updated = await window.cc.projects.update(id, patch);
@@ -558,29 +620,42 @@ export const useData = create<DataState>((set, get) => ({
     }
     set((s) => {
       const terminals = { ...s.terminals };
+      const claudeSessions = { ...s.claudeSessions };
+      const closedTabs = { ...s.closedTabs };
+      const gitStatus = { ...s.gitStatus };
       delete terminals[id];
+      delete claudeSessions[id];
+      delete closedTabs[id];
+      delete gitStatus[id];
       return {
         projects: s.projects.filter((p) => p.id !== id),
-        terminals
+        terminals,
+        claudeSessions,
+        closedTabs,
+        gitStatus
       };
     });
     useUi.setState((s) => {
       const patch: Partial<UiState> = {};
-      if (id in s.workspaceMode) {
-        const next = { ...s.workspaceMode };
-        delete next[id];
-        patch.workspaceMode = next;
-      }
-      if (id in s.splitLayout) {
-        const next = { ...s.splitLayout };
-        delete next[id];
-        patch.splitLayout = next;
-      }
-      if (id in s.splitTabIds) {
-        const next = { ...s.splitTabIds };
-        delete next[id];
-        patch.splitTabIds = next;
-      }
+      const drop = <K extends keyof UiState>(key: K) => {
+        const cur = s[key] as Record<string, unknown> | undefined;
+        if (cur && id in cur) {
+          const next = { ...cur };
+          delete next[id];
+          (patch as Record<string, unknown>)[key as string] = next;
+        }
+      };
+      drop('workspaceMode');
+      drop('splitLayout');
+      drop('splitTabIds');
+      drop('selectedTabId');
+      drop('projectExpanded');
+      drop('recentFiles');
+      drop('explorerFile');
+      drop('explorerGoto');
+      drop('previewNav');
+      drop('explorerDiff');
+      drop('explorerTreeMode');
       return patch;
     });
     persistWorkspaceModes();
@@ -618,6 +693,7 @@ export const useData = create<DataState>((set, get) => ({
   async closeTerminal(sessionId, projectId) {
     const list = get().terminals[projectId] || [];
     const closing = list.find((t) => t.id === sessionId);
+    const closingIdx = list.findIndex((t) => t.id === sessionId);
     try {
       await window.cc.terminals.close(sessionId);
     } catch (err) {
@@ -643,6 +719,65 @@ export const useData = create<DataState>((set, get) => ({
         closedTabs: { ...s.closedTabs, [projectId]: stack }
       };
     });
+    // Advance selection: if the closed tab was active, pick the neighbor to
+    // its right (else its left, else nothing). Without this, selectedTabId
+    // dangles on a removed id and the workspace renders blank.
+    const ui = useUi.getState();
+    if (ui.selectedTabId[projectId] === sessionId) {
+      const next = get().terminals[projectId] ?? [];
+      const targetIdx = Math.min(closingIdx, next.length - 1);
+      const target = targetIdx >= 0 ? next[targetIdx]?.id : undefined;
+      ui.selectTab(projectId, target);
+    }
+  },
+
+  async restartTerminal(sessionId, projectId) {
+    const list = get().terminals[projectId] || [];
+    const idx = list.findIndex((t) => t.id === sessionId);
+    if (idx === -1) return null;
+    const src = list[idx];
+    // Snapshot what we need before kill/reset — once we close the pty the
+    // session may be removed from the live map and we lose pinned/title.
+    const snapshot = {
+      profile: src.profile,
+      title: src.title,
+      extraArgs: src.extraArgs,
+      pinned: src.pinned,
+      cwd: src.cwd
+    };
+    try {
+      await window.cc.terminals.close(sessionId);
+    } catch {
+      /* exited tabs already have a dead pty; close is a no-op */
+    }
+    useUi.getState().clearUnread(sessionId);
+    useUi.getState().removeFromSplit(projectId, sessionId);
+    set((s) => ({
+      terminals: {
+        ...s.terminals,
+        [projectId]: (s.terminals[projectId] || []).filter((t) => t.id !== sessionId)
+      }
+    }));
+    const created = await get().createTerminal(projectId, snapshot.profile, 80, 24, {
+      extraArgs: snapshot.extraArgs,
+      title: snapshot.title,
+      cwd: snapshot.cwd
+    });
+    if (!created) return null;
+    // Re-insert at the original slot so the tab order doesn't jump to the end,
+    // and re-apply pin if the source was pinned.
+    set((s) => {
+      const cur = s.terminals[projectId] || [];
+      const created2 = cur.find((t) => t.id === created.id);
+      if (!created2) return s;
+      const without = cur.filter((t) => t.id !== created.id);
+      const target = Math.min(idx, without.length);
+      const restored = { ...created2, pinned: snapshot.pinned };
+      const next = without.slice(0, target).concat(restored, without.slice(target));
+      return { terminals: { ...s.terminals, [projectId]: next } };
+    });
+    useUi.getState().selectTab(projectId, created.id);
+    return created;
   },
 
   async reopenLastClosed(projectId) {
@@ -708,12 +843,14 @@ export const useData = create<DataState>((set, get) => ({
     });
   },
 
-  markExited(sessionId) {
+  markExited(sessionId, exitCode) {
     set((s) => {
       const terminals = { ...s.terminals };
       for (const pid of Object.keys(terminals)) {
         terminals[pid] = terminals[pid].map((t) =>
-          t.id === sessionId ? { ...t, status: 'exited' as const } : t
+          t.id === sessionId
+            ? { ...t, status: 'exited' as const, exitCode: exitCode ?? t.exitCode }
+            : t
         );
       }
       return { terminals };

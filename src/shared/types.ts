@@ -23,6 +23,29 @@ export interface Project {
   template?: string;
   /** Reserved for future lineage / upgrade-hint work; no logic yet. */
   spawnedFromVersion?: string;
+  /**
+   * If present, this Project's terminals are opened as SSH sessions to the
+   * named host instead of local processes. Absent = local Project.
+   */
+  remote?: ProjectRemote;
+}
+
+export interface ProjectRemote {
+  /** Host alias as it appears in ~/.ssh/config (e.g. "my-devbox"). */
+  host: string;
+  /** Optional override; otherwise ssh resolves it from ~/.ssh/config. */
+  user?: string;
+  /** Optional override path to start in. Otherwise the remote $HOME. */
+  remotePath?: string;
+}
+
+export interface SshHostEntry {
+  /** Host alias as it appears in ~/.ssh/config. */
+  alias: string;
+  /** Explicit HostName line, if present. */
+  hostname?: string;
+  /** Explicit User line, if present. */
+  user?: string;
 }
 
 /** Pointer to a project file. Rendered live at view time, never snapshotted. */
@@ -73,6 +96,36 @@ export interface AppConfig {
   defaultPermissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
   /** Show inbox guidance hints in the UI (default true). */
   inboxGuidanceEnabled?: boolean;
+}
+
+/** Which `.claude/settings*.json` file we're reading or writing. */
+export type ClaudeSettingsScope = 'shared' | 'local';
+
+/**
+ * Curated subset of `.claude/settings.json` we surface in the UI. Anything
+ * else round-trips through `_unknown` / `_unknownPermissions` so atomic
+ * edits don't clobber user-edited keys (env, hooks, outputStyle, etc.).
+ */
+export interface ClaudeProjectSettings {
+  permissions?: {
+    allow?: string[];
+    deny?: string[];
+    defaultMode?: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+    additionalDirectories?: string[];
+  };
+  model?: string;
+  /** Top-level keys we don't surface in the UI; preserved on write. */
+  _unknown?: Record<string, unknown>;
+  /** Keys under `permissions` we don't surface in the UI; preserved on write. */
+  _unknownPermissions?: Record<string, unknown>;
+}
+
+export interface ClaudeSettingsResult {
+  /** True if the file existed at read time. */
+  exists: boolean;
+  /** Absolute path of the file (whether or not it existed). */
+  path: string;
+  settings: ClaudeProjectSettings;
 }
 
 /** Per-project overrides passed to the claude CLI when launching a session. */
@@ -235,6 +288,15 @@ export interface CcApi {
     touch(id: string): Promise<Project | null>;
     reorder(orderedIds: string[]): Promise<Project[]>;
     pickDirectory(): Promise<string | null>;
+    addRemote(input: {
+      host: string;
+      user?: string;
+      remotePath?: string;
+      name?: string;
+    }): Promise<Result<Project>>;
+  };
+  ssh: {
+    listHosts(): Promise<SshHostEntry[]>;
   };
   terminals: {
     list(projectId: string): Promise<TerminalSession[]>;
@@ -293,6 +355,14 @@ export interface CcApi {
   mcp: {
     list(projectPath: string): Promise<McpServer[]>;
     setEnabled(projectPath: string, name: string, enabled: boolean): Promise<void>;
+  };
+  claudeSettings: {
+    read(projectPath: string, scope: ClaudeSettingsScope): Promise<ClaudeSettingsResult>;
+    write(
+      projectPath: string,
+      scope: ClaudeSettingsScope,
+      patch: ClaudeProjectSettings
+    ): Promise<ClaudeSettingsResult>;
   };
 }
 

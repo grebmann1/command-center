@@ -22,10 +22,20 @@ export function SearchPanel({ project, onClose }: Props) {
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const reqIdRef = useRef(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Keep the highlighted row in view when arrow-keying past the visible
+  // window. Same pattern as CommandPalette/QuickOpen/ResumePicker.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const el = list.querySelector<HTMLElement>(`[data-idx="${activeIdx}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [activeIdx]);
 
   useEffect(() => {
     const q = query.trim();
@@ -94,6 +104,26 @@ export function SearchPanel({ project, onClose }: Props) {
       setActiveIdx((i) => Math.max(i - 1, 0));
       return;
     }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      setActiveIdx(0);
+      return;
+    }
+    if (e.key === 'End') {
+      e.preventDefault();
+      setActiveIdx(Math.max(0, hits.length - 1));
+      return;
+    }
+    if (e.key === 'PageDown') {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 8, hits.length - 1));
+      return;
+    }
+    if (e.key === 'PageUp') {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 8, 0));
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       const h = hits[activeIdx];
@@ -133,7 +163,7 @@ export function SearchPanel({ project, onClose }: Props) {
             .*
           </button>
         </div>
-        <div className="palette-list search-list">
+        <div className="palette-list search-list" ref={listRef}>
           {!query.trim() ? (
             <div className="palette-empty">Type to search file contents…</div>
           ) : running && !result ? (
@@ -144,6 +174,7 @@ export function SearchPanel({ project, onClose }: Props) {
             hits.map((h, i) => (
               <button
                 key={`${h.path}:${h.line}:${h.column}`}
+                data-idx={i}
                 className={`palette-item search-item ${i === activeIdx ? 'active' : ''}`}
                 onMouseEnter={() => setActiveIdx(i)}
                 onClick={() => choose(h)}

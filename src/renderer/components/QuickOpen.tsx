@@ -30,10 +30,20 @@ export function QuickOpen({ project, onClose }: Props) {
   const [query, setQuery] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Keep the highlighted row in view when arrow-keying past the visible
+  // window. Same pattern as CommandPalette.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const el = list.querySelector<HTMLElement>(`[data-idx="${activeIdx}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [activeIdx]);
 
   useEffect(() => {
     if (files !== null) return;
@@ -109,6 +119,26 @@ export function QuickOpen({ project, onClose }: Props) {
       setActiveIdx((i) => Math.max(i - 1, 0));
       return;
     }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      setActiveIdx(0);
+      return;
+    }
+    if (e.key === 'End') {
+      e.preventDefault();
+      setActiveIdx(Math.max(0, results.length - 1));
+      return;
+    }
+    if (e.key === 'PageDown') {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 8, results.length - 1));
+      return;
+    }
+    if (e.key === 'PageUp') {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 8, 0));
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       const r = results[activeIdx];
@@ -134,7 +164,7 @@ export function QuickOpen({ project, onClose }: Props) {
           onKeyDown={onKeyDown}
           disabled={files === null}
         />
-        <div className="palette-list">
+        <div className="palette-list" ref={listRef}>
           {files === null ? (
             <div className="palette-empty">Indexing project files…</div>
           ) : results.length === 0 ? (
@@ -143,6 +173,7 @@ export function QuickOpen({ project, onClose }: Props) {
             results.map((r, i) => (
               <button
                 key={r.file.path}
+                data-idx={i}
                 className={`palette-item ${i === activeIdx ? 'active' : ''}`}
                 onMouseEnter={() => setActiveIdx(i)}
                 onClick={() => choose(r)}

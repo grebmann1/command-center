@@ -27,6 +27,8 @@ const SECTIONS: Section[] = [
       { keys: ['⌘', '⇧', 'F'], label: 'Search file contents in selected project' },
       { keys: ['⌘', 'R'], label: 'Resume Claude session…' },
       { keys: ['⌘', 'B'], label: 'Toggle Terminals / Explorer' },
+      { keys: ['⌘', 'L'], label: 'Open Preview Browser' },
+      { keys: ['⌘', 'I'], label: 'Toggle Inbox' },
       { keys: ['⌘', ','], label: 'Toggle Settings' },
       { keys: ['⌘', '?'], label: 'This help' }
     ]
@@ -34,7 +36,8 @@ const SECTIONS: Section[] = [
   {
     title: 'Tabs',
     rows: [
-      { keys: ['⌘', 'T'], label: 'New claude tab' },
+      { keys: ['⌘', 'T'], label: 'New tab (uses project’s default profile)' },
+      { keys: ['⌘', '⇧', 'D'], label: 'Duplicate active tab (same profile)' },
       { keys: ['⌘', '⇧', 'T'], label: 'Reopen last closed tab' },
       { keys: ['⌘', 'W'], label: 'Close active tab' },
       { keys: ['⌘', '1'], label: 'Switch to tab 1 (… up to ⌘9)' },
