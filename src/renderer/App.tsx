@@ -5,6 +5,7 @@ import { Workspace } from './components/Workspace';
 import { OverviewPanel } from './components/OverviewPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { SchedulerPanel } from './components/SchedulerPanel';
+import { SkillsPanel } from './components/SkillsPanel';
 import { InboxView } from './components/InboxView';
 import { CommandPalette } from './components/CommandPalette';
 import { QuickOpen } from './components/QuickOpen';
@@ -43,6 +44,10 @@ export function App() {
     }
     if (nav === 'scheduler') {
       document.title = `${inboxBadge}Scheduler · ${base}`;
+      return;
+    }
+    if (nav === 'skills') {
+      document.title = `${inboxBadge}Skills · ${base}`;
       return;
     }
     const project = projects.find((p) => p.id === selectedProjectId);
@@ -157,6 +162,7 @@ export function App() {
       {nav === 'projects' && overviewOpen && <OverviewPanel />}
       {nav === 'inbox' && <InboxView />}
       {nav === 'scheduler' && <SchedulerPanel />}
+      {nav === 'skills' && <SkillsPanel />}
       {nav === 'settings' && <SettingsPanel />}
       <CommandPaletteHost />
       <QuickOpenHost />

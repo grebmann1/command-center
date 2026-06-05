@@ -1,4 +1,14 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, screen, Menu, nativeImage } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  shell,
+  screen,
+  Menu,
+  nativeImage,
+  powerMonitor
+} from 'electron';
 import { join, relative, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +25,15 @@ import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import { ensureMcpConfigForProject } from './mcp-config.js';
 import { listMcpServers, setMcpServerEnabled } from './mcp.js';
 import { readClaudeProjectSettings, writeClaudeProjectSettings } from './claude-settings.js';
-import { listSkills, setSkillEnabled, readHooks } from './skills.js';
+import {
+  listSkills,
+  setSkillEnabled,
+  setManyEnabled as setManySkillsEnabled,
+  readHooks,
+  revealSkillDir
+} from './skills.js';
+import { SkillBundlesStore } from './skill-bundles-store.js';
+import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import { listSshHosts } from './ssh-config.js';
 import { SchedulerManager } from './scheduler.js';
 import { TemplateStore } from './template-store.js';
@@ -32,12 +50,14 @@ import type {
   ClaudeSettingsScope,
   ScheduleCreateInput,
   ScheduleUpdateInput,
-  ScheduledTask
+  ScheduledTask,
+  SkillBundleInput,
+  SkillBundleApplyMode
 } from '../shared/types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function logMainError(context: string, err: unknown) {
+export function logMainError(context: string, err: unknown) {
   const message = err instanceof Error ? err.stack || err.message : String(err);
   console.error(`[main] ${context}: ${message}`);
 }
@@ -48,11 +68,112 @@ function isWithin(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+/** Resolve `projectPath` (passed by the renderer) to listSkills options. */
+function projectPathToOptions(projectPath?: string) {
+  if (!projectPath) return {};
+  const project = store.listProjects().find((p) => p.path === projectPath);
+  return project ? { projectPath, projectId: project.id } : { projectPath };
+}
+
+function emitSkillsChangedDebounced() {
+  if (skillChangeDebounce) clearTimeout(skillChangeDebounce);
+  skillChangeDebounce = setTimeout(() => {
+    skillChangeDebounce = null;
+    safeSend(IPC.skills.onChanged);
+  }, 250);
+}
+
+function watchSkillsTarget(target: string): FSWatcher | null {
+  if (!existsSync(target)) return null;
+  try {
+    return fsWatch(target, { persistent: false, recursive: true }, () =>
+      emitSkillsChangedDebounced()
+    );
+  } catch {
+    try {
+      return fsWatch(target, { persistent: false }, () => emitSkillsChangedDebounced());
+    } catch {
+      // Watcher unsupported on this fs — panel still works without live updates.
+      return null;
+    }
+  }
+}
+
+function startSkillsWatchers() {
+  const home = homedir();
+  const targets = [
+    join(home, '.claude', 'skills'),
+    join(home, '.claude', 'plugins'),
+    join(home, '.claude', 'settings.json')
+  ];
+  for (const target of targets) {
+    const w = watchSkillsTarget(target);
+    if (w) skillWatchers.push(w);
+  }
+}
+
+function stopSkillsWatchers() {
+  for (const w of skillWatchers) {
+    try {
+      w.close();
+    } catch {
+      /* ignore */
+    }
+  }
+  skillWatchers.length = 0;
+  stopActiveProjectSkillsWatcher();
+  if (skillChangeDebounce) {
+    clearTimeout(skillChangeDebounce);
+    skillChangeDebounce = null;
+  }
+}
+
+function stopActiveProjectSkillsWatcher() {
+  if (activeProjectSkillsWatcher) {
+    try {
+      activeProjectSkillsWatcher.close();
+    } catch {
+      /* ignore */
+    }
+    activeProjectSkillsWatcher = null;
+  }
+  activeProjectSkillsPath = null;
+  activeProjectSkillsId = null;
+}
+
+/**
+ * Re-point the per-project skills watcher at the currently active project.
+ * Called from the `projects.touch` IPC handler so that switching projects
+ * (or selecting one for the first time) lights up live updates for files
+ * dropped into `<project>/.claude/skills/`.
+ */
+function setActiveProjectSkillsWatcher(
+  projectPath: string | null,
+  projectId: string | null
+) {
+  const target = projectPath ? join(projectPath, '.claude', 'skills') : null;
+  if (target === activeProjectSkillsPath && projectId === activeProjectSkillsId) return;
+  stopActiveProjectSkillsWatcher();
+  if (!target) return;
+  const w = watchSkillsTarget(target);
+  if (w) {
+    activeProjectSkillsWatcher = w;
+    activeProjectSkillsPath = target;
+    activeProjectSkillsId = projectId;
+  }
+}
+
 let win: BrowserWindow | null = null;
 const ptys = new PtyManager();
 const inboxStore: IInboxStore = createInboxStore();
 const scheduler = new SchedulerManager();
 const templates = new TemplateStore(() => store.listProjects());
+const skillBundles = new SkillBundlesStore();
+const skillWatchers: FSWatcher[] = [];
+let activeProjectSkillsWatcher: FSWatcher | null = null;
+let activeProjectSkillsPath: string | null = null;
+let activeProjectSkillsId: string | null = null;
+let skillChangeDebounce: NodeJS.Timeout | null = null;
 let mcpServer: McpServerHandle | null = null;
 
 // Resolve packaged or unpackaged icon location. In dev electron-vite runs from
@@ -225,7 +346,11 @@ function registerIpc() {
     (id: string) => {
       ptys.list(id).forEach((s) => ptys.close(s.id));
       store.removeProject(id);
+      scheduler.onProjectRemoved(id);
       templates.rebindProjects();
+      // If the removed project was the one whose .claude/skills we were watching,
+      // tear the watcher down — its path is now gone or owned by no-one.
+      if (activeProjectSkillsId === id) setActiveProjectSkillsWatcher(null, null);
     },
     () => undefined
   );
@@ -234,7 +359,17 @@ function registerIpc() {
     (id: string, patch: { name?: string; color?: string }) => store.updateProject(id, patch),
     () => null
   );
-  safeHandle(IPC.projects.touch, (id: string) => store.touchProject(id), () => null);
+  safeHandle(
+    IPC.projects.touch,
+    (id: string) => {
+      const touched = store.touchProject(id);
+      // Re-point the per-project skills watcher whenever the renderer signals
+      // a project switch — `projects.touch` is the canonical "selected" signal.
+      setActiveProjectSkillsWatcher(touched?.path ?? null, touched?.id ?? null);
+      return touched;
+    },
+    () => null
+  );
   safeHandle(
     IPC.projects.reorder,
     (orderedIds: string[]) => store.reorderProjects(orderedIds),
@@ -396,13 +531,54 @@ function registerIpc() {
     })
   );
 
-  safeHandle(IPC.skills.list, () => listSkills(), () => []);
+  safeHandle(
+    IPC.skills.list,
+    (projectPath?: string) => listSkills(projectPathToOptions(projectPath)),
+    () => []
+  );
   safeHandle(
     IPC.skills.setEnabled,
     (name: string, enabled: boolean) => setSkillEnabled(name, enabled),
     () => undefined
   );
+  safeHandle(
+    IPC.skills.setManyEnabled,
+    (updates: Array<{ name: string; enabled: boolean }>) => setManySkillsEnabled(updates),
+    () => undefined
+  );
   safeHandle(IPC.skills.readHooks, () => readHooks(), () => null);
+  safeHandle(
+    IPC.skills.reveal,
+    (skillId: string, projectPath?: string) =>
+      revealSkillDir(skillId, projectPathToOptions(projectPath)),
+    () => ({ ok: false, path: '', message: 'reveal failed' })
+  );
+
+  safeHandle(IPC.skills.bundles.list, () => skillBundles.list(), () => []);
+  safeHandle(
+    IPC.skills.bundles.create,
+    (input: SkillBundleInput) => skillBundles.create(input),
+    () => null
+  );
+  safeHandle(
+    IPC.skills.bundles.update,
+    (id: string, patch: Partial<SkillBundleInput>) => skillBundles.update(id, patch),
+    () => null
+  );
+  safeHandle(
+    IPC.skills.bundles.delete,
+    (id: string) => skillBundles.delete(id),
+    () => false
+  );
+  safeHandle(
+    IPC.skills.bundles.apply,
+    (id: string, mode: SkillBundleApplyMode, projectPath?: string) =>
+      skillBundles.apply(id, mode, projectPathToOptions(projectPath)),
+    () => ({ ok: false, message: 'apply failed' })
+  );
+  skillBundles.on('changed', (bundles) => {
+    safeSend(IPC.skills.bundles.onChanged, bundles);
+  });
   safeHandle(IPC.app.homedir, () => homedir(), () => '');
 
   safeHandle(IPC.scheduler.list, () => scheduler.list(), () => []);
@@ -426,11 +602,28 @@ function registerIpc() {
       }
     }
   );
-  safeHandle(IPC.scheduler.delete, (id: string) => scheduler.remove(id), () => undefined);
-  safeHandle(
+  ipcMain.handle(
+    IPC.scheduler.delete,
+    async (_e, id: string): Promise<Result<true>> => {
+      try {
+        scheduler.remove(id);
+        return { ok: true, value: true };
+      } catch (err) {
+        return { ok: false, code: 'DELETE_FAILED', message: String(err) };
+      }
+    }
+  );
+  ipcMain.handle(
     IPC.scheduler.setEnabled,
-    (id: string, enabled: boolean) => scheduler.setEnabled(id, enabled),
-    () => null
+    async (_e, id: string, enabled: boolean): Promise<Result<ScheduledTask>> => {
+      try {
+        const task = scheduler.setEnabled(id, enabled);
+        if (!task) return { ok: false, code: 'NOT_FOUND', message: `schedule not found: ${id}` };
+        return { ok: true, value: task };
+      } catch (err) {
+        return { ok: false, code: 'SET_ENABLED_FAILED', message: String(err) };
+      }
+    }
   );
   ipcMain.handle(
     IPC.scheduler.runNow,
@@ -603,9 +796,21 @@ app.whenReady().then(() => {
   });
   buildAppMenu();
   registerIpc();
-  scheduler.setDeps({ ptys, store });
+  scheduler.setDeps({ ptys, store, logger: logMainError });
   scheduler.loadAll(store.listProjects());
+  // Wake-from-sleep can leave many schedules well past their armed delay;
+  // a re-load triggers our `arm()` drift fix so each one re-arms fresh
+  // rather than firing in a stampede the moment the laptop wakes up.
+  try {
+    powerMonitor.on('resume', () => {
+      scheduler.loadAll(store.listProjects());
+    });
+  } catch (err) {
+    logMainError('powerMonitor.resume', err);
+  }
   templates.start();
+  skillBundles.start();
+  startSkillsWatchers();
   // Boot the local MCP server, then plumb its URL into PtyManager so any
   // claude-family terminal spawns get `CC_MCP_URL` injected. Errors here
   // are logged but non-fatal — the app still works without inbox push.
@@ -643,6 +848,8 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   scheduler.stopAll();
   templates.stop();
+  skillBundles.stop();
+  stopSkillsWatchers();
   ptys.killAll();
   if (mcpServer) {
     const handle = mcpServer;

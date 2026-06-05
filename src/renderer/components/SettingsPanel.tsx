@@ -3,7 +3,6 @@ import { X } from 'lucide-react';
 import type {
   AppConfig,
   McpServer,
-  SkillEntry,
   ProjectSettings,
   ClaudeProjectSettings,
   ClaudeSettingsScope,
@@ -25,8 +24,6 @@ export function SettingsPanel() {
 
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [mcpLoading, setMcpLoading] = useState(false);
-  const [skills, setSkills] = useState<SkillEntry[]>([]);
-  const [skillsLoading, setSkillsLoading] = useState(true);
   const [hooks, setHooks] = useState<unknown>(null);
   const [homedir, setHomedir] = useState<string>('');
 
@@ -50,9 +47,6 @@ export function SettingsPanel() {
   useEffect(() => {
     window.cc.config.get().then(setConfig).catch(() => {});
     window.cc.app.homedir().then(setHomedir).catch(() => {});
-    window.cc.skills.list()
-      .then((list) => { setSkills(list); setSkillsLoading(false); })
-      .catch(() => setSkillsLoading(false));
     window.cc.skills.readHooks().then(setHooks).catch(() => {});
   }, []);
 
@@ -78,16 +72,6 @@ export function SettingsPanel() {
       </main>
     );
   }
-
-  const toggleSkill = async (name: string, enabled: boolean) => {
-    try {
-      await window.cc.skills.setEnabled(name, enabled);
-      setSkills((prev) => prev.map((s) => (s.name === name ? { ...s, enabled } : s)));
-      markSaved();
-    } catch {
-      // noop
-    }
-  };
 
   const resolve = (p: string) => (homedir ? p.replace(/^~/, homedir) : p);
   const openFile = (path: string) => {
@@ -129,9 +113,6 @@ export function SettingsPanel() {
             onUpdate={update}
             workbenchEnabled={workbenchEnabled}
             setWorkbenchEnabled={setWorkbenchEnabled}
-            skills={skills}
-            skillsLoading={skillsLoading}
-            onToggleSkill={toggleSkill}
             hooks={hooks}
             onOpen={openFile}
           />
@@ -163,9 +144,6 @@ interface GlobalTabProps {
   onUpdate: (patch: Partial<AppConfig>) => Promise<void>;
   workbenchEnabled: boolean;
   setWorkbenchEnabled: (on: boolean) => void;
-  skills: SkillEntry[];
-  skillsLoading: boolean;
-  onToggleSkill: (name: string, enabled: boolean) => void;
   hooks: unknown;
   onOpen: (path: string) => void;
 }
@@ -176,12 +154,10 @@ function GlobalTab({
   onUpdate,
   workbenchEnabled,
   setWorkbenchEnabled,
-  skills,
-  skillsLoading,
-  onToggleSkill,
   hooks,
   onOpen
 }: GlobalTabProps) {
+  const setNav = useUi((s) => s.setNav);
   return (
     <>
       <Section title="Defaults" help="Applied to every new claude session unless overridden per-project.">
@@ -254,27 +230,19 @@ function GlobalTab({
         </Field>
       </Section>
 
-      <Section title="Skills" help={<>Toggles <code>disabledSkills</code> in <code>~/.claude/settings.json</code>.</>}>
-        {skillsLoading ? (
-          <p className="settings-help">Loading…</p>
-        ) : skills.length === 0 ? (
-          <p className="settings-help">
-            No skills found in <code>~/.claude/skills/</code>.
-          </p>
-        ) : (
-          <ul className="settings-list">
-            {skills.map((skill) => (
-              <li key={skill.name} className="settings-list-row">
-                <input
-                  type="checkbox"
-                  checked={skill.enabled}
-                  onChange={(e) => onToggleSkill(skill.name, e.target.checked)}
-                />
-                <span className="settings-list-name">{skill.name}</span>
-              </li>
-            ))}
-          </ul>
-        )}
+      <Section title="Skills">
+        <p className="settings-help">
+          Skills moved to the dedicated{' '}
+          <button
+            type="button"
+            className="settings-btn"
+            onClick={() => setNav('skills')}
+          >
+            Skills panel
+          </button>{' '}
+          — discover, enable/disable, and bundle skills across user, plugin, and
+          project sources.
+        </p>
       </Section>
 
       <Section title="Hooks" help={<>Read-only view of <code>hooks</code> in <code>~/.claude/settings.json</code>.</>}>

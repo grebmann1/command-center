@@ -93,17 +93,39 @@ const api: CcApi = {
       ipcRenderer.invoke(IPC.claudeSettings.write, projectPath, scope, patch)
   },
   skills: {
-    list: () => ipcRenderer.invoke(IPC.skills.list),
+    list: (projectPath?: string) => ipcRenderer.invoke(IPC.skills.list, projectPath),
     setEnabled: (name: string, enabled: boolean) =>
       ipcRenderer.invoke(IPC.skills.setEnabled, name, enabled),
-    readHooks: () => ipcRenderer.invoke(IPC.skills.readHooks)
+    setManyEnabled: (updates) => ipcRenderer.invoke(IPC.skills.setManyEnabled, updates),
+    readHooks: () => ipcRenderer.invoke(IPC.skills.readHooks),
+    reveal: (skillId: string, projectPath?: string) =>
+      ipcRenderer.invoke(IPC.skills.reveal, skillId, projectPath),
+    onChanged: (cb) => {
+      const handler = () => cb();
+      ipcRenderer.on(IPC.skills.onChanged, handler);
+      return () => ipcRenderer.off(IPC.skills.onChanged, handler);
+    },
+    bundles: {
+      list: () => ipcRenderer.invoke(IPC.skills.bundles.list),
+      create: (input) => ipcRenderer.invoke(IPC.skills.bundles.create, input),
+      update: (id, patch) => ipcRenderer.invoke(IPC.skills.bundles.update, id, patch),
+      delete: (id) => ipcRenderer.invoke(IPC.skills.bundles.delete, id),
+      apply: (id, mode, projectPath) =>
+        ipcRenderer.invoke(IPC.skills.bundles.apply, id, mode, projectPath),
+      onChanged: (cb) => {
+        const handler = (_e: unknown, bundles: Parameters<typeof cb>[0]) => cb(bundles);
+        ipcRenderer.on(IPC.skills.bundles.onChanged, handler);
+        return () => ipcRenderer.off(IPC.skills.bundles.onChanged, handler);
+      }
+    }
   },
   scheduler: {
     list: () => ipcRenderer.invoke(IPC.scheduler.list),
     create: (input) => ipcRenderer.invoke(IPC.scheduler.create, input),
     update: (id, patch) => ipcRenderer.invoke(IPC.scheduler.update, id, patch),
     delete: (id) => ipcRenderer.invoke(IPC.scheduler.delete, id),
-    setEnabled: (id, enabled) => ipcRenderer.invoke(IPC.scheduler.setEnabled, id, enabled),
+    setEnabled: (id, enabled) =>
+      ipcRenderer.invoke(IPC.scheduler.setEnabled, id, enabled),
     runNow: (id) => ipcRenderer.invoke(IPC.scheduler.runNow, id),
     onChanged: (cb) => {
       const handler = (_e: unknown, tasks: Parameters<typeof cb>[0]) => cb(tasks);

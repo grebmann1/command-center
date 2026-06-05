@@ -11,7 +11,7 @@ import type {
   ScheduleTemplate
 } from '@shared/types';
 
-export type NavId = 'projects' | 'inbox' | 'scheduler' | 'settings';
+export type NavId = 'projects' | 'inbox' | 'scheduler' | 'skills' | 'settings';
 
 export interface Toast {
   id: string;
@@ -104,6 +104,9 @@ interface UiState {
   /** Which tab is active in the Settings panel. */
   settingsTab: 'global' | 'project';
   setSettingsTab: (tab: 'global' | 'project') => void;
+  /** Which tab is active in the Scheduler panel. */
+  schedulerTab: 'overview' | 'global' | 'project';
+  setSchedulerTab: (tab: 'overview' | 'global' | 'project') => void;
   pushToast: (message: string, kind?: 'info' | 'error') => void;
   dismissToast: (id: string) => void;
   markUnread: (sessionId: string) => void;
@@ -183,6 +186,7 @@ export const useUi = create<UiState>((set) => ({
   searchOpen: false,
   findOpen: false,
   settingsTab: 'global',
+  schedulerTab: 'global',
   toasts: [],
   unread: {},
   workspaceMode: {},
@@ -215,7 +219,13 @@ export const useUi = create<UiState>((set) => ({
   setNav: (nav) => set({ nav }),
   selectProject: (id) => {
     set({ selectedProjectId: id, overviewOpen: false });
-    if (!id) return;
+    if (!id) {
+      // Tell main no project is active so the per-project skills watcher
+      // is torn down. touch() with a falsy id is a no-op for state but is
+      // the canonical "selected changed" signal.
+      window.cc.projects.touch('').catch(() => {});
+      return;
+    }
     window.cc.config.set({ lastProjectId: id }).catch(() => {});
     // Persist the touch to disk so the next launch's auto-sort reflects
     // recent use, but DON'T merge the updated lastActiveAt back into the
@@ -237,6 +247,7 @@ export const useUi = create<UiState>((set) => ({
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setFindOpen: (findOpen) => set({ findOpen }),
   setSettingsTab: (settingsTab) => set({ settingsTab }),
+  setSchedulerTab: (schedulerTab) => set({ schedulerTab }),
   pushToast: (message, kind = 'info') => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     set((s) => ({ toasts: [...s.toasts, { id, message, kind }] }));

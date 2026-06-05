@@ -380,11 +380,41 @@ export interface ScheduleUpdateInput {
   retain?: number;
 }
 
+export type SkillSource = 'user' | 'plugin' | 'project';
+
 export interface SkillEntry {
+  /** Stable handle: `${source}:${qualifiedName}`, e.g. `plugin:zana/team-status`. */
+  id: string;
+  /** Short display name (last path segment of the skill directory). */
   name: string;
+  source: SkillSource;
+  /** Plugin slug (only when source === 'plugin'). */
+  pluginName?: string;
+  /** Project id (only when source === 'project'). */
+  projectId?: string;
   path: string;
+  description?: string;
+  allowedTools?: string[];
   enabled: boolean;
 }
+
+export interface SkillBundle {
+  id: string;
+  name: string;
+  description?: string;
+  /** SkillEntry.id values. */
+  skillIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillBundleInput {
+  name: string;
+  description?: string;
+  skillIds: string[];
+}
+
+export type SkillBundleApplyMode = 'additive' | 'exclusive';
 
 export interface McpServer {
   name: string;
@@ -458,9 +488,24 @@ export interface CcApi {
     homedir(): Promise<string>;
   };
   skills: {
-    list(): Promise<SkillEntry[]>;
+    list(projectPath?: string): Promise<SkillEntry[]>;
     setEnabled(name: string, enabled: boolean): Promise<void>;
+    setManyEnabled(updates: Array<{ name: string; enabled: boolean }>): Promise<void>;
     readHooks(): Promise<unknown>;
+    reveal(skillId: string, projectPath?: string): Promise<{ ok: boolean; path: string; message?: string }>;
+    onChanged(cb: () => void): () => void;
+    bundles: {
+      list(): Promise<SkillBundle[]>;
+      create(input: SkillBundleInput): Promise<SkillBundle>;
+      update(id: string, patch: Partial<SkillBundleInput>): Promise<SkillBundle | null>;
+      delete(id: string): Promise<boolean>;
+      apply(
+        id: string,
+        mode: SkillBundleApplyMode,
+        projectPath?: string
+      ): Promise<{ ok: boolean; message?: string }>;
+      onChanged(cb: (bundles: SkillBundle[]) => void): () => void;
+    };
   };
   inbox: {
     history(opts?: {
@@ -488,8 +533,8 @@ export interface CcApi {
     list(): Promise<ScheduledTask[]>;
     create(input: ScheduleCreateInput): Promise<Result<ScheduledTask>>;
     update(id: string, patch: ScheduleUpdateInput): Promise<Result<ScheduledTask>>;
-    delete(id: string): Promise<void>;
-    setEnabled(id: string, enabled: boolean): Promise<ScheduledTask | null>;
+    delete(id: string): Promise<Result<true>>;
+    setEnabled(id: string, enabled: boolean): Promise<Result<ScheduledTask>>;
     runNow(id: string): Promise<Result<ScheduledTask>>;
     onChanged(cb: (tasks: ScheduledTask[]) => void): () => void;
     listTemplates(): Promise<ScheduleTemplate[]>;

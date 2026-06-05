@@ -65,7 +65,18 @@ export const IPC = {
   skills: {
     list: 'skills:list',
     setEnabled: 'skills:setEnabled',
-    readHooks: 'skills:readHooks'
+    setManyEnabled: 'skills:setManyEnabled',
+    readHooks: 'skills:readHooks',
+    reveal: 'skills:reveal',
+    onChanged: 'skills:onChanged',
+    bundles: {
+      list: 'skills:bundles:list',
+      create: 'skills:bundles:create',
+      update: 'skills:bundles:update',
+      delete: 'skills:bundles:delete',
+      apply: 'skills:bundles:apply',
+      onChanged: 'skills:bundles:onChanged'
+    }
   },
   app: {
     homedir: 'app:homedir'

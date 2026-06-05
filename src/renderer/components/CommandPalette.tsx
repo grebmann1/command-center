@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Folder, TerminalSquare, Plus, ChevronRight, Code2, FolderOpen, FileSearch, Sparkles, Play, Zap, Keyboard, History, Search, Inbox, RotateCcw, Trash2, Copy, Pin, PinOff, Globe, Clock, LayoutGrid, RotateCw, Undo2 } from 'lucide-react';
+import { Folder, TerminalSquare, Plus, ChevronRight, Code2, FolderOpen, FileSearch, Sparkles, Play, Zap, Keyboard, History, Search, Inbox, RotateCcw, Trash2, Copy, Pin, PinOff, Globe, BookOpen, Clock, LayoutGrid, RotateCw, Undo2 } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
 import { useData, useScheduler, useUi } from '../store';
 import type { LaunchProfileId, OpenTarget, Project } from '@shared/types';
@@ -130,6 +130,15 @@ export function CommandPalette({ onClose }: Props) {
         hint: '⌘J',
         run: () => {
           setNav('scheduler');
+          onClose();
+        }
+      },
+      {
+        key: 'action:skills',
+        icon: <BookOpen size={14} />,
+        label: 'Open Skills',
+        run: () => {
+          setNav('skills');
           onClose();
         }
       },
