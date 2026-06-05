@@ -37,6 +37,7 @@ export function ListPane() {
   const nav = useUi((s) => s.nav);
 
   if (nav === 'settings') return <SettingsPane />;
+  if (nav === 'scheduler') return <SchedulerPane />;
   if (nav === 'inbox') return <InboxPane />;
   return <ProjectsList />;
 }
@@ -699,6 +700,103 @@ function ProjectsList() {
           }}
         />
       )}
+    </section>
+  );
+}
+
+function SchedulerPane() {
+  const projects = useData((s) => s.projects);
+  const selectedProjectId = useUi((s) => s.selectedProjectId);
+  const selectProject = useUi((s) => s.selectProject);
+  const schedulerTab = useUi((s) => s.schedulerTab);
+  const setSchedulerTab = useUi((s) => s.setSchedulerTab);
+  const sortedProjects = sortProjectsForDisplay(projects);
+  const [filter, setFilter] = useState('');
+  const q = filter.trim().toLowerCase();
+  const visibleProjects = q
+    ? sortedProjects.filter(
+        (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q)
+      )
+    : sortedProjects;
+
+  return (
+    <section className="list-pane">
+      <header className="list-header">
+        <h2>Scheduler</h2>
+      </header>
+      {projects.length > 4 && (
+        <div className="list-filter">
+          <Search size={12} className="list-filter-icon" />
+          <input
+            placeholder="Filter projects"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          {filter && (
+            <button
+              className="list-filter-clear"
+              aria-label="Clear filter"
+              onClick={() => setFilter('')}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      )}
+      <div className="list-body">
+        <div className="settings-scope-label">Summary</div>
+        <div
+          className={`project-item ${schedulerTab === 'overview' ? 'active' : ''}`}
+          onClick={() => setSchedulerTab('overview')}
+        >
+          <LayoutDashboard size={14} className="settings-scope-icon" />
+          <div className="project-meta">
+            <div className="project-name">Overview</div>
+            <div className="project-path">All schedules at a glance</div>
+          </div>
+        </div>
+        <div className="settings-scope-label">Scope</div>
+        <div
+          className={`project-item ${schedulerTab === 'global' ? 'active' : ''}`}
+          onClick={() => setSchedulerTab('global')}
+        >
+          <Settings2 size={14} className="settings-scope-icon" />
+          <div className="project-meta">
+            <div className="project-name">Global</div>
+            <div className="project-path">App-wide schedules</div>
+          </div>
+        </div>
+        <div className="settings-scope-label">Project</div>
+        {sortedProjects.length === 0 ? (
+          <div className="list-empty">No projects yet.</div>
+        ) : visibleProjects.length === 0 ? (
+          <div className="list-empty">No projects match &ldquo;{filter}&rdquo;.</div>
+        ) : (
+          visibleProjects.map((p) => {
+            const active = schedulerTab === 'project' && selectedProjectId === p.id;
+            return (
+              <div
+                key={p.id}
+                className={`project-item ${active ? 'active' : ''}`}
+                onClick={() => {
+                  selectProject(p.id);
+                  setSchedulerTab('project');
+                }}
+                title={p.path}
+              >
+                <span
+                  className="project-dot"
+                  style={p.color ? { background: p.color } : undefined}
+                />
+                <div className="project-meta">
+                  <div className="project-name">{p.name}</div>
+                  <div className="project-path">{p.path}</div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
     </section>
   );
 }

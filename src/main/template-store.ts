@@ -317,7 +317,29 @@ export class TemplateStore extends EventEmitter {
   private attachUserWatcher() {
     const dir = userTemplatesDir();
     try {
-      this.userWatcher = watch(dir, { persistent: false }, () => this.scheduleRefresh());
+      const w = watch(dir, { persistent: false }, () => this.scheduleRefresh());
+      // fs.watch errors propagate to 'uncaughtException' on Linux/macOS when
+      // the watched dir vanishes (e.g. user `rm -rf`'d it). Catch them here,
+      // close the dead watcher, and re-attach with backoff so live updates
+      // resume once the dir reappears.
+      w.on('error', (err) => {
+        // eslint-disable-next-line no-console
+        console.error('[template-store] user watcher error:', err);
+        try {
+          w.close();
+        } catch {
+          /* already closed */
+        }
+        if (this.userWatcher === w) this.userWatcher = null;
+        setTimeout(() => {
+          if (!this.userWatcher) {
+            ensureDir(userTemplatesDir());
+            this.attachUserWatcher();
+            this.scheduleRefresh();
+          }
+        }, 2_000);
+      });
+      this.userWatcher = w;
     } catch {
       // watcher unsupported on this fs (e.g. some network mounts) — fall back to
       // refresh-on-demand. The user can still hit "Refresh" from the UI.
@@ -330,7 +352,21 @@ export class TemplateStore extends EventEmitter {
       if (!existsSync(dir)) continue;
       try {
         const w = watch(dir, { persistent: false }, () => this.scheduleRefresh());
-        this.projectWatchers.set(project.id, w);
+        const projectId = project.id;
+        w.on('error', (err) => {
+          // eslint-disable-next-line no-console
+          console.error(`[template-store] project ${projectId} watcher error:`, err);
+          try {
+            w.close();
+          } catch {
+            /* already closed */
+          }
+          if (this.projectWatchers.get(projectId) === w) {
+            this.projectWatchers.delete(projectId);
+          }
+          this.scheduleRefresh();
+        });
+        this.projectWatchers.set(projectId, w);
       } catch {
         // ignore — same fallback as user dir.
       }

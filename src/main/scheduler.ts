@@ -7,60 +7,36 @@ import type {
   ScheduleRun,
   ScheduleUpdateInput
 } from '../shared/types.js';
+import { MIN_INTERVAL_MS, parseEvery as parseEveryShared } from '../shared/parse-every.js';
 import type { PtyManager } from './pty.js';
 import { deleteSchedule, listAllSchedules, saveSchedule } from './scheduler-store.js';
 import type { store as Store } from './store.js';
 
-/** Hard floor for the fire interval. Below this, runs would pile up faster
- *  than terminals can boot, and a typo in the YAML could DOS the laptop. */
-const MIN_INTERVAL_MS = 60_000;
 /** History buffer cap. Hand-editing `retain` higher in the JSON works, but
  *  we won't surface a bigger value than this in the UI. */
 const MAX_RETAIN = 100;
 
-const UNIT_MS: Record<string, number> = {
-  ms: 1,
-  s: 1_000,
-  m: 60_000,
-  h: 3_600_000,
-  d: 86_400_000
-};
-
-/**
- * Parse a human interval ("5m", "1h30m", "300000ms") into milliseconds.
- * Returns null on garbage input. Coerces below the minimum (60s) up to the
- * minimum, so a hand-edited "10s" silently behaves like "1m" rather than
- * fork-bombing the user's machine.
- */
-export function parseEvery(every: string): number | null {
-  const trimmed = (every ?? '').trim().toLowerCase();
-  if (!trimmed) return null;
-  const re = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/g;
-  let total = 0;
-  let consumed = 0;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(trimmed)) !== null) {
-    const value = parseFloat(match[1]);
-    const unit = match[2];
-    const ms = UNIT_MS[unit];
-    if (!ms) return null;
-    total += value * ms;
-    consumed += match[0].length;
-  }
-  if (total <= 0 || consumed !== trimmed.length) return null;
-  return Math.max(MIN_INTERVAL_MS, Math.round(total));
-}
+export { parseEveryShared as parseEvery };
 
 interface Live {
   task: ScheduledTask;
   timer: NodeJS.Timeout | null;
-  /** Session id from the most recent fire. Used for overlap detection. */
-  lastSessionId: string | null;
+  /** Session id from the most recent automatic fire. Used for overlap detection. */
+  lastAutoSessionId: string | null;
+  /** Session id from the most recent manual "Run now". Informational only. */
+  lastManualSessionId: string | null;
+  /** Maps a fired session id → its index in `status.runs`, so the exit-time
+   *  recordRun can update the right entry even when interleaved with other
+   *  schedules' fires. */
+  runIndexBySession: Map<string, number>;
 }
+
+type Logger = (context: string, err: unknown) => void;
 
 type Deps = {
   ptys: PtyManager;
   store: typeof Store;
+  logger?: Logger;
 };
 
 /**
@@ -82,6 +58,15 @@ export class SchedulerManager extends EventEmitter {
     this.deps = deps;
   }
 
+  private log(context: string, err: unknown) {
+    if (this.deps?.logger) {
+      this.deps.logger(context, err);
+    } else {
+      // eslint-disable-next-line no-console
+      console.error(`[scheduler] ${context}:`, err);
+    }
+  }
+
   list(): ScheduledTask[] {
     return [...this.live.values()].map((l) => l.task);
   }
@@ -89,9 +74,11 @@ export class SchedulerManager extends EventEmitter {
   /** Read every schedule from disk and (re)arm enabled ones. Called on boot. */
   loadAll(projects: Project[]) {
     this.stopAll();
-    const tasks = listAllSchedules(projects);
+    const tasks = listAllSchedules(projects, (path, reason) =>
+      this.log(`load ${path}`, `invalid schedule file dropped: ${reason}`)
+    );
     for (const task of tasks) {
-      this.live.set(task.id, { task, timer: null, lastSessionId: null });
+      this.live.set(task.id, this.makeLive(task));
       if (task.enabled) this.arm(task.id);
     }
     this.emit('changed');
@@ -100,7 +87,7 @@ export class SchedulerManager extends EventEmitter {
   create(input: ScheduleCreateInput): ScheduledTask {
     if (!input.name?.trim()) throw new Error('name is required');
     if (!input.projectId) throw new Error('projectId is required');
-    const intervalMs = parseEvery(input.every);
+    const intervalMs = parseEveryShared(input.every);
     if (intervalMs === null) throw new Error(`invalid interval: ${input.every}`);
 
     const now = new Date().toISOString();
@@ -126,7 +113,7 @@ export class SchedulerManager extends EventEmitter {
       source: input.scope ?? 'global'
     };
     this.persist(task);
-    this.live.set(task.id, { task, timer: null, lastSessionId: null });
+    this.live.set(task.id, this.makeLive(task));
     if (task.enabled) this.arm(task.id);
     this.emit('changed');
     return task;
@@ -144,7 +131,7 @@ export class SchedulerManager extends EventEmitter {
     if (patch.extraArgs !== undefined) next.extraArgs = patch.extraArgs;
     if (patch.prompt !== undefined) next.prompt = patch.prompt;
     if (patch.every !== undefined) {
-      if (parseEvery(patch.every) === null) throw new Error(`invalid interval: ${patch.every}`);
+      if (parseEveryShared(patch.every) === null) throw new Error(`invalid interval: ${patch.every}`);
       next.schedule = { every: patch.every };
     }
     if (patch.retain !== undefined) next.history = { retain: clampRetain(patch.retain) };
@@ -183,7 +170,37 @@ export class SchedulerManager extends EventEmitter {
     this.live.clear();
   }
 
+  /**
+   * Disarm and drop every live schedule referencing the removed project.
+   * Called from the projects.remove IPC handler. The on-disk JSON files
+   * (under `<project.path>/.cc-center/schedules/`) are not deleted — if the
+   * project is re-added later, `loadAll` will rediscover them.
+   */
+  onProjectRemoved(projectId: string) {
+    let dropped = 0;
+    for (const id of [...this.live.keys()]) {
+      const live = this.live.get(id);
+      if (!live) continue;
+      if (live.task.projectId === projectId) {
+        this.disarm(id);
+        this.live.delete(id);
+        dropped += 1;
+      }
+    }
+    if (dropped > 0) this.emit('changed');
+  }
+
   // ----- internals -----------------------------------------------------------
+
+  private makeLive(task: ScheduledTask): Live {
+    return {
+      task,
+      timer: null,
+      lastAutoSessionId: null,
+      lastManualSessionId: null,
+      runIndexBySession: new Map()
+    };
+  }
 
   private persist(task: ScheduledTask) {
     if (!this.deps) return;
@@ -193,15 +210,21 @@ export class SchedulerManager extends EventEmitter {
   private arm(id: string) {
     const live = this.live.get(id);
     if (!live || !live.task.enabled) return;
-    const intervalMs = parseEvery(live.task.schedule.every) ?? MIN_INTERVAL_MS;
+    const intervalMs = parseEveryShared(live.task.schedule.every) ?? MIN_INTERVAL_MS;
     const lastRun = live.task.status.lastRunAt
       ? Date.parse(live.task.status.lastRunAt)
       : 0;
-    const targetAt = lastRun ? lastRun + intervalMs : Date.now() + intervalMs;
+    const now = Date.now();
+    // If `lastRunAt` is more than one full interval overdue (e.g. the schedule
+    // sat disabled for days, or the laptop was asleep), don't drag it forward
+    // by chained intervals — re-arm fresh at `now + interval`. Prevents drift
+    // compounding and avoids stampedes on resume.
+    const veryStale = lastRun > 0 && lastRun + intervalMs < now - intervalMs;
+    const targetAt = lastRun && !veryStale ? lastRun + intervalMs : now + intervalMs;
     // 5-second grace floor so a backlog of overdue schedules doesn't fire all
     // at once on app launch.
-    const delay = Math.max(targetAt - Date.now(), 5_000);
-    live.task.status.nextRunAt = new Date(Date.now() + delay).toISOString();
+    const delay = Math.max(targetAt - now, 5_000);
+    live.task.status.nextRunAt = new Date(now + delay).toISOString();
     live.timer = setTimeout(() => this.fire(id, { manual: false }), delay);
   }
 
@@ -221,6 +244,10 @@ export class SchedulerManager extends EventEmitter {
 
     const project = this.deps.store.listProjects().find((p) => p.id === live.task.projectId);
     if (!project) {
+      this.log(
+        `fire ${id}`,
+        `project ${live.task.projectId} not found for schedule "${live.task.name}"`
+      );
       this.recordRun(id, {
         at: new Date().toISOString(),
         result: 'error',
@@ -230,14 +257,22 @@ export class SchedulerManager extends EventEmitter {
       return;
     }
 
-    // Overlap check: if the previous fire's pty is still alive, skip.
-    if (!opts.manual && live.lastSessionId) {
-      const stillAlive = this.deps.ptys.list(live.task.projectId).some((s) => s.id === live.lastSessionId && s.status === 'running');
+    // Overlap check: if the previous *automatic* fire's pty is still alive, skip.
+    // Manual "Run now" fires never set lastAutoSessionId, so they don't poison
+    // the overlap state and the next scheduled fire still respects overlap.
+    if (!opts.manual && live.lastAutoSessionId) {
+      const stillAlive = this.deps.ptys
+        .list(live.task.projectId)
+        .some((s) => s.id === live.lastAutoSessionId && s.status === 'running');
       if (stillAlive) {
+        this.log(
+          `fire ${id}`,
+          `skipped: previous run ${live.lastAutoSessionId} still active`
+        );
         this.recordRun(id, {
           at: new Date().toISOString(),
           result: 'skipped',
-          sessionId: live.lastSessionId,
+          sessionId: live.lastAutoSessionId,
           message: 'previous run still active'
         });
         if (live.task.enabled) this.arm(id);
@@ -260,6 +295,7 @@ export class SchedulerManager extends EventEmitter {
         remote: project.remote
       });
     } catch (err) {
+      this.log(`fire ${id} pty.create`, err);
       this.recordRun(id, {
         at: new Date().toISOString(),
         result: 'error',
@@ -269,22 +305,35 @@ export class SchedulerManager extends EventEmitter {
       return;
     }
 
-    live.lastSessionId = session.id;
+    if (opts.manual) {
+      live.lastManualSessionId = session.id;
+    } else {
+      live.lastAutoSessionId = session.id;
+    }
     const runStartedAt = new Date().toISOString();
     const runStartMs = Date.now();
 
     // Type the prompt into the pty once. We attach a one-shot listener on the
     // shared 'data' EventEmitter — `data` fires for every session, so we filter
-    // on session id and detach immediately to avoid retaining a closure for the
-    // life of the pty.
+    // on session id. We also detach on exit so a pty that fails fast (no data
+    // emitted) doesn't leak the closure for the rest of the app's lifetime.
     if (live.task.prompt) {
       const prompt = live.task.prompt;
+      let sent = false;
       const onData = (sessionId: string) => {
         if (sessionId !== session.id) return;
+        if (sent) return;
+        sent = true;
         this.deps?.ptys.off('data', onData);
         this.deps?.ptys.write(session.id, `${prompt}\n`);
       };
+      const onPromptExit = (sessionId: string) => {
+        if (sessionId !== session.id) return;
+        this.deps?.ptys.off('data', onData);
+        this.deps?.ptys.off('exit', onPromptExit);
+      };
       this.deps.ptys.on('data', onData);
+      this.deps.ptys.on('exit', onPromptExit);
     }
 
     // Record success on exit (or as soon as we've spawned, for sessions that
@@ -318,13 +367,24 @@ export class SchedulerManager extends EventEmitter {
     const live = this.live.get(id);
     if (!live) return;
     const status = live.task.status;
-    // If this is the exit-time update for an already-recorded run (same
-    // sessionId at the head), replace the head entry rather than push.
-    if (run.sessionId && status.runs[0]?.sessionId === run.sessionId) {
-      status.runs[0] = { ...status.runs[0], ...run };
+    // If we've seen this sessionId before, update the existing entry rather
+    // than push a new one. The runIndexBySession map survives interleaved
+    // fires from other schedules — head-comparison would corrupt under load.
+    const knownIdx = run.sessionId ? live.runIndexBySession.get(run.sessionId) : undefined;
+    if (knownIdx !== undefined && status.runs[knownIdx]) {
+      status.runs[knownIdx] = { ...status.runs[knownIdx], ...run };
     } else {
       status.runs = [run, ...status.runs].slice(0, live.task.history.retain);
       status.runCount += 1;
+      // After unshift everything shifts right by one. Rebuild the index from
+      // surviving entries so we can still find them on their exit-time update.
+      live.runIndexBySession.clear();
+      status.runs.forEach((r, idx) => {
+        if (r.sessionId) live.runIndexBySession.set(r.sessionId, idx);
+      });
+    }
+    if (run.result === 'error') {
+      this.log(`run ${id}`, run.message ?? 'error (no message)');
     }
     status.lastRunAt = run.at;
     status.lastRunResult = run.result;
