@@ -16,7 +16,13 @@ import type { InboxEntry } from '@shared/types';
  * Bulk-on-visibility is deliberately avoided — see store.ts inbox-read
  * comment for the rationale.
  */
-export function InboxSidebar() {
+export function InboxSidebar({
+  query = '',
+  unreadOnly = false
+}: {
+  query?: string;
+  unreadOnly?: boolean;
+} = {}) {
   const entries = useInbox((s) => s.entries);
   const loading = useInbox((s) => s.loading);
   const selectedId = useInboxSelection((s) => s.selectedEntryId);
@@ -29,36 +35,49 @@ export function InboxSidebar() {
     markRead(id);
   };
 
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q && !unreadOnly) return entries;
+    return entries.filter((e) => {
+      if (unreadOnly && readIds[e.id]) return false;
+      if (!q) return true;
+      const hay = `${e.projectLabel ?? e.projectId} ${e.comments ?? ''} ${
+        e.docs?.map((d) => d.path).join(' ') ?? ''
+      }`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [entries, query, unreadOnly, readIds]);
+
   // Default-select the latest entry on first non-empty load. Latch the
   // ref so once the user touches anything we never override their pick.
   const everSelectedRef = useRef(false);
   useEffect(() => {
     if (everSelectedRef.current) return;
-    if (entries.length === 0) return;
+    if (filtered.length === 0) return;
     if (!selectedId) {
-      selectAndRead(entries[0].id);
+      selectAndRead(filtered[0].id);
     }
     everSelectedRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, selectedId]);
+  }, [filtered, selectedId]);
 
-  // j/k navigation across the flat newest-first sequence.
+  // j/k navigation across the visible (filtered) sequence.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key !== 'j' && e.key !== 'k') return;
-      if (entries.length === 0) return;
-      const idx = entries.findIndex((x) => x.id === selectedId);
-      const next = e.key === 'j' ? Math.min(entries.length - 1, idx + 1) : Math.max(0, idx - 1);
-      if (next !== idx && entries[next]) selectAndRead(entries[next].id);
+      if (filtered.length === 0) return;
+      const idx = filtered.findIndex((x) => x.id === selectedId);
+      const next = e.key === 'j' ? Math.min(filtered.length - 1, idx + 1) : Math.max(0, idx - 1);
+      if (next !== idx && filtered[next]) selectAndRead(filtered[next].id);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, selectedId]);
+  }, [filtered, selectedId]);
 
-  const groups = useMemo(() => groupByBucket(entries), [entries]);
+  const groups = useMemo(() => groupByBucket(filtered), [filtered]);
 
   if (loading && entries.length === 0) {
     return <div className="inbox-sidebar-empty">Loading…</div>;
@@ -71,6 +90,16 @@ export function InboxSidebar() {
         <div className="inbox-sidebar-empty-hint">
           Projects will push status updates here.
         </div>
+      </div>
+    );
+  }
+
+  if (filtered.length === 0) {
+    return (
+      <div className="inbox-sidebar-empty">
+        {unreadOnly && !query.trim()
+          ? 'No unread messages.'
+          : 'No matches.'}
       </div>
     );
   }

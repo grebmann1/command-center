@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileText } from 'lucide-react';
 import type { Project, WalkedFile } from '@shared/types';
 import { useUi } from '../store';
+import { fuzzyScore } from '../util/fuzzy';
 
 interface Props {
   project: Project;
@@ -86,7 +87,7 @@ export function QuickOpen({ project, onClose }: Props) {
     }
     const out: ScoredEntry[] = [];
     for (const file of files) {
-      const r = score(file.rel, q);
+      const r = fuzzyScore(file.rel, q);
       if (r) out.push({ file, score: r.score, matchIdx: r.matchIdx });
     }
     out.sort((a, b) => b.score - a.score);
@@ -216,37 +217,3 @@ function highlight(text: string, matchIdx: number[]): React.ReactNode {
   return parts;
 }
 
-// Subsequence-fuzzy score. Higher is better; null = no match.
-// Bonuses: matches in basename, after path separator / underscore / hyphen, camel-hump.
-function score(text: string, q: string): { score: number; matchIdx: number[] } | null {
-  const t = text.toLowerCase();
-  const query = q.toLowerCase();
-  const matchIdx: number[] = [];
-  let ti = 0;
-  let qi = 0;
-  let s = 0;
-  let prev = -2;
-  const slashIdx = text.lastIndexOf('/');
-  const baseStart = slashIdx >= 0 ? slashIdx + 1 : 0;
-  while (qi < query.length && ti < t.length) {
-    if (t[ti] === query[qi]) {
-      matchIdx.push(ti);
-      let bonus = 1;
-      if (ti === prev + 1) bonus += 3; // consecutive
-      const ch = text[ti];
-      const prevCh = ti > 0 ? text[ti - 1] : '';
-      if (ti >= baseStart) bonus += 2; // basename match weight
-      if (ti === baseStart) bonus += 4; // first char of basename
-      if (prevCh === '/' || prevCh === '_' || prevCh === '-' || prevCh === '.') bonus += 3;
-      if (prevCh && prevCh.toLowerCase() === prevCh && ch.toLowerCase() !== ch) bonus += 2;
-      s += bonus;
-      prev = ti;
-      qi++;
-    }
-    ti++;
-  }
-  if (qi < query.length) return null;
-  // Slight penalty for long paths so shorter wins ties.
-  s -= text.length * 0.01;
-  return { score: s, matchIdx };
-}

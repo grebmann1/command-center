@@ -1,4 +1,4 @@
-import { FolderGit2, Inbox, Settings, type LucideIcon } from 'lucide-react';
+import { Clock, FolderGit2, Inbox, Settings, type LucideIcon } from 'lucide-react';
 import { useUi, useUnreadInboxCount, type NavId } from '../store';
 
 interface NavEntry {
@@ -10,6 +10,7 @@ interface NavEntry {
 const navItems: NavEntry[] = [
   { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'projects', label: 'Projects', icon: FolderGit2 },
+  { id: 'scheduler', label: 'Scheduler', icon: Clock },
   { id: 'settings', label: 'Settings', icon: Settings }
 ];
 

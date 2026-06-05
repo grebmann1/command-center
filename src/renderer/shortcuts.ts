@@ -79,6 +79,19 @@ export function installShortcuts(): () => void {
       ui.setResumeOpen(true);
       return;
     }
+    // cmd+shift+r — restart active terminal (kill+respawn for live, or
+    // resurrect for exited). Pairs with cmd+w (close) so revival is one
+    // chord; especially useful after a dev server crashes mid-session.
+    if ((e.key === 'R' || (e.key === 'r' && e.shiftKey)) && e.shiftKey) {
+      if (!projectId || !activeTabId) return;
+      const active = tabs.find((t) => t.id === activeTabId);
+      if (!active) return;
+      e.preventDefault();
+      const live = active.status !== 'exited';
+      if (live && !window.confirm(`Kill and restart "${active.title}"?`)) return;
+      data.restartTerminal(activeTabId, projectId).catch(() => {});
+      return;
+    }
     // cmd+, — toggle Settings
     if (e.key === ',') {
       e.preventDefault();
@@ -90,6 +103,21 @@ export function installShortcuts(): () => void {
     if (e.key === 'i' && !e.shiftKey) {
       e.preventDefault();
       ui.setNav(ui.nav === 'inbox' ? 'projects' : 'inbox');
+      return;
+    }
+    // cmd+o — toggle Overview (cross-project workspaces dashboard). Same
+    // round-trip as ⌘I: opens from anywhere; pressing again closes it.
+    if (e.key === 'o' && !e.shiftKey) {
+      e.preventDefault();
+      if (ui.nav !== 'projects') ui.setNav('projects');
+      ui.setOverviewOpen(!ui.overviewOpen);
+      return;
+    }
+    // cmd+j — toggle Scheduler. Round-trip back to projects when already on
+    // scheduler so it works as a single key from anywhere.
+    if (e.key === 'j' && !e.shiftKey) {
+      e.preventDefault();
+      ui.setNav(ui.nav === 'scheduler' ? 'projects' : 'scheduler');
       return;
     }
     // cmd+/ or cmd+? — keyboard shortcuts help

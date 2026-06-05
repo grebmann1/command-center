@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Clock, MessagesSquare } from 'lucide-react';
 import type { ClaudeSessionSummary, Project } from '@shared/types';
 import { useData, useUi } from '../store';
+import { fuzzyScore } from '../util/fuzzy';
 
 interface Props {
   project: Project;
@@ -45,13 +46,21 @@ export function ResumePicker({ project, onClose }: Props) {
 
   const filtered = useMemo<ClaudeSessionSummary[]>(() => {
     if (!sessions) return [];
-    const q = query.trim().toLowerCase();
+    const q = query.trim();
     if (!q) return sessions;
-    return sessions.filter(
-      (s) =>
-        s.id.toLowerCase().includes(q) ||
-        (s.firstUserPrompt?.toLowerCase().includes(q) ?? false)
-    );
+    // Score on the prompt (primary signal) and id (rare but useful when the
+    // user remembers a session hash). Sessions without a prompt fall back to
+    // the id alone. Stable order preserved on tie via original index.
+    const scored: Array<{ s: ClaudeSessionSummary; score: number; idx: number }> = [];
+    for (let i = 0; i < sessions.length; i++) {
+      const s = sessions[i];
+      const pm = s.firstUserPrompt ? fuzzyScore(s.firstUserPrompt, q) : null;
+      const im = fuzzyScore(s.id, q);
+      const score = Math.max(pm?.score ?? -Infinity, (im?.score ?? -Infinity) * 0.5);
+      if (score > -Infinity) scored.push({ s, score, idx: i });
+    }
+    scored.sort((a, b) => (b.score - a.score) || (a.idx - b.idx));
+    return scored.map((x) => x.s);
   }, [sessions, query]);
 
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy } from 'lucide-react';
+import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
 import {
   useData,
@@ -45,24 +45,57 @@ function InboxPane() {
   const entries = useInbox((s) => s.entries);
   const readIds = useInboxRead((s) => s.readIds);
   const markAllRead = useInboxRead((s) => s.markAllRead);
+  const [query, setQuery] = useState('');
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const unreadCount = entries.reduce((n, e) => (readIds[e.id] ? n : n + 1), 0);
   return (
     <section className="list-pane inbox-list-pane">
       <header className="list-header">
         <h2>Inbox</h2>
-        {unreadCount > 0 && (
+        <div className="list-header-actions">
           <button
             type="button"
-            className="icon-btn inbox-mark-read-all"
-            title={`Mark ${unreadCount} as read`}
-            onClick={() => markAllRead(entries.map((e) => e.id))}
+            className={`icon-btn inbox-unread-toggle ${unreadOnly ? 'on' : ''}`}
+            title={unreadOnly ? 'Show all messages' : `Show only unread (${unreadCount})`}
+            onClick={() => setUnreadOnly((v) => !v)}
+            disabled={unreadCount === 0 && !unreadOnly}
           >
-            <Check size={14} />
+            <InboxIcon size={14} />
+          </button>
+          {unreadCount > 0 && (
+            <button
+              type="button"
+              className="icon-btn inbox-mark-read-all"
+              title={`Mark ${unreadCount} as read`}
+              onClick={() => markAllRead(entries.map((e) => e.id))}
+            >
+              <Check size={14} />
+            </button>
+          )}
+        </div>
+      </header>
+      <div className="inbox-filter-row">
+        <Search size={12} className="inbox-filter-icon" aria-hidden />
+        <input
+          type="text"
+          className="inbox-filter-input"
+          placeholder="Filter inbox…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {query && (
+          <button
+            type="button"
+            className="inbox-filter-clear"
+            aria-label="Clear filter"
+            onClick={() => setQuery('')}
+          >
+            <X size={12} />
           </button>
         )}
-      </header>
+      </div>
       <div className="list-body">
-        <InboxSidebar />
+        <InboxSidebar query={query} unreadOnly={unreadOnly} />
       </div>
     </section>
   );

@@ -28,7 +28,9 @@ const SECTIONS: Section[] = [
       { keys: ['⌘', 'R'], label: 'Resume Claude session…' },
       { keys: ['⌘', 'B'], label: 'Toggle Terminals / Explorer' },
       { keys: ['⌘', 'L'], label: 'Open Preview Browser' },
+      { keys: ['⌘', 'O'], label: 'Toggle Overview (workspaces dashboard)' },
       { keys: ['⌘', 'I'], label: 'Toggle Inbox' },
+      { keys: ['⌘', 'J'], label: 'Toggle Scheduler' },
       { keys: ['⌘', ','], label: 'Toggle Settings' },
       { keys: ['⌘', '?'], label: 'This help' }
     ]
@@ -38,6 +40,7 @@ const SECTIONS: Section[] = [
     rows: [
       { keys: ['⌘', 'T'], label: 'New tab (uses project’s default profile)' },
       { keys: ['⌘', '⇧', 'D'], label: 'Duplicate active tab (same profile)' },
+      { keys: ['⌘', '⇧', 'R'], label: 'Restart active tab (kill + respawn)' },
       { keys: ['⌘', '⇧', 'T'], label: 'Reopen last closed tab' },
       { keys: ['⌘', 'W'], label: 'Close active tab' },
       { keys: ['⌘', '1'], label: 'Switch to tab 1 (… up to ⌘9)' },

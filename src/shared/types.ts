@@ -144,6 +144,8 @@ export interface ProjectSettings {
   model?: string;
   /** Permission mode override for this project. */
   permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+  /** MRU list of URLs visited in the preview pane (most recent first). */
+  previewUrls?: string[];
 }
 
 export interface CreateTerminalRequest {
@@ -260,6 +262,124 @@ export type Result<T> =
   | { ok: true; value: T }
   | { ok: false; code: string; message: string };
 
+/** Per-fire record persisted in a schedule's status.runs ring buffer. */
+export interface ScheduleRun {
+  /** ISO-8601 timestamp of when the fire began. */
+  at: string;
+  result: 'success' | 'error' | 'skipped';
+  /** PtyManager session id, if a terminal was actually spawned. */
+  sessionId?: string;
+  /** Time from spawn to pty exit (only set once the session ends). */
+  durationMs?: number;
+  /** Free-text reason — populated for `error` and `skipped`. */
+  message?: string;
+}
+
+export interface ScheduleStatus {
+  lastRunAt?: string;
+  lastRunResult?: 'success' | 'error' | 'skipped';
+  lastRunSessionId?: string;
+  /** ISO-8601 timestamp of the next planned fire (informational; recomputed on load). */
+  nextRunAt?: string;
+  runCount: number;
+  /** Newest first. Capped at history.retain (default 10). */
+  runs: ScheduleRun[];
+}
+
+/**
+ * One scheduled task. Persisted as JSON at:
+ *  - `~/.cc-center/schedules/<id>.json` (global), or
+ *  - `<project.path>/.cc-center/schedules/<id>.json` (per-project, optional).
+ *
+ * Hand-editable. The scheduler runs entirely in the Electron main process via
+ * setTimeout — no daemon, no cron. When the app exits, fires stop; on next
+ * launch, schedules are re-loaded from disk and the next fire is computed
+ * from `every` against `status.lastRunAt`.
+ */
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  /** Project to spawn the terminal in (FK into projects.json). */
+  projectId: string;
+  profile: LaunchProfileId;
+  extraArgs?: string[];
+  /** Optional initial prompt — typed into the pty on first data event. */
+  prompt?: string;
+  schedule: {
+    /** Human-friendly interval. Examples: "5m", "1h", "24h", "300000ms". Min 60s. */
+    every: string;
+  };
+  /** Only 'skip' is honored in v1; the field is reserved for future modes. */
+  overlap: 'skip';
+  history: {
+    retain: number;
+  };
+  status: ScheduleStatus;
+  /** ISO-8601. */
+  createdAt: string;
+  /** ISO-8601. */
+  updatedAt: string;
+  /** Set by the loader for UI display; not persisted. */
+  source?: 'global' | { projectId: string };
+}
+
+export interface ScheduleCreateInput {
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  projectId: string;
+  profile: LaunchProfileId;
+  extraArgs?: string[];
+  prompt?: string;
+  every: string;
+  /** When omitted, the schedule is written to the global directory. */
+  scope?: 'global' | { projectId: string };
+  retain?: number;
+}
+
+/**
+ * Reusable preset that pre-fills the New Schedule form. Templates are *seeds*,
+ * not running schedules — once a user enables one, it becomes a normal
+ * `ScheduledTask` in the schedules store. Discovered from three places:
+ *  - built-in catalogue shipped with the app
+ *  - `~/.cc-center/templates/<id>.json` (user-dropped, hand-editable)
+ *  - `<project.path>/.cc-center/templates/<id>.json` (project-shipped)
+ */
+export interface ScheduleTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  /** Free-form grouping in the picker UI ("QA", "Maintenance", "Reports"). */
+  category?: string;
+  /** Lucide icon name. Renderer falls back to a generic icon if missing or unknown. */
+  icon?: string;
+  defaults: {
+    profile: LaunchProfileId;
+    every: string;
+    prompt?: string;
+    extraArgs?: string[];
+    /** Used as the default schedule name; user can override before enabling. */
+    name?: string;
+    description?: string;
+  };
+  /** Set by the loader for UI display; never read from disk. */
+  source?: 'builtin' | 'user' | { projectId: string; projectName?: string };
+}
+
+export interface ScheduleUpdateInput {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  projectId?: string;
+  profile?: LaunchProfileId;
+  extraArgs?: string[];
+  prompt?: string;
+  every?: string;
+  retain?: number;
+}
+
 export interface SkillEntry {
   name: string;
   path: string;
@@ -363,6 +483,18 @@ export interface CcApi {
       scope: ClaudeSettingsScope,
       patch: ClaudeProjectSettings
     ): Promise<ClaudeSettingsResult>;
+  };
+  scheduler: {
+    list(): Promise<ScheduledTask[]>;
+    create(input: ScheduleCreateInput): Promise<Result<ScheduledTask>>;
+    update(id: string, patch: ScheduleUpdateInput): Promise<Result<ScheduledTask>>;
+    delete(id: string): Promise<void>;
+    setEnabled(id: string, enabled: boolean): Promise<ScheduledTask | null>;
+    runNow(id: string): Promise<Result<ScheduledTask>>;
+    onChanged(cb: (tasks: ScheduledTask[]) => void): () => void;
+    listTemplates(): Promise<ScheduleTemplate[]>;
+    onTemplatesChanged(cb: (templates: ScheduleTemplate[]) => void): () => void;
+    revealTemplatesDir(): Promise<{ ok: boolean; path: string; message?: string }>;
   };
 }
 

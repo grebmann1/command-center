@@ -8,7 +8,8 @@ import {
   Globe,
   X,
   Bug,
-  RefreshCw
+  RefreshCw,
+  History
 } from 'lucide-react';
 import { useData, useUi } from '../store';
 import { getTerminal } from '../util/findRegistry';
@@ -53,10 +54,73 @@ const EMPTY_TABS: TerminalSession[] = [];
 // persisted across app restarts — dev servers usually aren't running.
 const lastUrlByProject = new Map<string, string>();
 
+const HISTORY_LIMIT = 12;
+// Persisted MRU list of URLs visited in the preview pane (per project).
+// Read from ProjectSettings.previewUrls on mount, written back debounced
+// when the user navigates somewhere new.
+const historyByProject = new Map<string, string[]>();
+const historyLoaded = new Set<string>();
+const historyWriteTimers = new Map<string, number>();
+
 export function PreviewPane({ projectId }: Props) {
   const tabs = useData((s) => s.terminals[projectId]) ?? EMPTY_TABS;
   const pushToast = useUi((s) => s.pushToast);
   const navRequest = useUi((s) => s.previewNav[projectId]);
+  const [history, setHistory] = useState<string[]>(
+    () => historyByProject.get(projectId) ?? []
+  );
+
+  // Lazy-load persisted history once per project (the cache survives remounts
+  // when toggling between Preview ↔ Terminals, so we only hit IPC the first
+  // time we see this project in this session).
+  useEffect(() => {
+    if (historyLoaded.has(projectId)) return;
+    historyLoaded.add(projectId);
+    let cancelled = false;
+    window.cc.projectSettings
+      .get(projectId)
+      .then((s) => {
+        if (cancelled) return;
+        const list = Array.isArray(s.previewUrls) ? s.previewUrls.slice(0, HISTORY_LIMIT) : [];
+        historyByProject.set(projectId, list);
+        setHistory(list);
+      })
+      .catch(() => {
+        /* ignore — empty history is fine */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const recordVisit = (url: string) => {
+    if (!/^https?:\/\//i.test(url)) return;
+    const cur = historyByProject.get(projectId) ?? [];
+    if (cur[0] === url) return;
+    const next = [url, ...cur.filter((u) => u !== url)].slice(0, HISTORY_LIMIT);
+    historyByProject.set(projectId, next);
+    setHistory(next);
+    const existing = historyWriteTimers.get(projectId);
+    if (existing !== undefined) window.clearTimeout(existing);
+    const t = window.setTimeout(() => {
+      historyWriteTimers.delete(projectId);
+      window.cc.projectSettings
+        .set(projectId, { previewUrls: historyByProject.get(projectId) ?? [] })
+        .catch(() => {});
+    }, 600);
+    historyWriteTimers.set(projectId, t);
+  };
+
+  const removeFromHistory = (url: string) => {
+    const cur = historyByProject.get(projectId) ?? [];
+    if (!cur.includes(url)) return;
+    const next = cur.filter((u) => u !== url);
+    historyByProject.set(projectId, next);
+    setHistory(next);
+    window.cc.projectSettings
+      .set(projectId, { previewUrls: next })
+      .catch(() => {});
+  };
 
   const initialUrl = lastUrlByProject.get(projectId) ?? 'about:blank';
   const [target, setTarget] = useState<string>(initialUrl);
@@ -130,7 +194,9 @@ export function PreviewPane({ projectId }: Props) {
       setAddr(local.url);
       setBusy(true);
       lastUrlByProject.set(projectId, local.url);
+      recordVisit(local.url);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detected, target, projectId]);
 
   // External nav requests (e.g. terminal link click). Re-fires on nonce bump
@@ -147,6 +213,10 @@ export function PreviewPane({ projectId }: Props) {
     setAddr(url);
     setBusy(true);
     lastUrlByProject.set(projectId, url);
+    recordVisit(url);
+    // recordVisit reads from a module-scoped Map, so referencing it from this
+    // effect doesn't require it in the dep array.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navRequest, projectId]);
 
   // Group detected URLs: localhost first, then everything else.
@@ -162,6 +232,14 @@ export function PreviewPane({ projectId }: Props) {
     }
     return { local, remote };
   }, [detected]);
+
+  // Recents: persisted URLs minus anything currently visible as a live
+  // detected URL (avoids showing the same item twice in the rail).
+  const recents = useMemo(() => {
+    if (history.length === 0) return [];
+    const live = new Set(detected.map((d) => d.url));
+    return history.filter((u) => !live.has(u));
+  }, [history, detected]);
 
   const navigate = (raw: string) => {
     const trimmed = raw.trim();
@@ -189,6 +267,7 @@ export function PreviewPane({ projectId }: Props) {
     setAddr(url);
     setBusy(true);
     lastUrlByProject.set(projectId, url);
+    recordVisit(url);
   };
 
   // Wire webview lifecycle events once mounted.
@@ -311,7 +390,7 @@ export function PreviewPane({ projectId }: Props) {
           <Globe size={12} />
           <span>Detected URLs</span>
         </div>
-        {detected.length === 0 ? (
+        {detected.length === 0 && recents.length === 0 ? (
           <div className="preview-rail-empty">
             No URLs in scrollback yet.<br />
             Start a dev server in any tab.
@@ -331,6 +410,14 @@ export function PreviewPane({ projectId }: Props) {
                 title="Remote"
                 items={grouped.remote}
                 onPick={navigate}
+                activeUrl={target}
+              />
+            )}
+            {recents.length > 0 && (
+              <RecentsGroup
+                items={recents}
+                onPick={navigate}
+                onRemove={removeFromHistory}
                 activeUrl={target}
               />
             )}
@@ -379,7 +466,13 @@ export function PreviewPane({ projectId }: Props) {
             }}
             placeholder="Type a URL or pick one from the left…"
             spellCheck={false}
+            list={`preview-history-${projectId}`}
           />
+          <datalist id={`preview-history-${projectId}`}>
+            {history.map((u) => (
+              <option key={u} value={u} />
+            ))}
+          </datalist>
           <button
             type="button"
             className="preview-btn"
@@ -512,6 +605,53 @@ function UrlGroup({
           <span className="preview-rail-url">{d.url}</span>
           <span className="preview-rail-from">{d.fromTabTitle}</span>
         </button>
+      ))}
+    </div>
+  );
+}
+
+function RecentsGroup({
+  items,
+  onPick,
+  onRemove,
+  activeUrl
+}: {
+  items: string[];
+  onPick: (url: string) => void;
+  onRemove: (url: string) => void;
+  activeUrl: string;
+}) {
+  return (
+    <div className="preview-rail-group">
+      <div className="preview-rail-label">
+        <History size={10} /> Recent
+      </div>
+      {items.map((url) => (
+        <div
+          key={url}
+          className={`preview-rail-item recent ${activeUrl === url ? 'active' : ''}`}
+        >
+          <button
+            type="button"
+            className="preview-rail-pick"
+            onClick={() => onPick(url)}
+            title={url}
+          >
+            <span className="preview-rail-url">{url}</span>
+          </button>
+          <button
+            type="button"
+            className="preview-rail-rm"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove(url);
+            }}
+            title="Remove from history"
+            aria-label="Remove from history"
+          >
+            <X size={10} />
+          </button>
+        </div>
       ))}
     </div>
   );

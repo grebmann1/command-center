@@ -6,10 +6,12 @@ import type {
   LaunchProfileId,
   ClaudeSessionSummary,
   GitStatus,
-  InboxEntry
+  InboxEntry,
+  ScheduledTask,
+  ScheduleTemplate
 } from '@shared/types';
 
-export type NavId = 'projects' | 'inbox' | 'settings';
+export type NavId = 'projects' | 'inbox' | 'scheduler' | 'settings';
 
 export interface Toast {
   id: string;
@@ -499,6 +501,31 @@ export const useData = create<DataState>((set, get) => ({
     window.cc.inbox.onRemoved((id) => {
       useInbox.getState().removeLocal(id);
     });
+
+    // Scheduler: one-shot list + push subscription. The main process emits
+    // `scheduler:onChanged` after every fire and after every CRUD action,
+    // so the panel never needs to poll.
+    try {
+      const tasks = await window.cc.scheduler.list();
+      useScheduler.setState({ tasks, loading: false });
+    } catch {
+      useScheduler.setState({ loading: false });
+    }
+    window.cc.scheduler.onChanged((tasks) => {
+      useScheduler.setState({ tasks });
+    });
+
+    // Templates: same one-shot + push pattern. Main watches the user dir +
+    // per-project dirs for hand-edited files and pushes refreshed lists.
+    try {
+      const templates = await window.cc.scheduler.listTemplates();
+      useScheduleTemplates.setState({ templates, loading: false });
+    } catch {
+      useScheduleTemplates.setState({ loading: false });
+    }
+    window.cc.scheduler.onTemplatesChanged((templates) => {
+      useScheduleTemplates.setState({ templates });
+    });
   },
 
   async loadProjects() {
@@ -965,6 +992,26 @@ export const useInboxRead = create<InboxReadState>()(
     { name: 'cc.inbox-read.v1', version: 1 }
   )
 );
+
+interface SchedulerLiveState {
+  tasks: ScheduledTask[];
+  loading: boolean;
+}
+
+export const useScheduler = create<SchedulerLiveState>(() => ({
+  tasks: [],
+  loading: true
+}));
+
+interface ScheduleTemplatesState {
+  templates: ScheduleTemplate[];
+  loading: boolean;
+}
+
+export const useScheduleTemplates = create<ScheduleTemplatesState>(() => ({
+  templates: [],
+  loading: true
+}));
 
 /** Sidebar-badge count: entries whose id isn't in the read set. */
 export function useUnreadInboxCount(): number {

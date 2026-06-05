@@ -98,6 +98,26 @@ const api: CcApi = {
       ipcRenderer.invoke(IPC.skills.setEnabled, name, enabled),
     readHooks: () => ipcRenderer.invoke(IPC.skills.readHooks)
   },
+  scheduler: {
+    list: () => ipcRenderer.invoke(IPC.scheduler.list),
+    create: (input) => ipcRenderer.invoke(IPC.scheduler.create, input),
+    update: (id, patch) => ipcRenderer.invoke(IPC.scheduler.update, id, patch),
+    delete: (id) => ipcRenderer.invoke(IPC.scheduler.delete, id),
+    setEnabled: (id, enabled) => ipcRenderer.invoke(IPC.scheduler.setEnabled, id, enabled),
+    runNow: (id) => ipcRenderer.invoke(IPC.scheduler.runNow, id),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, tasks: Parameters<typeof cb>[0]) => cb(tasks);
+      ipcRenderer.on(IPC.scheduler.onChanged, handler);
+      return () => ipcRenderer.off(IPC.scheduler.onChanged, handler);
+    },
+    listTemplates: () => ipcRenderer.invoke(IPC.scheduler.listTemplates),
+    onTemplatesChanged: (cb) => {
+      const handler = (_e: unknown, templates: Parameters<typeof cb>[0]) => cb(templates);
+      ipcRenderer.on(IPC.scheduler.onTemplatesChanged, handler);
+      return () => ipcRenderer.off(IPC.scheduler.onTemplatesChanged, handler);
+    },
+    revealTemplatesDir: () => ipcRenderer.invoke(IPC.scheduler.revealTemplatesDir)
+  },
   app: {
     onMenuEvent: (cb: (event: string) => void) => {
       const events = [

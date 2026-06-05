@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Folder, TerminalSquare, Plus, ChevronRight, Code2, FolderOpen, FileSearch, Sparkles, Play, Zap, Keyboard, History, Search, Inbox, RotateCcw, Trash2, Copy, Pin, PinOff, Globe } from 'lucide-react';
+import { Folder, TerminalSquare, Plus, ChevronRight, Code2, FolderOpen, FileSearch, Sparkles, Play, Zap, Keyboard, History, Search, Inbox, RotateCcw, Trash2, Copy, Pin, PinOff, Globe, Clock, LayoutGrid, RotateCw, Undo2 } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
-import { useData, useUi } from '../store';
+import { useData, useScheduler, useUi } from '../store';
 import type { LaunchProfileId, OpenTarget, Project } from '@shared/types';
+import { fuzzyScore } from '../util/fuzzy';
 
 interface PaletteItem {
   key: string;
@@ -23,12 +24,16 @@ export function CommandPalette({ onClose }: Props) {
   const createTerminal = useData((s) => s.createTerminal);
   const restartTerminal = useData((s) => s.restartTerminal);
   const closeTerminal = useData((s) => s.closeTerminal);
+  const reopenLastClosed = useData((s) => s.reopenLastClosed);
   const setPinned = useData((s) => s.setPinned);
+  const scheduledTasks = useScheduler((s) => s.tasks);
   const selectProject = useUi((s) => s.selectProject);
   const selectTab = useUi((s) => s.selectTab);
   const setNav = useUi((s) => s.setNav);
   const setSettingsTab = useUi((s) => s.setSettingsTab);
   const setWorkspaceMode = useUi((s) => s.setWorkspaceMode);
+  const setOverviewOpen = useUi((s) => s.setOverviewOpen);
+  const overviewOpen = useUi((s) => s.overviewOpen);
   const selectedProjectId = useUi((s) => s.selectedProjectId);
   const selectedTabId = useUi((s) => s.selectedTabId);
   const pushToast = useUi((s) => s.pushToast);
@@ -117,23 +122,59 @@ export function CommandPalette({ onClose }: Props) {
           setNav('inbox');
           onClose();
         }
+      },
+      {
+        key: 'action:scheduler',
+        icon: <Clock size={14} />,
+        label: 'Open Scheduler',
+        hint: '⌘J',
+        run: () => {
+          setNav('scheduler');
+          onClose();
+        }
+      },
+      {
+        key: 'action:overview',
+        icon: <LayoutGrid size={14} />,
+        label: overviewOpen ? 'Close Overview' : 'Open Overview',
+        hint: '⌘O',
+        run: () => {
+          setNav('projects');
+          setOverviewOpen(!overviewOpen);
+          onClose();
+        }
       }
     ];
-    const tabItems: PaletteItem[] = selectedProject
-      ? selectedProjectTabs.map((t) => ({
-          key: `tab:${t.id}`,
-          icon: <TerminalSquare size={14} />,
-          label: `${t.title}${t.status === 'exited' ? ' · exited' : ''}`,
-          hint: `${selectedProject.name} · ${t.profile}`,
-          run: () => {
-            selectProject(selectedProject.id);
-            selectTab(selectedProject.id, t.id);
-            setWorkspaceMode(selectedProject.id, 'terminals');
-            setNav('projects');
-            onClose();
-          }
-        }))
-      : [];
+    // Tabs from every project. The selected project's tabs come first so
+    // arrow-key muscle memory still lands on local tabs without typing,
+    // followed by tabs from other projects (cross-project jump-to-tab).
+    const tabItems: PaletteItem[] = [];
+    const seenTab = new Set<string>();
+    const pushTab = (proj: Project, t: typeof selectedProjectTabs[number]) => {
+      if (seenTab.has(t.id)) return;
+      seenTab.add(t.id);
+      tabItems.push({
+        key: `tab:${t.id}`,
+        icon: <TerminalSquare size={14} />,
+        label: `${t.title}${t.status === 'exited' ? ' · exited' : ''}`,
+        hint: `${proj.name} · ${t.profile}`,
+        run: () => {
+          selectProject(proj.id);
+          selectTab(proj.id, t.id);
+          setWorkspaceMode(proj.id, 'terminals');
+          setNav('projects');
+          onClose();
+        }
+      });
+    };
+    if (selectedProject) {
+      for (const t of selectedProjectTabs) pushTab(selectedProject, t);
+    }
+    for (const p of projects) {
+      if (selectedProject && p.id === selectedProject.id) continue;
+      const list = terminals[p.id] ?? [];
+      for (const t of list) pushTab(p, t);
+    }
     if (selectedProject) {
       const path = selectedProject.path;
       const open = async (target: OpenTarget) => {
@@ -283,6 +324,38 @@ export function CommandPalette({ onClose }: Props) {
           }
         });
       }
+      actions.push({
+        key: 'action:reopen-last-closed',
+        icon: <Undo2 size={14} />,
+        label: `Reopen last closed tab in ${selectedProject.name}`,
+        hint: '⌘⇧T',
+        run: () => {
+          const pid = selectedProject.id;
+          onClose();
+          reopenLastClosed(pid).then((s) => {
+            if (s) selectTab(pid, s.id);
+          }).catch(() => {});
+        }
+      });
+      const projectSchedules = scheduledTasks.filter(
+        (t) => t.projectId === selectedProject.id && t.enabled
+      );
+      for (const task of projectSchedules) {
+        actions.push({
+          key: `action:run-schedule:${task.id}`,
+          icon: <RotateCw size={14} />,
+          label: `Run schedule now: ${task.name}`,
+          hint: `every ${task.schedule.every} · ${task.profile}`,
+          run: () => {
+            const id = task.id;
+            const name = task.name;
+            onClose();
+            window.cc.scheduler.runNow(id).then((r) => {
+              if (!r.ok) pushToast(r.message ?? `Failed to run ${name}`, 'error');
+            }).catch(() => {});
+          }
+        });
+      }
       const exitedNonPinned = selectedProjectTabs.filter(
         (t) => t.status === 'exited' && !t.pinned
       );
@@ -304,16 +377,31 @@ export function CommandPalette({ onClose }: Props) {
       }
     }
     return [...projectItems, ...tabItems, ...actions];
-  }, [projects, addProject, selectProject, selectTab, setWorkspaceMode, setNav, setSettingsTab, onClose, selectedProject, selectedProjectTabs, activeTab, restartTerminal, closeTerminal, setPinned, pushToast, launch]);
+  }, [projects, terminals, addProject, selectProject, selectTab, setWorkspaceMode, setNav, setSettingsTab, setOverviewOpen, overviewOpen, onClose, selectedProject, selectedProjectTabs, activeTab, restartTerminal, closeTerminal, reopenLastClosed, setPinned, pushToast, launch, scheduledTasks]);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim();
     if (!q) return items;
-    return items.filter(
-      (it) =>
-        it.label.toLowerCase().includes(q) ||
-        (it.hint?.toLowerCase().includes(q) ?? false)
-    );
+    // Fuzzy-score against label, with hint as a weaker fallback. Stable
+    // sort: when scores tie, original order wins (the items array is
+    // already arranged in a sensible default — projects, tabs, actions).
+    const scored: Array<{ item: PaletteItem; score: number; idx: number }> = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const m = fuzzyScore(it.label, q);
+      let score = m?.score ?? -Infinity;
+      if (it.hint) {
+        const hm = fuzzyScore(it.hint, q);
+        if (hm) {
+          // Hints are secondary signal — half-weight.
+          const hintScore = hm.score * 0.5;
+          if (hintScore > score) score = hintScore;
+        }
+      }
+      if (score > -Infinity) scored.push({ item: it, score, idx: i });
+    }
+    scored.sort((a, b) => (b.score - a.score) || (a.idx - b.idx));
+    return scored.map((s) => s.item);
   }, [items, query]);
 
   useEffect(() => {

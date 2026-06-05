@@ -17,6 +17,8 @@ import { listMcpServers, setMcpServerEnabled } from './mcp.js';
 import { readClaudeProjectSettings, writeClaudeProjectSettings } from './claude-settings.js';
 import { listSkills, setSkillEnabled, readHooks } from './skills.js';
 import { listSshHosts } from './ssh-config.js';
+import { SchedulerManager } from './scheduler.js';
+import { TemplateStore } from './template-store.js';
 import { homedir } from 'node:os';
 import type {
   CreateTerminalRequest,
@@ -27,7 +29,10 @@ import type {
   AppConfig,
   ProjectSettings,
   ClaudeProjectSettings,
-  ClaudeSettingsScope
+  ClaudeSettingsScope,
+  ScheduleCreateInput,
+  ScheduleUpdateInput,
+  ScheduledTask
 } from '../shared/types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -46,6 +51,8 @@ function isWithin(child: string, parent: string): boolean {
 let win: BrowserWindow | null = null;
 const ptys = new PtyManager();
 const inboxStore: IInboxStore = createInboxStore();
+const scheduler = new SchedulerManager();
+const templates = new TemplateStore(() => store.listProjects());
 let mcpServer: McpServerHandle | null = null;
 
 // Resolve packaged or unpackaged icon location. In dev electron-vite runs from
@@ -192,6 +199,7 @@ function registerIpc() {
       ensureMcpConfigForProject(project.id).catch((err) =>
         logMainError(`ensureMcpConfigForProject(${project.id})`, err)
       );
+      templates.rebindProjects();
       return { ok: true, value: project };
     } catch (err) {
       return { ok: false, code: 'ADD_FAILED', message: String(err) };
@@ -217,6 +225,7 @@ function registerIpc() {
     (id: string) => {
       ptys.list(id).forEach((s) => ptys.close(s.id));
       store.removeProject(id);
+      templates.rebindProjects();
     },
     () => undefined
   );
@@ -395,6 +404,57 @@ function registerIpc() {
   );
   safeHandle(IPC.skills.readHooks, () => readHooks(), () => null);
   safeHandle(IPC.app.homedir, () => homedir(), () => '');
+
+  safeHandle(IPC.scheduler.list, () => scheduler.list(), () => []);
+  ipcMain.handle(
+    IPC.scheduler.create,
+    async (_e, input: ScheduleCreateInput): Promise<Result<ScheduledTask>> => {
+      try {
+        return { ok: true, value: scheduler.create(input) };
+      } catch (err) {
+        return { ok: false, code: 'CREATE_FAILED', message: String(err) };
+      }
+    }
+  );
+  ipcMain.handle(
+    IPC.scheduler.update,
+    async (_e, id: string, patch: ScheduleUpdateInput): Promise<Result<ScheduledTask>> => {
+      try {
+        return { ok: true, value: scheduler.update(id, patch) };
+      } catch (err) {
+        return { ok: false, code: 'UPDATE_FAILED', message: String(err) };
+      }
+    }
+  );
+  safeHandle(IPC.scheduler.delete, (id: string) => scheduler.remove(id), () => undefined);
+  safeHandle(
+    IPC.scheduler.setEnabled,
+    (id: string, enabled: boolean) => scheduler.setEnabled(id, enabled),
+    () => null
+  );
+  ipcMain.handle(
+    IPC.scheduler.runNow,
+    async (_e, id: string): Promise<Result<ScheduledTask>> => {
+      try {
+        return { ok: true, value: scheduler.runNow(id) };
+      } catch (err) {
+        return { ok: false, code: 'RUN_FAILED', message: String(err) };
+      }
+    }
+  );
+  scheduler.on('changed', () => {
+    safeSend(IPC.scheduler.onChanged, scheduler.list());
+  });
+
+  safeHandle(IPC.scheduler.listTemplates, () => templates.list(), () => []);
+  safeHandle(
+    IPC.scheduler.revealTemplatesDir,
+    () => templates.revealUserDir(),
+    () => ({ ok: false, path: '', message: 'Failed to reveal templates directory' })
+  );
+  templates.on('changed', () => {
+    safeSend(IPC.scheduler.onTemplatesChanged, templates.list());
+  });
 }
 
 function buildAppMenu() {
@@ -543,6 +603,9 @@ app.whenReady().then(() => {
   });
   buildAppMenu();
   registerIpc();
+  scheduler.setDeps({ ptys, store });
+  scheduler.loadAll(store.listProjects());
+  templates.start();
   // Boot the local MCP server, then plumb its URL into PtyManager so any
   // claude-family terminal spawns get `CC_MCP_URL` injected. Errors here
   // are logged but non-fatal — the app still works without inbox push.
@@ -578,6 +641,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  scheduler.stopAll();
+  templates.stop();
   ptys.killAll();
   if (mcpServer) {
     const handle = mcpServer;

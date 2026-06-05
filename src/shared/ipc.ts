@@ -69,5 +69,17 @@ export const IPC = {
   },
   app: {
     homedir: 'app:homedir'
+  },
+  scheduler: {
+    list: 'scheduler:list',
+    create: 'scheduler:create',
+    update: 'scheduler:update',
+    delete: 'scheduler:delete',
+    setEnabled: 'scheduler:setEnabled',
+    runNow: 'scheduler:runNow',
+    onChanged: 'scheduler:onChanged',
+    listTemplates: 'scheduler:listTemplates',
+    onTemplatesChanged: 'scheduler:onTemplatesChanged',
+    revealTemplatesDir: 'scheduler:revealTemplatesDir'
   }
 } as const;
