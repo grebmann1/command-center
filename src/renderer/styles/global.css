@@ -88,6 +88,11 @@ input {
   height: 100vh;
 }
 
+/* Collapsed sidebar: shrink the nav column to an icon-only rail. */
+.app-shell:has(.sidebar.collapsed) {
+  --col-nav: 56px;
+}
+
 .titlebar {
   grid-column: 1 / -1;
   background: var(--bg-base);
@@ -106,6 +111,7 @@ input {
   display: flex;
   flex-direction: column;
   padding: 12px 8px;
+  overflow: hidden;
 }
 
 .brand {
@@ -125,6 +131,119 @@ input {
   font-weight: 700;
   color: #1a1207;
   font-size: 13px;
+  flex-shrink: 0;
+}
+
+/* Collapse/expand toggle, pushed to the right edge of the brand row. */
+.sidebar-toggle {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  color: var(--text-dim);
+}
+
+.sidebar-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Truncate the wordmark instead of wrapping while the rail animates. */
+.brand-name {
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* --- Collapsed (icon-rail) state --- */
+
+.sidebar.collapsed .brand {
+  gap: 0;
+  padding: 8px 0 16px;
+  justify-content: center;
+  position: relative;
+}
+
+.sidebar.collapsed .brand-name {
+  display: none;
+}
+
+/* The avatar fills the rail; on hover it fades out and the expand toggle
+ * fades in over it, keeping the rail clean but the control reachable. */
+.sidebar.collapsed .sidebar-toggle {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 28px;
+  height: 28px;
+  opacity: 0;
+}
+
+.sidebar.collapsed .brand:hover .brand-avatar {
+  opacity: 0;
+}
+
+.sidebar.collapsed .brand:hover .sidebar-toggle {
+  opacity: 1;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sidebar.collapsed .nav-item {
+  position: relative;
+  justify-content: center;
+  padding: 8px 0;
+  gap: 0;
+}
+
+.sidebar.collapsed .nav-item-label {
+  display: none;
+}
+
+/* Float badges over the icon since there's no label to sit beside. */
+.sidebar.collapsed .nav-badge {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+}
+
+/* Icon wrapper anchors the small running-dot indicator. */
+.nav-item-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+/* Tiny green pip on the scheduler icon when schedules are running. The numeric
+ * running badge carries the count when the rail is expanded; on the collapsed
+ * rail the dot is the only running signal. */
+.nav-running-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 2px var(--bg-base);
+}
+
+.nav-badge--running {
+  background: var(--success);
+}
+
+/* The expanded rail already shows the count badge, so the dot is redundant
+ * there — keep it only on the collapsed rail. */
+.sidebar:not(.collapsed) .nav-running-dot {
+  display: none;
+}
+
+/* On the collapsed rail the dot conveys "running"; hide the count badge. */
+.sidebar.collapsed .nav-badge--running {
+  display: none;
 }
 
 .brand-name {
@@ -653,6 +772,42 @@ body.resizing-col {
 
 /* Remote-project-specific bits */
 
+/* Hint line + refresh control sit on one row above the host list. */
+.remote-host-hint-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.remote-host-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #30363d);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.remote-host-refresh:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.remote-host-refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.remote-host-refresh .spinning {
+  animation: preview-spin 1s linear infinite;
+}
+
 .remote-host-list {
   display: flex;
   flex-direction: column;
@@ -769,6 +924,11 @@ body.resizing-col {
   grid-template-rows: var(--tab-h) 1fr var(--status-h);
   background: var(--bg-base);
   min-width: 0;
+  /* Grid item of .app-shell's 1fr row track. Without min-height:0 its
+     automatic minimum is content height, so normal-flow children (the
+     markdown preview) push it past the viewport and nothing scrolls.
+     Monaco dodged this by being absolutely positioned internally. */
+  min-height: 0;
 }
 
 .workspace-topbar {
@@ -1617,6 +1777,7 @@ body.resizing-col {
 }
 
 .tab-add {
+  position: relative;
   height: 100%;
   display: grid;
   place-items: center;
@@ -1626,6 +1787,56 @@ body.resizing-col {
 
 .tab-add:hover {
   color: var(--text-primary);
+}
+
+/* Count of detached (background) sessions, overlaid on the + button so the
+   user always knows work is running off-strip. */
+.tab-add-bg-count {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--accent-blue);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Background-session count chip in the sidebar project badge. */
+.project-badge-bg {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 3px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+/* Background list rows in the new-tab popover: resume button + kill button. */
+.tab-menu-bg-row {
+  display: flex;
+  align-items: center;
+}
+.tab-menu-bg-row .tab-menu-hidden {
+  flex: 1;
+  min-width: 0;
+}
+.tab-menu-bg-kill {
+  display: grid;
+  place-items: center;
+  padding: 4px 6px;
+  color: var(--text-muted);
+  border-radius: 4px;
+}
+.tab-menu-bg-kill:hover {
+  color: var(--danger);
+  background: var(--bg-hover);
 }
 
 .terminal-host {
@@ -2498,6 +2709,10 @@ body.resizing-col {
 .explorer-view {
   display: grid;
   grid-template-columns: 260px 1fr;
+  /* Constrain the single row to the available height; without this the
+     implicit row auto-sizes to content, so normal-flow children (the markdown
+     preview) grow the track instead of scrolling within it. */
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
   background: var(--bg-panel);
@@ -2617,6 +2832,19 @@ body.resizing-col {
   flex: 1;
   min-height: 0;
   min-width: 0;
+}
+
+/* Rendered markdown preview — fills the same slot Monaco would and scrolls on
+   its own. Reuses the .inbox-md typography rules for visual consistency. */
+.explorer-md-preview {
+  height: 100%;
+  overflow: auto;
+  padding: 16px 28px;
+  background: var(--bg-base);
+}
+
+.explorer-md-preview .inbox-md {
+  max-width: 900px;
 }
 
 .shortcuts-modal {
@@ -2852,6 +3080,13 @@ body.resizing-col {
   text-align: center;
   line-height: 14px;
   letter-spacing: 0.02em;
+}
+
+/* Armed-but-idle schedule count: muted so it reads as informational, not an
+ * alert (the blue unread badge stays reserved for the inbox). */
+.nav-badge--muted {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--text-muted);
 }
 
 .inbox-list-pane .list-body {
@@ -5260,6 +5495,17 @@ body.resizing-col {
   font-weight: 600;
 }
 
+.overview-card-badge {
+  margin-left: 6px;
+  padding: 1px 7px;
+  font-size: 11px;
+  border-radius: 10px;
+  background: rgba(63, 185, 80, 0.15);
+  color: rgb(63, 185, 80);
+  border: 1px solid rgba(63, 185, 80, 0.35);
+  font-weight: 600;
+}
+
 .overview-empty {
   padding: 18px 14px;
   font-size: 12px;
@@ -5820,4 +6066,724 @@ body.resizing-col {
 
 .mcp-locked-link:hover {
   color: var(--text);
+}
+
+
+/* ── GUS module: kanban board ──────────────────────────────────────────── */
+/* The module owns columns 2..end (ListPane yields for module navs). */
+.gus-panel {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  background: var(--bg-base);
+  overflow: hidden;
+  /* Positioning context for the absolutely-placed undo banner. */
+  position: relative;
+}
+
+.gus-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px;
+  height: var(--tab-h);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.gus-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gus-header-icon {
+  color: var(--accent-gold);
+}
+.gus-header-title h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
+}
+.gus-user {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.gus-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.gus-count-pill {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 9px;
+}
+.gus-spin {
+  animation: gus-spin 0.8s linear infinite;
+}
+@keyframes gus-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Body = filter rail + content. */
+.gus-body {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+.gus-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 10px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow-y: auto;
+}
+.gus-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 8px;
+}
+.gus-search:focus-within {
+  border-color: var(--accent-blue);
+}
+.gus-search-icon {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.gus-search input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.gus-search input::placeholder {
+  color: var(--text-dim);
+}
+.gus-search-clear {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  padding: 0;
+}
+.gus-search-clear:hover {
+  color: var(--text-primary);
+}
+
+.gus-rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.gus-rail-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  padding: 0 6px 6px;
+}
+.gus-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.gus-rail-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.gus-rail-item.active {
+  background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
+  color: var(--text-primary);
+}
+.gus-rail-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.gus-rail-item-name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gus-rail-count {
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+  border-radius: 9px;
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+.gus-rail-item.active .gus-rail-count {
+  color: var(--text-muted);
+}
+.gus-rail-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 6px;
+}
+.gus-now-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+
+.gus-content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.gus-board {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  overflow-x: auto;
+  flex: 1;
+  align-items: stretch;
+}
+.gus-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 250px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.gus-column-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+.gus-column-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.gus-column-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-base);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+.gus-column-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  overflow-y: auto;
+  flex: 1;
+}
+.gus-column-empty {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
+  padding: 14px 0;
+  opacity: 0.6;
+}
+
+.gus-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  text-align: left;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 10px 11px;
+  cursor: pointer;
+  /* Constrain to the column width so long unbroken tokens (e.g.
+     markup://… ids) wrap instead of stretching the card. */
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  transition: border-color 0.12s, background 0.12s, transform 0.06s;
+}
+.gus-card:hover {
+  border-color: var(--border-strong);
+  border-left-color: var(--accent-blue);
+  background: var(--bg-hover);
+}
+.gus-card:active {
+  transform: translateY(1px);
+}
+.gus-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.gus-card-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  color: var(--accent-blue);
+}
+/* W-number can be long; keep it on one truncated line so the priority
+   pill stays pinned to the right. */
+.gus-card-type > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gus-card-type > svg {
+  flex-shrink: 0;
+}
+.gus-card-type--bug {
+  color: var(--danger);
+}
+.gus-prio {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.gus-prio--p0,
+.gus-prio--p1 {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+.gus-prio--p2 {
+  color: var(--accent-gold);
+  background: color-mix(in srgb, var(--accent-gold) 16%, transparent);
+}
+.gus-card-subject {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-width: 0;
+  /* Break long unbroken tokens (markup://…, URLs) rather than overflow. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.gus-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.gus-chip {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 170px;
+}
+.gus-chip--pts {
+  color: var(--text-dim);
+}
+.gus-card-open {
+  margin-left: auto;
+  color: var(--text-dim);
+}
+.gus-card:hover .gus-card-open {
+  color: var(--accent-blue);
+}
+
+.gus-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  padding: 0 6px;
+  margin-top: auto;
+}
+
+.gus-error {
+  display: flex;
+  gap: 10px;
+  margin: 16px;
+  padding: 14px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--text-primary);
+}
+.gus-error p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.gus-error-hint code {
+  font-size: 11px;
+  background: var(--bg-elevated);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.gus-loading {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* ── GUS module: detail modal ──────────────────────────────────────────── */
+.gus-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 92vw);
+  max-height: 84vh;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.gus-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+.gus-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.gus-modal-title .gus-card-type {
+  font-size: 13px;
+}
+.gus-modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.gus-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.gus-open-btn:hover {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+.gus-modal-body {
+  padding: 16px 18px 20px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.gus-modal-subject {
+  margin: 0 0 14px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.gus-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px 16px;
+  margin: 0 0 18px;
+  padding: 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.gus-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.gus-fact dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.gus-fact dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.gus-modal-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.gus-modal-loading,
+.gus-modal-empty,
+.gus-modal-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  padding: 8px 0;
+}
+.gus-modal-error {
+  color: var(--danger);
+}
+.gus-richtext {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.gus-richtext p {
+  margin: 0 0 10px;
+}
+.gus-richtext ul,
+.gus-richtext ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+.gus-richtext li {
+  margin: 2px 0;
+}
+.gus-richtext a {
+  color: var(--accent-blue);
+  cursor: pointer;
+}
+.gus-richtext h4,
+.gus-richtext h5,
+.gus-richtext h6 {
+  margin: 14px 0 6px;
+  color: var(--text-primary);
+}
+.gus-richtext code {
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 12px;
+  background: var(--bg-base);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.gus-richtext pre {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  overflow-x: auto;
+}
+.gus-richtext blockquote {
+  margin: 0 0 10px;
+  padding-left: 12px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+}
+.gus-richtext table {
+  border-collapse: collapse;
+  margin: 0 0 10px;
+}
+.gus-richtext td,
+.gus-richtext th {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* ── GUS module: drag/drop, undo banner, chatter ───────────────────────── */
+.gus-card.is-draggable {
+  cursor: grab;
+}
+/* Collapse the origin card while dragging so only the floating drag image is
+   visible (no clone). The flip is deferred one tick in onDragStart so the
+   browser still snapshots the full card for the drag image. */
+.gus-card.is-dragging {
+  display: none;
+}
+.gus-column.is-droppable.is-over {
+  background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-panel));
+}
+.gus-column.is-droppable.is-over .gus-column-head {
+  border-bottom-color: var(--accent-blue);
+}
+.gus-column.is-droppable.is-over .gus-column-body {
+  outline: 2px dashed var(--accent-blue);
+  outline-offset: -6px;
+  border-radius: 8px;
+}
+/* The Other catch-all column reads as muted/non-interactive. */
+.gus-column--other .gus-column-head {
+  background: var(--bg-base);
+}
+.gus-column--other .gus-column-title {
+  color: var(--text-dim);
+}
+
+.gus-undo {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 10px 8px 14px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  z-index: 40;
+}
+.gus-undo strong {
+  color: var(--accent-blue);
+}
+.gus-undo button {
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.gus-undo button:hover {
+  filter: brightness(1.08);
+}
+
+/* Chatter in the detail modal. */
+.gus-modal-chatter {
+  margin-top: 20px;
+}
+.gus-modal-chatter .gus-modal-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.gus-chatter-count {
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg-base);
+  border-radius: 9px;
+  padding: 0 6px;
+  margin-left: 2px;
+}
+.gus-chatter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.gus-chatter-post {
+  display: flex;
+  gap: 10px;
+}
+.gus-chatter-avatar {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gus-chatter-main {
+  min-width: 0;
+  flex: 1;
+}
+.gus-chatter-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.gus-chatter-author {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.gus-chatter-time {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.gus-chatter-body {
+  margin-top: 2px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

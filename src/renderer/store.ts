@@ -13,7 +13,8 @@ import type {
   ScheduleTemplate
 } from '@shared/types';
 
-export type NavId =
+/** Built-in nav destinations. App modules (plugins/*) add their own ids. */
+export type CoreNavId =
   | 'projects'
   | 'inbox'
   | 'scheduler'
@@ -21,6 +22,13 @@ export type NavId =
   | 'skills'
   | 'mcp'
   | 'settings';
+
+/**
+ * A nav destination: a core panel or an app-module id. The `string & {}`
+ * arm keeps autocomplete for the known ids while allowing module ids
+ * (resolved at runtime from the module registry) without a hard import.
+ */
+export type NavId = CoreNavId | (string & {});
 
 export interface Toast {
   id: string;
@@ -101,6 +109,10 @@ interface UiState {
   // localStorage so a crash on boot can be recovered by toggling off.
   workbenchEnabled: boolean;
   setWorkbenchEnabled: (on: boolean) => void;
+  // sidebar: collapsed to an icon rail (labels hidden) to save horizontal
+  // space. Persisted in localStorage so it survives reloads.
+  sidebarCollapsed: boolean;
+  toggleSidebar: () => void;
   setNav: (n: NavId) => void;
   /** Cross-panel deep-link prefilter: a Plugin row's "4 skills" chip writes
    *  `catalogueFilter.skills = pluginName`, then navs to skills. The skills
@@ -231,6 +243,19 @@ export const useUi = create<UiState>((set) => ({
     // chosen surface ever loads in a given page lifetime.
     queueMicrotask(() => window.location.reload());
   },
+  sidebarCollapsed:
+    typeof localStorage !== 'undefined' &&
+    localStorage.getItem('cc.sidebarCollapsed') === '1',
+  toggleSidebar: () =>
+    set((s) => {
+      const next = !s.sidebarCollapsed;
+      try {
+        localStorage.setItem('cc.sidebarCollapsed', next ? '1' : '0');
+      } catch {
+        // ignore quota errors
+      }
+      return { sidebarCollapsed: next };
+    }),
   setNav: (nav) => set({ nav }),
   catalogueFilter: {},
   setCatalogueFilter: (key, value) =>
@@ -427,6 +452,10 @@ export interface ClosedTab {
   profile: LaunchProfileId;
   title: string;
   extraArgs?: string[];
+  /** Reopen in the same directory the closed tab ran in (else project root). */
+  cwd?: string;
+  /** Re-pin on reopen if the closed tab was pinned. */
+  pinned?: boolean;
 }
 
 interface DataState {
@@ -434,6 +463,13 @@ interface DataState {
   terminals: Record<string, TerminalSession[]>; // by project id
   claudeSessions: Record<string, ClaudeSessionSummary[]>; // by project id
   closedTabs: Record<string, ClosedTab[]>; // by project id, most recent at end
+  /**
+   * Session ids detached to the background, per project, most recent last.
+   * Renderer-only ordering used to resume the newest-detached session first
+   * (⌘⇧T). Kept separate from the session objects so main's onUpdated pushes
+   * can't clobber the order.
+   */
+  detachedStack: Record<string, string[]>;
   gitStatus: Record<string, GitStatus | null>; // by project id
   fontSize: number;
   inboxGuidanceEnabled: boolean;
@@ -463,15 +499,29 @@ interface DataState {
     rows: number,
     opts?: { extraArgs?: string[]; title?: string; cwd?: string }
   ) => Promise<TerminalSession | null>;
+  /**
+   * Terminate a session: kills the pty and removes the tab. Pushes a
+   * restorable snapshot onto closedTabs so ⌘⇧T can reopen a fresh tab
+   * with the same profile/cwd/pinned/extraArgs. Wired to the tab's X
+   * button, ⌘W, middle-click, and the sidebar row X.
+   */
   closeTerminal: (sessionId: string, projectId: string) => Promise<void>;
   /**
-   * Hide a tab without killing its pty. The session stays alive as a
-   * headless background runner; the user can promote it back via the
-   * Headless picker (right-click on the +). Used by the tab's X button.
+   * Detach a tab to the background without killing its pty. The session
+   * stays alive as a headless runner; it's surfaced by the Background (N)
+   * affordance and can be resumed via restoreTerminal (which re-attaches
+   * the SAME live pty, preserving scrollback). This is the explicit
+   * "Send to background" action — distinct from closeTerminal.
    */
   hideTerminal: (sessionId: string, projectId: string) => Promise<void>;
-  /** Bring a hidden tab back to the tab strip. */
+  /** Resume a detached (background) session back into the tab strip. */
   restoreTerminal: (sessionId: string, projectId: string) => Promise<void>;
+  /**
+   * Resume the most-recently-detached background session, if any. Returns
+   * the resumed session id or null when nothing is detached. Backs ⌘⇧T's
+   * "prefer un-detach over reopen-closed" behavior.
+   */
+  restoreLastDetached: (projectId: string) => Promise<string | null>;
   restartTerminal: (sessionId: string, projectId: string) => Promise<TerminalSession | null>;
   reorderTerminal: (projectId: string, fromId: string, toId: string) => void;
   renameTerminal: (projectId: string, sessionId: string, title: string) => void;
@@ -482,11 +532,23 @@ interface DataState {
 /**
  * Filter out hidden (headless) terminals from a project's tab strip. Hidden
  * sessions still have a live pty — they're just not shown in the UI. The
- * scheduler creates them this way; the user also produces them by clicking
- * the tab's X (which calls `hideTerminal`, not `closeTerminal`).
+ * scheduler creates them this way; the user also produces them by detaching
+ * a tab ("Send to background" / ⌘⇧W → `hideTerminal`). The tab's X button
+ * closes (terminates) instead — see `closeTerminal`.
  */
 export function visibleTerminals(list: TerminalSession[] | undefined): TerminalSession[] {
   return (list ?? []).filter((t) => !t.headless);
+}
+
+/**
+ * Detached (background) sessions for a project: headless and still live.
+ * These are the sessions surfaced by the Background (N) affordance — the
+ * user sent them to the background with the explicit Detach action and can
+ * resume them (re-attaching the same live pty). Exited-while-detached
+ * sessions are reaped in markExited, so anything here has a running pty.
+ */
+export function backgroundTerminals(list: TerminalSession[] | undefined): TerminalSession[] {
+  return (list ?? []).filter((t) => t.headless);
 }
 
 export function sortProjectsForDisplay(projects: Project[]): Project[] {
@@ -506,6 +568,7 @@ export const useData = create<DataState>((set, get) => ({
   terminals: {},
   claudeSessions: {},
   closedTabs: {},
+  detachedStack: {},
   gitStatus: {},
   fontSize: 13,
   inboxGuidanceEnabled: true,
@@ -540,6 +603,26 @@ export const useData = create<DataState>((set, get) => ({
         useUi.getState().selectProject(config.lastProjectId);
       }
       get().refreshAllGitStatus();
+
+      // Hydrate live terminals from main. Sessions otherwise only reach the
+      // renderer via `sessionUpdated` pushes, so any pty already running before
+      // this renderer mounted (a scheduler-spawned tab, or a session that
+      // outlived a renderer reload) would be invisible here. That divergence
+      // made "Running now" read 0 while the scheduler kept skipping fires with
+      // "previous run still active". Pull the current list per project so the
+      // store reflects what main actually has alive.
+      await Promise.all(
+        projects.map(async (p) => {
+          try {
+            const sessions = await window.cc.terminals.list(p.id);
+            if (sessions.length > 0) {
+              set((s) => ({ terminals: { ...s.terminals, [p.id]: sessions } }));
+            }
+          } catch {
+            /* ignore — a missing project's terminals just stay empty */
+          }
+        })
+      );
     } catch (err) {
       pushErrorToast(errorMessage(err, 'Failed to initialize app state'));
     }
@@ -827,7 +910,9 @@ export const useData = create<DataState>((set, get) => ({
   async closeTerminal(sessionId, projectId) {
     const list = get().terminals[projectId] || [];
     const closing = list.find((t) => t.id === sessionId);
-    const closingIdx = list.findIndex((t) => t.id === sessionId);
+    // Index within the VISIBLE strip so selection advances to the visual
+    // neighbor, not a hidden background session. Matches hideTerminal.
+    const closingIdx = visibleTerminals(list).findIndex((t) => t.id === sessionId);
     try {
       await window.cc.terminals.close(sessionId);
     } catch (err) {
@@ -841,16 +926,26 @@ export const useData = create<DataState>((set, get) => ({
       const remaining = (s.terminals[projectId] || []).filter((t) => t.id !== sessionId);
       const stack = (s.closedTabs[projectId] || []).slice();
       if (closing) {
+        // Capture enough to reopen faithfully: cwd + pinned so a warm reopen
+        // lands in the same directory and re-pins. Resume-picker tabs already
+        // carry `--resume <id>` in extraArgs, so those reopen as a continued
+        // conversation for free.
         stack.push({
           profile: closing.profile,
           title: closing.title,
-          extraArgs: closing.extraArgs
+          extraArgs: closing.extraArgs,
+          cwd: closing.cwd,
+          pinned: closing.pinned
         });
         if (stack.length > 10) stack.splice(0, stack.length - 10);
       }
+      // A closed tab is also no longer detached (covers closing a background
+      // session straight from the Background list).
+      const detached = (s.detachedStack[projectId] || []).filter((id) => id !== sessionId);
       return {
         terminals: { ...s.terminals, [projectId]: remaining },
-        closedTabs: { ...s.closedTabs, [projectId]: stack }
+        closedTabs: { ...s.closedTabs, [projectId]: stack },
+        detachedStack: { ...s.detachedStack, [projectId]: detached }
       };
     });
     // Advance selection: if the closed tab was active, pick the neighbor to
@@ -858,7 +953,7 @@ export const useData = create<DataState>((set, get) => ({
     // dangles on a removed id and the workspace renders blank.
     const ui = useUi.getState();
     if (ui.selectedTabId[projectId] === sessionId) {
-      const next = get().terminals[projectId] ?? [];
+      const next = visibleTerminals(get().terminals[projectId]);
       const targetIdx = Math.min(closingIdx, next.length - 1);
       const target = targetIdx >= 0 ? next[targetIdx]?.id : undefined;
       ui.selectTab(projectId, target);
@@ -890,7 +985,7 @@ export const useData = create<DataState>((set, get) => ({
     } catch (err) {
       // Revert on failure so the tab reappears rather than vanishing
       // silently. Failure is rare (only if the pty is already gone).
-      pushErrorToast(errorMessage(err, 'Failed to hide tab'));
+      pushErrorToast(errorMessage(err, 'Failed to send tab to background'));
       set((s) => ({
         terminals: {
           ...s.terminals,
@@ -901,6 +996,12 @@ export const useData = create<DataState>((set, get) => ({
       }));
       return;
     }
+    // Record detach order (newest last) so ⌘⇧T resumes the most recent one.
+    set((s) => {
+      const cur = (s.detachedStack[projectId] || []).filter((id) => id !== sessionId);
+      cur.push(sessionId);
+      return { detachedStack: { ...s.detachedStack, [projectId]: cur } };
+    });
     // Same selection-advance logic as closeTerminal: if the hidden tab was
     // active, pick the right neighbor (or left, or none).
     const ui = useUi.getState();
@@ -919,12 +1020,17 @@ export const useData = create<DataState>((set, get) => ({
         [projectId]: (s.terminals[projectId] ?? []).map((t) =>
           t.id === sessionId ? { ...t, headless: undefined } : t
         )
+      },
+      detachedStack: {
+        ...s.detachedStack,
+        [projectId]: (s.detachedStack[projectId] || []).filter((id) => id !== sessionId)
       }
     }));
+    let updated: TerminalSession | null = null;
     try {
-      await window.cc.terminals.setHeadless(sessionId, false);
+      updated = await window.cc.terminals.setHeadless(sessionId, false);
     } catch (err) {
-      pushErrorToast(errorMessage(err, 'Failed to restore tab'));
+      pushErrorToast(errorMessage(err, 'Failed to resume session'));
       // Re-hide on failure to keep state consistent.
       set((s) => ({
         terminals: {
@@ -932,11 +1038,48 @@ export const useData = create<DataState>((set, get) => ({
           [projectId]: (s.terminals[projectId] ?? []).map((t) =>
             t.id === sessionId ? { ...t, headless: true } : t
           )
+        },
+        detachedStack: {
+          ...s.detachedStack,
+          [projectId]: [...(s.detachedStack[projectId] || []), sessionId]
         }
       }));
       return;
     }
+    // setHeadless returns null when the pty is already gone (the session
+    // exited while detached). Don't surface a hollow, dead tab — drop the
+    // record and tell the user, mirroring the zombie reap in markExited.
+    if (updated === null) {
+      const dead = (get().terminals[projectId] || []).find((t) => t.id === sessionId);
+      set((s) => ({
+        terminals: {
+          ...s.terminals,
+          [projectId]: (s.terminals[projectId] ?? []).filter((t) => t.id !== sessionId)
+        }
+      }));
+      useUi.getState().clearUnread(sessionId);
+      useUi
+        .getState()
+        .pushToast(
+          `“${dead?.title ?? 'Session'}” ended while in the background`,
+          'info'
+        );
+      return;
+    }
     useUi.getState().selectTab(projectId, sessionId);
+  },
+
+  async restoreLastDetached(projectId) {
+    const stack = get().detachedStack[projectId] || [];
+    if (stack.length === 0) return null;
+    const sessionId = stack[stack.length - 1];
+    await get().restoreTerminal(sessionId, projectId);
+    // restoreTerminal drops the id from the stack on both success and
+    // dead-pty; return it only if the session is actually visible now.
+    const alive = (get().terminals[projectId] || []).some(
+      (t) => t.id === sessionId && !t.headless
+    );
+    return alive ? sessionId : null;
   },
 
   async restartTerminal(sessionId, projectId) {
@@ -998,10 +1141,16 @@ export const useData = create<DataState>((set, get) => ({
         [projectId]: (s.closedTabs[projectId] || []).slice(0, -1)
       }
     }));
-    return get().createTerminal(projectId, top.profile, 80, 24, {
+    const created = await get().createTerminal(projectId, top.profile, 80, 24, {
       extraArgs: top.extraArgs,
-      title: top.title
+      title: top.title,
+      cwd: top.cwd
     });
+    // Re-pin if the closed tab was pinned, so reopen restores tab placement.
+    if (created && top.pinned) {
+      get().setPinned(projectId, created.id, true);
+    }
+    return created;
   },
 
   reorderTerminal(projectId, fromId, toId) {
@@ -1054,14 +1203,40 @@ export const useData = create<DataState>((set, get) => ({
   markExited(sessionId, exitCode) {
     set((s) => {
       const terminals = { ...s.terminals };
+      const detachedStack = { ...s.detachedStack };
       for (const pid of Object.keys(terminals)) {
-        terminals[pid] = terminals[pid].map((t) =>
-          t.id === sessionId
-            ? { ...t, status: 'exited' as const, exitCode: exitCode ?? t.exitCode }
-            : t
-        );
+        const tab = terminals[pid].find((t) => t.id === sessionId);
+        if (!tab) continue;
+        // Reap zombies: a session that exits while detached (headless) would
+        // otherwise linger forever as a dead record in the Background list —
+        // its pty is already gone, so it can be neither resumed nor killed.
+        // Drop it outright and surface the exit so the user isn't surprised.
+        if (tab.headless) {
+          terminals[pid] = terminals[pid].filter((t) => t.id !== sessionId);
+          detachedStack[pid] = (detachedStack[pid] || []).filter((id) => id !== sessionId);
+          const code = exitCode ?? tab.exitCode;
+          queueMicrotask(() => {
+            // Drop the orphaned unread key too (mirrors restoreTerminal's
+            // dead-pty path) so it doesn't linger in the unread map.
+            useUi.getState().clearUnread(sessionId);
+            useUi
+              .getState()
+              .pushToast(
+                `Background session “${tab.title}” ended${
+                  code != null && code !== 0 ? ` (exit ${code})` : ''
+                }`,
+                code != null && code !== 0 ? 'error' : 'info'
+              );
+          });
+        } else {
+          terminals[pid] = terminals[pid].map((t) =>
+            t.id === sessionId
+              ? { ...t, status: 'exited' as const, exitCode: exitCode ?? t.exitCode }
+              : t
+          );
+        }
       }
-      return { terminals };
+      return { terminals, detachedStack };
     });
   },
 
@@ -1220,6 +1395,43 @@ export function useUnreadInboxCount(): number {
   const readIds = useInboxRead((s) => s.readIds);
   let n = 0;
   for (const e of entries) if (!readIds[e.id]) n += 1;
+  return n;
+}
+
+/** Sidebar-badge count: scheduled tasks that are enabled (armed to fire). */
+export function useEnabledSchedulerCount(): number {
+  const tasks = useScheduler((s) => s.tasks);
+  let n = 0;
+  for (const t of tasks) if (t.enabled) n += 1;
+  return n;
+}
+
+/**
+ * Sidebar-badge count: scheduled tasks with a live terminal session right
+ * now. Mirrors the "Running now" computation in SchedulerOverview — a task
+ * counts as running when any of its run-history records points at a session
+ * that is still `running`/`starting` in the project's terminals.
+ */
+export function useRunningSchedulerCount(): number {
+  const tasks = useScheduler((s) => s.tasks);
+  const terminals = useData((s) => s.terminals);
+  const live = new Set<string>();
+  for (const [pid, list] of Object.entries(terminals)) {
+    for (const s of list) {
+      if (s.status === 'running' || s.status === 'starting') {
+        live.add(`${pid}:${s.id}`);
+      }
+    }
+  }
+  let n = 0;
+  for (const t of tasks) {
+    for (const r of t.status?.runs ?? []) {
+      if (r.sessionId && live.has(`${t.projectId}:${r.sessionId}`)) {
+        n += 1;
+        break;
+      }
+    }
+  }
   return n;
 }
 
