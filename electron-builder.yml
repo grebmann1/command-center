@@ -27,11 +27,12 @@ mac:
   icon: resources/icon.icns
   hardenedRuntime: false
   gatekeeperAssess: false
+  # Arch is selected per build via the CLI flag (e.g. `electron-builder --mac
+  # --arm64`). node-pty is a native module, so each arch must be packaged on a
+  # runner of that arch — the release workflow uses a macos-13/macos-14 matrix.
+  # Listing arch here would override the flag and force a cross-rebuild.
   target:
-    - target: dmg
-      arch:
-        - arm64
-        - x64
+    - dmg
   artifactName: "${productName}-${version}-${arch}.${ext}"
 
 dmg:

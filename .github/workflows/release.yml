@@ -1,0 +1,109 @@
+name: Release
+
+# Build and publish a macOS release when a version tag is pushed.
+#
+#   git tag v0.2.0
+#   git push origin v0.2.0
+#
+# node-pty is a native module, so each architecture is built on a runner of
+# that architecture (no reliable cross-compile): macos-13 = Intel/x64,
+# macos-14 = Apple Silicon/arm64. Both .dmg artifacts attach to one Release.
+#
+# The app is unsigned (personal use): on first launch, right-click the app and
+# choose Open to get past Gatekeeper.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allow a manual dry run (builds artifacts, does not create a Release).
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to create the GitHub Release
+
+jobs:
+  verify:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  build:
+    name: Build (${{ matrix.arch }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            arch: arm64
+          - os: macos-13
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and package
+        # electron-builder rebuilds node-pty for the bundled Electron's ABI
+        # automatically (npmRebuild defaults to true). Build only this runner's
+        # arch so the native binary matches.
+        run: |
+          npm run build
+          npx electron-builder --mac --${{ matrix.arch }} --publish never
+        env:
+          # No code signing (unsigned personal build); skip electron-builder's
+          # attempt to discover signing identities.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg-${{ matrix.arch }}
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    # Only publish a Release for tag pushes, not manual dry runs.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.dmg
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ### Claude Code Terminal Center ${{ github.ref_name }}
+
+            macOS builds (unsigned). On first launch, right-click the app and
+            choose **Open** to get past Gatekeeper.
+
+            | Mac | Download |
+            | --- | --- |
+            | Apple Silicon (M-series) | `*-arm64.dmg` |
+            | Intel | `*-x64.dmg` |
