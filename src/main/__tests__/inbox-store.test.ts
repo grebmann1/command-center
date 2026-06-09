@@ -49,6 +49,18 @@ describe('InboxStore (in-memory)', () => {
     expect(entry.comments).toContain('two reports');
   });
 
+  it('append persists an optional sessionId; absent leaves it undefined', async () => {
+    const withSession = await store.append({
+      projectId: 'proj-1',
+      comments: 'agent in tab A',
+      sessionId: 'sess-A'
+    });
+    expect(withSession.sessionId).toBe('sess-A');
+
+    const without = await store.append({ projectId: 'proj-1', comments: 'no session' });
+    expect(without.sessionId).toBeUndefined();
+  });
+
   it('append rejects missing projectId', async () => {
     await expect(
       // @ts-expect-error — exercising runtime guard
@@ -198,6 +210,17 @@ describe('InboxStore (JSONL persistence)', () => {
     const entries = await readdir(dir);
     expect(entries).toContain('entries.jsonl');
     expect(entries).not.toContain('entries.jsonl.tmp');
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('round-trips sessionId through the JSONL file', async () => {
+    await store.append({ projectId: 'p', comments: 'from tab A', sessionId: 'sess-A' });
+    await store.append({ projectId: 'p', comments: 'no session' });
+    const fresh = createInboxStore({ filePath: path });
+    const { entries } = await fresh.read();
+    // newest-first: the session-less entry, then the one with a session.
+    expect(entries[0].sessionId).toBeUndefined();
+    expect(entries[1].sessionId).toBe('sess-A');
     await rm(dir, { recursive: true, force: true });
   });
 

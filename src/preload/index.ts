@@ -1,6 +1,13 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from '../shared/ipc.js';
-import type { CcApi, CreateTerminalRequest, InboxEntry } from '../shared/types.js';
+import type {
+  CcApi,
+  CreateTerminalRequest,
+  InboxEntry,
+  McpServerEntry,
+  PluginEntry,
+  TerminalSession
+} from '../shared/types.js';
 
 const api: CcApi = {
   projectSettings: {
@@ -26,6 +33,9 @@ const api: CcApi = {
     write: (id, data) => ipcRenderer.invoke(IPC.terminals.write, id, data),
     resize: (id, cols, rows) => ipcRenderer.invoke(IPC.terminals.resize, id, cols, rows),
     close: (id) => ipcRenderer.invoke(IPC.terminals.close, id),
+    setHeadless: (id, headless) =>
+      ipcRenderer.invoke(IPC.terminals.setHeadless, id, headless),
+    clearAttention: (id) => ipcRenderer.invoke(IPC.terminals.clearAttention, id),
     onData: (cb) => {
       const handler = (_e: unknown, id: string, data: string) => cb(id, data);
       ipcRenderer.on(IPC.terminals.onData, handler);
@@ -40,6 +50,11 @@ const api: CcApi = {
       const handler = (_e: unknown, id: string, title: string) => cb(id, title);
       ipcRenderer.on(IPC.terminals.onTitle, handler);
       return () => ipcRenderer.off(IPC.terminals.onTitle, handler);
+    },
+    onUpdated: (cb) => {
+      const handler = (_e: unknown, session: TerminalSession) => cb(session);
+      ipcRenderer.on(IPC.terminals.onUpdated, handler);
+      return () => ipcRenderer.off(IPC.terminals.onUpdated, handler);
     }
   },
   config: {
@@ -85,7 +100,26 @@ const api: CcApi = {
   mcp: {
     list: (projectPath) => ipcRenderer.invoke(IPC.mcp.list, projectPath),
     setEnabled: (projectPath, name, enabled) =>
-      ipcRenderer.invoke(IPC.mcp.setEnabled, projectPath, name, enabled)
+      ipcRenderer.invoke(IPC.mcp.setEnabled, projectPath, name, enabled),
+    listAll: () => ipcRenderer.invoke(IPC.mcp.listAll),
+    setEnabledById: (id, enabled) =>
+      ipcRenderer.invoke(IPC.mcp.setEnabledById, id, enabled),
+    reveal: (id) => ipcRenderer.invoke(IPC.mcp.reveal, id),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, entries: McpServerEntry[]) => cb(entries);
+      ipcRenderer.on(IPC.mcp.onChanged, handler);
+      return () => ipcRenderer.off(IPC.mcp.onChanged, handler);
+    }
+  },
+  plugins: {
+    list: () => ipcRenderer.invoke(IPC.plugins.list),
+    setEnabled: (id, enabled) => ipcRenderer.invoke(IPC.plugins.setEnabled, id, enabled),
+    reveal: (id) => ipcRenderer.invoke(IPC.plugins.reveal, id),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, entries: PluginEntry[]) => cb(entries);
+      ipcRenderer.on(IPC.plugins.onChanged, handler);
+      return () => ipcRenderer.off(IPC.plugins.onChanged, handler);
+    }
   },
   claudeSettings: {
     read: (projectPath, scope) => ipcRenderer.invoke(IPC.claudeSettings.read, projectPath, scope),
@@ -160,7 +194,13 @@ const api: CcApi = {
         for (const { name, h } of handlers) ipcRenderer.off(name, h);
       };
     },
-    homedir: () => ipcRenderer.invoke(IPC.app.homedir)
+    homedir: () => ipcRenderer.invoke(IPC.app.homedir),
+    onFocusSession: (cb: (sessionId: string, projectId: string) => void) => {
+      const handler = (_e: unknown, sessionId: string, projectId: string) =>
+        cb(sessionId, projectId);
+      ipcRenderer.on('app:focusSession', handler);
+      return () => ipcRenderer.off('app:focusSession', handler);
+    }
   }
 };
 

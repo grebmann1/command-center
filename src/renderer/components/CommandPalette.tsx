@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Folder, TerminalSquare, Plus, ChevronRight, Code2, FolderOpen, FileSearch, Sparkles, Play, Zap, Keyboard, History, Search, Inbox, RotateCcw, Trash2, Copy, Pin, PinOff, Globe, BookOpen, Clock, LayoutGrid, RotateCw, Undo2 } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
-import { useData, useScheduler, useUi } from '../store';
+import { useData, useScheduler, useUi, visibleTerminals } from '../store';
 import type { LaunchProfileId, OpenTarget, Project } from '@shared/types';
 import { fuzzyScore } from '../util/fuzzy';
 
@@ -38,7 +38,7 @@ export function CommandPalette({ onClose }: Props) {
   const selectedTabId = useUi((s) => s.selectedTabId);
   const pushToast = useUi((s) => s.pushToast);
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
-  const selectedProjectTabs = selectedProject ? terminals[selectedProject.id] ?? [] : [];
+  const selectedProjectTabs = selectedProject ? visibleTerminals(terminals[selectedProject.id]) : [];
   const activeTabId = selectedProject ? selectedTabId[selectedProject.id] : undefined;
   const activeTab = selectedProjectTabs.find((t) => t.id === activeTabId);
 
@@ -181,7 +181,7 @@ export function CommandPalette({ onClose }: Props) {
     }
     for (const p of projects) {
       if (selectedProject && p.id === selectedProject.id) continue;
-      const list = terminals[p.id] ?? [];
+      const list = visibleTerminals(terminals[p.id]);
       for (const t of list) pushTab(p, t);
     }
     if (selectedProject) {

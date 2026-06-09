@@ -1,4 +1,13 @@
-import { BookOpen, Clock, FolderGit2, Inbox, Settings, type LucideIcon } from 'lucide-react';
+import {
+  BookOpen,
+  Clock,
+  FolderGit2,
+  Inbox,
+  Plug,
+  Puzzle,
+  Settings,
+  type LucideIcon
+} from 'lucide-react';
 import { useUi, useUnreadInboxCount, type NavId } from '../store';
 
 interface NavEntry {
@@ -11,7 +20,9 @@ const navItems: NavEntry[] = [
   { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'projects', label: 'Projects', icon: FolderGit2 },
   { id: 'scheduler', label: 'Scheduler', icon: Clock },
+  { id: 'plugins', label: 'Plugins', icon: Puzzle },
   { id: 'skills', label: 'Skills', icon: BookOpen },
+  { id: 'mcp', label: 'MCP', icon: Plug },
   { id: 'settings', label: 'Settings', icon: Settings }
 ];
 

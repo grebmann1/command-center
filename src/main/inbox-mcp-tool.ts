@@ -72,6 +72,13 @@ export interface RegisterInboxPushOpts {
   projectId: string;
   /** Display label snapshot. Optional; readers fall back to projectId. */
   projectLabel?: string;
+  /**
+   * Originating terminal session, when the MCP route is session-scoped
+   * (`/mcp/:projectId/:sessionId`). Stamped onto the inbox entry so the
+   * UI can route the "Open" click back to that exact tab. Absent when
+   * the agent connects on the project-scoped legacy route.
+   */
+  sessionId?: string;
   inboxStore: IInboxStore;
 }
 
@@ -82,7 +89,7 @@ export interface RegisterInboxPushOpts {
  * deleted-then-recreated project doesn't bleed identity across requests.
  */
 export function registerInboxPushTool(server: McpServer, opts: RegisterInboxPushOpts): void {
-  const { projectId, projectLabel, inboxStore } = opts;
+  const { projectId, projectLabel, sessionId, inboxStore } = opts;
 
   server.registerTool(
     'inbox_push',
@@ -96,7 +103,8 @@ export function registerInboxPushTool(server: McpServer, opts: RegisterInboxPush
           projectId,
           projectLabel,
           docs,
-          comments
+          comments,
+          sessionId
         });
         return {
           content: [

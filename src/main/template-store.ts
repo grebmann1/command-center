@@ -97,6 +97,96 @@ const BUILTIN: ScheduleTemplate[] = [
       prompt:
         'Check the inbox for unread entries. For each, draft a one-line classification (action / fyi / noise) and an optional next step.'
     }
+  },
+  {
+    id: 'builtin:slack-mention-triage',
+    name: 'Slack mention triage',
+    description:
+      'Scans Slack for recent messages mentioning you, pre-analyses them, and pushes a triaged summary to the inbox.',
+    category: 'Slack',
+    icon: 'Inbox',
+    defaults: {
+      profile: 'claude-yolo',
+      every: '30m',
+      name: 'Slack mention triage',
+      prompt: [
+        'You are a Slack triage assistant. Use the Slack MCP tools',
+        '(`mcp__slack__*`) to do the following, in this order:',
+        '',
+        '1. Discover *your own* Slack identity (e.g. via `slack_search_users`',
+        '   on yourself, or whichever tool the Slack MCP exposes for "me").',
+        '   Cache the user id locally for this run; do NOT ask the user.',
+        '',
+        '2. Search the last 30 minutes for items that need my attention:',
+        '   - direct mentions (@me) in any channel,',
+        '   - DMs sent to me,',
+        '   - replies on threads where I posted earlier today.',
+        '   Use Slack search MCP tools — do not page through every channel.',
+        '',
+        '3. For each item, decide a classification:',
+        '   - `action` — needs a reply or a decision from me,',
+        '   - `fyi`    — informational, no action,',
+        '   - `noise`  — bot spam, channel chatter, ignore.',
+        '   Write one short sentence of pre-analysis (what is it about,',
+        '   and if `action`, what would a reasonable response look like).',
+        '',
+        '4. If there is at least one `action` or `fyi` item, call',
+        '   `mcp__cc-inbox__inbox_push` ONCE with `comments` set to a',
+        '   markdown digest grouped by classification, with a permalink',
+        '   to each Slack message. If there are zero non-`noise` items,',
+        '   exit silently — do NOT push an empty inbox entry.',
+        '',
+        '5. Do not reply on Slack. Do not modify any files. Read-only run.'
+      ].join(' ')
+    }
+  },
+  {
+    id: 'builtin:slack-agent-runner',
+    name: 'Slack [agent] runner',
+    description:
+      'Finds messages you wrote starting with [agent], runs the instructions, and replies in the same Slack thread.',
+    category: 'Slack',
+    icon: 'Sparkles',
+    defaults: {
+      profile: 'claude-yolo',
+      every: '15m',
+      name: 'Slack [agent] runner',
+      prompt: [
+        'You are a Slack-driven action runner. Use the Slack MCP tools',
+        '(`mcp__slack__*`) and any other tools available in this session',
+        '(read files, run commands, etc.) as needed. Steps:',
+        '',
+        '1. Discover *your own* Slack identity. Cache the user id; do NOT',
+        '   ask the user.',
+        '',
+        '2. Search Slack for messages authored by that identity in the',
+        '   last 30 minutes whose text contains the literal token',
+        '   `[agent]` (case-insensitive). Skip messages where you have',
+        '   already posted a threaded reply (check the thread before',
+        '   acting — the reply is the idempotency marker).',
+        '',
+        '3. For each unhandled message:',
+        '   a. Parse the instruction: everything after `[agent]` up to',
+        '      the end of the message body.',
+        '   b. Carry out the instruction in the context of the *current*',
+        '      project (this terminal\'s cwd). You may read files, run',
+        '      git/test/build commands, and call other MCPs.',
+        '   c. Post a single threaded reply on the original Slack',
+        '      message with the result. Keep it under ~30 lines; if the',
+        '      output is longer, summarise and link to a gist or attach',
+        '      the body as a code block.',
+        '',
+        '4. After all `[agent]` messages are handled, call',
+        '   `mcp__cc-inbox__inbox_push` ONCE with `comments` set to a',
+        '   short markdown audit log: one bullet per message handled,',
+        '   each with the Slack permalink and the first line of your',
+        '   reply. If you handled zero messages, exit silently.',
+        '',
+        '5. If an instruction is destructive or ambiguous, do NOT guess —',
+        '   reply on the thread asking for clarification, and note the',
+        '   skip in the inbox audit.'
+      ].join(' ')
+    }
   }
 ];
 

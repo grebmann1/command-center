@@ -9,8 +9,16 @@ import type {
 } from '../shared/types.js';
 import { MIN_INTERVAL_MS, parseEvery as parseEveryShared } from '../shared/parse-every.js';
 import type { PtyManager } from './pty.js';
+import type { IInboxStore } from './inbox-store.js';
 import { deleteSchedule, listAllSchedules, saveSchedule } from './scheduler-store.js';
 import type { store as Store } from './store.js';
+
+/** Profiles that drive a Claude Code CLI — the only ones we treat the
+ *  scheduler `prompt` as a positional argv element for. For `shell` profile,
+ *  the prompt is ignored (it would be interpreted as a shell command). */
+function isClaudeProfileId(p: string): boolean {
+  return p === 'claude' || p === 'claude-resume' || p === 'claude-yolo';
+}
 
 /** History buffer cap. Hand-editing `retain` higher in the JSON works, but
  *  we won't surface a bigger value than this in the UI. */
@@ -21,10 +29,6 @@ export { parseEveryShared as parseEvery };
 interface Live {
   task: ScheduledTask;
   timer: NodeJS.Timeout | null;
-  /** Session id from the most recent automatic fire. Used for overlap detection. */
-  lastAutoSessionId: string | null;
-  /** Session id from the most recent manual "Run now". Informational only. */
-  lastManualSessionId: string | null;
   /** Maps a fired session id → its index in `status.runs`, so the exit-time
    *  recordRun can update the right entry even when interleaved with other
    *  schedules' fires. */
@@ -36,6 +40,7 @@ type Logger = (context: string, err: unknown) => void;
 type Deps = {
   ptys: PtyManager;
   store: typeof Store;
+  inbox?: IInboxStore;
   logger?: Logger;
 };
 
@@ -110,7 +115,8 @@ export class SchedulerManager extends EventEmitter {
       },
       createdAt: now,
       updatedAt: now,
-      source: input.scope ?? 'global'
+      source: input.scope ?? 'global',
+      notifyInbox: input.notifyInbox ?? false
     };
     this.persist(task);
     this.live.set(task.id, this.makeLive(task));
@@ -135,6 +141,7 @@ export class SchedulerManager extends EventEmitter {
       next.schedule = { every: patch.every };
     }
     if (patch.retain !== undefined) next.history = { retain: clampRetain(patch.retain) };
+    if (patch.notifyInbox !== undefined) next.notifyInbox = patch.notifyInbox;
     next.updatedAt = new Date().toISOString();
     this.persist(next);
     live.task = next;
@@ -196,8 +203,6 @@ export class SchedulerManager extends EventEmitter {
     return {
       task,
       timer: null,
-      lastAutoSessionId: null,
-      lastManualSessionId: null,
       runIndexBySession: new Map()
     };
   }
@@ -249,6 +254,7 @@ export class SchedulerManager extends EventEmitter {
         `project ${live.task.projectId} not found for schedule "${live.task.name}"`
       );
       this.recordRun(id, {
+        id: randomUUID(),
         at: new Date().toISOString(),
         result: 'error',
         message: `project ${live.task.projectId} not found`
@@ -257,22 +263,33 @@ export class SchedulerManager extends EventEmitter {
       return;
     }
 
-    // Overlap check: if the previous *automatic* fire's pty is still alive, skip.
-    // Manual "Run now" fires never set lastAutoSessionId, so they don't poison
-    // the overlap state and the next scheduled fire still respects overlap.
-    if (!opts.manual && live.lastAutoSessionId) {
-      const stillAlive = this.deps.ptys
-        .list(live.task.projectId)
-        .some((s) => s.id === live.lastAutoSessionId && s.status === 'running');
-      if (stillAlive) {
+    // Overlap check: skip an auto fire if *any* session this schedule
+    // previously spawned (auto or manual) is still alive. Walking the run
+    // history rather than a single `lastAutoSessionId` catches the case
+    // where the user kicked off a long-running task with "Run now" and the
+    // next interval-driven fire would otherwise stack on top of it.
+    // Manual "Run now" still overrides — clicking the button is an explicit
+    // user choice to spawn another tab regardless.
+    if (!opts.manual) {
+      const aliveIds = new Set(
+        this.deps.ptys
+          .list(live.task.projectId)
+          .filter((s) => s.status === 'running' || s.status === 'starting')
+          .map((s) => s.id)
+      );
+      const aliveRunSessionId = live.task.status.runs
+        .map((r) => r.sessionId)
+        .find((sid): sid is string => !!sid && aliveIds.has(sid));
+      if (aliveRunSessionId) {
         this.log(
           `fire ${id}`,
-          `skipped: previous run ${live.lastAutoSessionId} still active`
+          `skipped: previous run ${aliveRunSessionId} still active`
         );
         this.recordRun(id, {
+          id: randomUUID(),
           at: new Date().toISOString(),
           result: 'skipped',
-          sessionId: live.lastAutoSessionId,
+          sessionId: aliveRunSessionId,
           message: 'previous run still active'
         });
         if (live.task.enabled) this.arm(id);
@@ -280,23 +297,37 @@ export class SchedulerManager extends EventEmitter {
       }
     }
 
+    const runId = randomUUID();
+    const profile = live.task.profile;
+
+    // Build extraArgs. For claude-family profiles, the prompt is appended as
+    // a positional argv element — Claude's CLI signature is `claude [options]
+    // [prompt]`, so the spawned interactive session picks it up automatically.
+    // For shell profiles we ignore the prompt (it would be parsed as a shell
+    // command, which is not what users want).
+    const userExtraArgs = live.task.extraArgs ?? [];
+    const promptArgs =
+      live.task.prompt && isClaudeProfileId(profile) ? [live.task.prompt] : [];
+    const extraArgs = [...userExtraArgs, ...promptArgs];
+
     let session;
     try {
       session = this.deps.ptys.create({
         projectId: project.id,
-        profile: live.task.profile,
+        profile,
         cwd: project.path,
         cols: 80,
         rows: 24,
         config: this.deps.store.getConfig(),
         projectSettings: this.deps.store.getProjectSettings(project.id),
-        extraArgs: live.task.extraArgs,
+        extraArgs,
         title: `Scheduled: ${live.task.name}`,
         remote: project.remote
       });
     } catch (err) {
       this.log(`fire ${id} pty.create`, err);
       this.recordRun(id, {
+        id: runId,
         at: new Date().toISOString(),
         result: 'error',
         message: err instanceof Error ? err.message : String(err)
@@ -305,49 +336,25 @@ export class SchedulerManager extends EventEmitter {
       return;
     }
 
-    if (opts.manual) {
-      live.lastManualSessionId = session.id;
-    } else {
-      live.lastAutoSessionId = session.id;
-    }
     const runStartedAt = new Date().toISOString();
     const runStartMs = Date.now();
 
-    // Type the prompt into the pty once. We attach a one-shot listener on the
-    // shared 'data' EventEmitter — `data` fires for every session, so we filter
-    // on session id. We also detach on exit so a pty that fails fast (no data
-    // emitted) doesn't leak the closure for the rest of the app's lifetime.
-    if (live.task.prompt) {
-      const prompt = live.task.prompt;
-      let sent = false;
-      const onData = (sessionId: string) => {
-        if (sessionId !== session.id) return;
-        if (sent) return;
-        sent = true;
-        this.deps?.ptys.off('data', onData);
-        this.deps?.ptys.write(session.id, `${prompt}\n`);
-      };
-      const onPromptExit = (sessionId: string) => {
-        if (sessionId !== session.id) return;
-        this.deps?.ptys.off('data', onData);
-        this.deps?.ptys.off('exit', onPromptExit);
-      };
-      this.deps.ptys.on('data', onData);
-      this.deps.ptys.on('exit', onPromptExit);
-    }
-
-    // Record success on exit (or as soon as we've spawned, for sessions that
-    // don't naturally exit). We listen for the exit event keyed to this id.
     const onExit = (sessionId: string, exitCode: number) => {
       if (sessionId !== session.id) return;
       this.deps?.ptys.off('exit', onExit);
-      this.recordRun(id, {
+      const exitMs = Date.now();
+      const finalRun: ScheduleRun = {
+        id: runId,
         at: runStartedAt,
         result: exitCode === 0 ? 'success' : 'error',
         sessionId: session.id,
-        durationMs: Date.now() - runStartMs,
+        durationMs: exitMs - runStartMs,
         message: exitCode === 0 ? undefined : `exit ${exitCode}`
-      });
+      };
+      this.recordRun(id, finalRun);
+      if (live.task.notifyInbox) {
+        void this.notifyInboxOnExit(live.task, finalRun, project);
+      }
     };
     this.deps.ptys.on('exit', onExit);
 
@@ -355,6 +362,7 @@ export class SchedulerManager extends EventEmitter {
     // schedule advanced, even if the session is long-lived. The exit handler
     // above will overwrite the entry once the pty closes.
     this.recordRun(id, {
+      id: runId,
       at: runStartedAt,
       result: 'success',
       sessionId: session.id
@@ -363,15 +371,50 @@ export class SchedulerManager extends EventEmitter {
     if (live.task.enabled && !opts.manual) this.arm(id);
   }
 
+  /**
+   * Append a one-line summary InboxEntry for a finished run. Best-effort.
+   * The user can scroll back through the schedule's tab in the project for
+   * the full output — we no longer mirror the log into the inbox body.
+   */
+  private async notifyInboxOnExit(
+    task: ScheduledTask,
+    run: ScheduleRun,
+    project: Project
+  ) {
+    if (!this.deps?.inbox) return;
+    try {
+      const durationStr =
+        run.durationMs !== undefined ? ` in ${formatDuration(run.durationMs)}` : '';
+      const body = `**${task.name}** — ${run.result}${durationStr}`;
+      await this.deps.inbox.append({
+        projectId: project.id,
+        projectLabel: project.name,
+        comments: body,
+        sessionId: run.sessionId
+      });
+    } catch (err) {
+      this.log(`notifyInbox ${task.id}`, err);
+    }
+  }
+
   private recordRun(id: string, run: ScheduleRun) {
     const live = this.live.get(id);
     if (!live) return;
     const status = live.task.status;
-    // If we've seen this sessionId before, update the existing entry rather
-    // than push a new one. The runIndexBySession map survives interleaved
-    // fires from other schedules — head-comparison would corrupt under load.
-    const knownIdx = run.sessionId ? live.runIndexBySession.get(run.sessionId) : undefined;
-    if (knownIdx !== undefined && status.runs[knownIdx]) {
+    // Prefer matching by run.id (stable per fire) and fall back to sessionId
+    // for older paths. Same goal: update the existing entry rather than push
+    // a new one when this is the exit-time tail of a previously optimistic
+    // record.
+    const knownIdxById = run.id
+      ? status.runs.findIndex((r) => r.id === run.id)
+      : -1;
+    const knownIdx =
+      knownIdxById >= 0
+        ? knownIdxById
+        : run.sessionId
+        ? live.runIndexBySession.get(run.sessionId)
+        : undefined;
+    if (knownIdx !== undefined && knownIdx >= 0 && status.runs[knownIdx]) {
       status.runs[knownIdx] = { ...status.runs[knownIdx], ...run };
     } else {
       status.runs = [run, ...status.runs].slice(0, live.task.history.retain);
@@ -397,4 +440,16 @@ export class SchedulerManager extends EventEmitter {
 function clampRetain(n: number): number {
   if (!Number.isFinite(n)) return 10;
   return Math.max(1, Math.min(MAX_RETAIN, Math.round(n)));
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const remS = s % 60;
+  if (m < 60) return `${m}m ${remS}s`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return `${h}h ${remM}m`;
 }

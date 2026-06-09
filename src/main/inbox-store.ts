@@ -40,6 +40,8 @@ export interface InboxInput {
   docs?: InboxDoc[];
   /** Agent's message body (markdown). Renders below docs. */
   comments?: string;
+  /** Originating terminal session, when known. Persisted as-is on the entry. */
+  sessionId?: string;
 }
 
 export interface InboxReadOpts {

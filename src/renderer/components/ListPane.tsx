@@ -7,6 +7,7 @@ import {
   useInbox,
   useInboxRead,
   sortProjectsForDisplay,
+  visibleTerminals,
   applyListPaneWidth,
   LIST_PANE_MIN,
   LIST_PANE_MAX
@@ -383,7 +384,7 @@ function ProjectsList() {
               }}
             >
               {(() => {
-                const list = terminals[p.id] || [];
+                const list = visibleTerminals(terminals[p.id]);
                 const hasUnread = list.some((t) => unread[t.id]);
                 return (
                   <span
@@ -455,7 +456,7 @@ function ProjectsList() {
                 )}
               </div>
               {(() => {
-                const list = terminals[p.id] || [];
+                const list = visibleTerminals(terminals[p.id]);
                 const running = list.filter((t) => t.status !== 'exited').length;
                 const exited = list.filter((t) => t.status === 'exited').length;
                 const crashed = list.filter(
@@ -488,7 +489,7 @@ function ProjectsList() {
               })()}
             </div>
             {(() => {
-              const list = terminals[p.id] || [];
+              const list = visibleTerminals(terminals[p.id]);
               if (!projectExpanded[p.id] || list.length === 0) return null;
               const activeTab = selectedId === p.id ? selectedTabId[p.id] : undefined;
               return (
@@ -624,7 +625,7 @@ function ProjectsList() {
               </button>
               {(() => {
                 const armed = confirmDeleteId === p.id;
-                const running = (terminals[p.id] || []).filter((t) => t.status !== 'exited').length;
+                const running = visibleTerminals(terminals[p.id]).filter((t) => t.status !== 'exited').length;
                 return (
                   <button
                     className={`project-menu-item danger ${armed ? 'project-delete-armed' : ''}`}

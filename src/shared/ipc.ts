@@ -18,9 +18,12 @@ export const IPC = {
     write: 'terminals:write',
     resize: 'terminals:resize',
     close: 'terminals:close',
+    setHeadless: 'terminals:setHeadless',
+    clearAttention: 'terminals:clearAttention',
     onData: 'terminals:onData',
     onExit: 'terminals:onExit',
-    onTitle: 'terminals:onTitle'
+    onTitle: 'terminals:onTitle',
+    onUpdated: 'terminals:onUpdated'
   },
   config: {
     get: 'config:get',
@@ -56,7 +59,17 @@ export const IPC = {
   },
   mcp: {
     list: 'mcp:list',
-    setEnabled: 'mcp:setEnabled'
+    setEnabled: 'mcp:setEnabled',
+    listAll: 'mcp:listAll',
+    setEnabledById: 'mcp:setEnabledById',
+    reveal: 'mcp:reveal',
+    onChanged: 'mcp:onChanged'
+  },
+  plugins: {
+    list: 'plugins:list',
+    setEnabled: 'plugins:setEnabled',
+    reveal: 'plugins:reveal',
+    onChanged: 'plugins:onChanged'
   },
   claudeSettings: {
     read: 'claudeSettings:read',

@@ -26,6 +26,52 @@ async function writeSettings(settings: Record<string, unknown>): Promise<void> {
   await rename(tmp, SETTINGS_FILE);
 }
 
+/**
+ * Read settings AND fold any legacy `disabledSkills: string[]` into
+ * `skillOverrides: { name: 'off' }`, then drop the legacy key. Idempotent —
+ * after the first call on a settings file, the legacy key is gone and the
+ * fold is a no-op. This is necessary because Claude Code only honors
+ * `skillOverrides` (https://code.claude.com/docs/en/settings.md), so any
+ * older `disabledSkills` entries we wrote previously had no real effect.
+ */
+async function readSettingsWithMigration(): Promise<Record<string, unknown>> {
+  const settings = await readSettings();
+  const legacy = settings.disabledSkills;
+  if (Array.isArray(legacy) && legacy.length > 0) {
+    const overrides = (settings.skillOverrides as Record<string, string> | undefined) ?? {};
+    let migrated = 0;
+    for (const name of legacy) {
+      if (typeof name !== 'string') continue;
+      if (overrides[name] !== 'off') {
+        overrides[name] = 'off';
+        migrated += 1;
+      }
+    }
+    settings.skillOverrides = overrides;
+    delete settings.disabledSkills;
+    await writeSettings(settings);
+    if (migrated > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`[main] migrated ${migrated} entries from disabledSkills to skillOverrides`);
+    }
+  } else if (legacy !== undefined) {
+    // Legacy key present but empty — drop it without bothering to log.
+    delete settings.disabledSkills;
+    await writeSettings(settings);
+  }
+  return settings;
+}
+
+function disabledNamesFromOverrides(settings: Record<string, unknown>): Set<string> {
+  const overrides = settings.skillOverrides;
+  if (!overrides || typeof overrides !== 'object') return new Set();
+  const out = new Set<string>();
+  for (const [name, value] of Object.entries(overrides as Record<string, unknown>)) {
+    if (value === 'off') out.add(name);
+  }
+  return out;
+}
+
 interface ParsedFrontmatter {
   name?: string;
   description?: string;
@@ -137,10 +183,11 @@ async function buildEntry(
     path: skillDir,
     description: fm.description,
     allowedTools: fm.allowedTools,
-    // The disabledSkills list is matched by short skill name (Claude Code's
-    // current behavior). Two skills with the same short name from different
-    // sources collide on disable today; we surface unique ids in the UI but
-    // persist the short name. Revisit if collisions actually bite.
+    // skillOverrides is keyed by short skill name (per Claude Code docs).
+    // Plugin skills are NOT controlled by skillOverrides — they're managed
+    // via /plugin — so the UI must show those rows as read-only. The short-
+    // name collision risk between user and project skills with the same
+    // name is acknowledged; revisit only if it actually bites.
     enabled: !disabledShortNames.has(fm.name?.trim() || shortName)
   };
 }
@@ -250,10 +297,8 @@ export interface ListSkillsOptions {
 }
 
 export async function listSkills(options: ListSkillsOptions = {}): Promise<SkillEntry[]> {
-  const settings = await readSettings();
-  const disabled = new Set(
-    Array.isArray(settings.disabledSkills) ? (settings.disabledSkills as string[]) : []
-  );
+  const settings = await readSettingsWithMigration();
+  const disabled = disabledNamesFromOverrides(settings);
   const out: SkillEntry[] = [];
   out.push(...(await listUserSkills(disabled)));
   out.push(...(await listPluginSkills(disabled)));
@@ -265,18 +310,17 @@ export async function listSkills(options: ListSkillsOptions = {}): Promise<Skill
   return out;
 }
 
+/**
+ * Set a single skill's enabled state. We write the explicit `'on'` value when
+ * enabling (rather than deleting the key) so the user's intent is durable —
+ * if a future Claude version changes the default, our setting still reflects
+ * what they picked in our UI.
+ */
 export async function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
-  const settings = await readSettings();
-  const disabled = Array.isArray(settings.disabledSkills)
-    ? [...(settings.disabledSkills as string[])]
-    : [];
-  if (!enabled) {
-    if (!disabled.includes(name)) disabled.push(name);
-  } else {
-    const idx = disabled.indexOf(name);
-    if (idx !== -1) disabled.splice(idx, 1);
-  }
-  settings.disabledSkills = disabled;
+  const settings = await readSettingsWithMigration();
+  const overrides = (settings.skillOverrides as Record<string, string> | undefined) ?? {};
+  overrides[name] = enabled ? 'on' : 'off';
+  settings.skillOverrides = overrides;
   await writeSettings(settings);
 }
 
@@ -284,15 +328,12 @@ export async function setManyEnabled(
   updates: Array<{ name: string; enabled: boolean }>
 ): Promise<void> {
   if (updates.length === 0) return;
-  const settings = await readSettings();
-  const disabled = new Set(
-    Array.isArray(settings.disabledSkills) ? (settings.disabledSkills as string[]) : []
-  );
+  const settings = await readSettingsWithMigration();
+  const overrides = (settings.skillOverrides as Record<string, string> | undefined) ?? {};
   for (const { name, enabled } of updates) {
-    if (enabled) disabled.delete(name);
-    else disabled.add(name);
+    overrides[name] = enabled ? 'on' : 'off';
   }
-  settings.disabledSkills = [...disabled];
+  settings.skillOverrides = overrides;
   await writeSettings(settings);
 }
 

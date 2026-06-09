@@ -11,6 +11,7 @@ import {
   useUi
 } from '../store';
 import { InboxGuidance } from './InboxGuidance';
+import { unwrapBareFence } from '../util/markdown';
 import type { InboxDoc, InboxEntry, FsReadResult, Project } from '@shared/types';
 
 interface InboxDetailProps {
@@ -108,13 +109,22 @@ function EmptyState() {
 
 function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }) {
   const projects = useData((s) => s.projects);
+  const terminals = useData((s) => s.terminals);
   const setNav = useUi((s) => s.setNav);
   const selectProject = useUi((s) => s.selectProject);
+  const selectTab = useUi((s) => s.selectTab);
 
   const aliveProject = projects.find((p) => p.id === entry.projectId) ?? null;
   const projectAlive = aliveProject !== null;
   const displayLabel =
     aliveProject?.name ?? entry.projectLabel ?? entry.projectId;
+
+  // Resolve the originating session, when one was recorded and is still
+  // alive. A dead/missing sessionId falls back to plain project nav.
+  const aliveSession = entry.sessionId
+    ? (terminals[entry.projectId] ?? []).find((t) => t.id === entry.sessionId) ?? null
+    : null;
+  const sessionTombstoned = !!entry.sessionId && aliveSession === null;
 
   const hasDocs = (entry.docs?.length ?? 0) > 0;
   const hasComments = (entry.comments ?? '').trim().length > 0;
@@ -123,6 +133,11 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
     if (!aliveProject) return;
     selectProject(aliveProject.id);
     setNav('projects');
+    // Focus the originating terminal when known and still running.
+    // selectTab no-ops cleanly when the id isn't in the project's tab list.
+    if (aliveSession) {
+      selectTab(aliveProject.id, aliveSession.id);
+    }
   };
 
   return (
@@ -134,6 +149,25 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
         >
           {displayLabel}
         </span>
+        {aliveSession && (
+          <>
+            <span className="inbox-detail-ts-sep">·</span>
+            <span className="inbox-detail-session" title="Originating terminal">
+              {aliveSession.title}
+            </span>
+          </>
+        )}
+        {sessionTombstoned && (
+          <>
+            <span className="inbox-detail-ts-sep">·</span>
+            <span
+              className="inbox-detail-session tombstoned"
+              title="Original terminal session has ended"
+            >
+              session ended
+            </span>
+          </>
+        )}
         <span className="inbox-detail-ts">
           {formatAbsolute(entry.ts)}
           <span className="inbox-detail-ts-sep">·</span>
@@ -174,7 +208,15 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
           >
             <MessageSquare size={15} strokeWidth={1.75} />
             <span>
-              Open <span className="strong">{displayLabel}</span>…
+              {aliveSession ? (
+                <>
+                  Open in <span className="strong">{aliveSession.title}</span>…
+                </>
+              ) : (
+                <>
+                  Open <span className="strong">{displayLabel}</span>…
+                </>
+              )}
             </span>
             <ArrowRight size={15} strokeWidth={1.75} />
           </button>
@@ -280,15 +322,26 @@ function DocTombstone({ result }: { result: FsReadResult }) {
 }
 
 function MarkdownContent({ text }: { text: string }) {
+  const body = unwrapBareFence(text);
   return (
     <div className="inbox-md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+          // Open links in a new window — Electron treats that as the OS
+          // default browser. Avoid destructuring `node` (deprecated in
+          // react-markdown v10).
+          a: (props) => <a {...props} target="_blank" rel="noreferrer" />,
+          // GFM tables get a wrapper so horizontal overflow scrolls within
+          // the comments block instead of stretching the whole panel.
+          table: (props) => (
+            <div className="inbox-md-table-wrap">
+              <table {...props} />
+            </div>
+          )
         }}
       >
-        {text}
+        {body}
       </ReactMarkdown>
     </div>
   );

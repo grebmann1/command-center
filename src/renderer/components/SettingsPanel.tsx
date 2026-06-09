@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { X } from 'lucide-react';
 import type {
   AppConfig,
-  McpServer,
   ProjectSettings,
   ClaudeProjectSettings,
   ClaudeSettingsScope,
@@ -22,27 +21,8 @@ export function SettingsPanel() {
   const projects = useData((s) => s.projects);
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
 
-  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
-  const [mcpLoading, setMcpLoading] = useState(false);
   const [hooks, setHooks] = useState<unknown>(null);
   const [homedir, setHomedir] = useState<string>('');
-
-  const loadMcpServers = useCallback(async (projectPath: string) => {
-    setMcpLoading(true);
-    try {
-      const servers = await window.cc.mcp.list(projectPath);
-      setMcpServers(servers);
-    } catch {
-      setMcpServers([]);
-    } finally {
-      setMcpLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (selectedProject) loadMcpServers(selectedProject.path);
-    else setMcpServers([]);
-  }, [selectedProject, loadMcpServers]);
 
   useEffect(() => {
     window.cc.config.get().then(setConfig).catch(() => {});
@@ -119,14 +99,6 @@ export function SettingsPanel() {
         ) : (
           <ProjectTab
             project={selectedProject}
-            mcpServers={mcpServers}
-            mcpLoading={mcpLoading}
-            onToggleMcp={async (name, enabled) => {
-              if (!selectedProject) return;
-              await window.cc.mcp.setEnabled(selectedProject.path, name, enabled);
-              await loadMcpServers(selectedProject.path);
-              markSaved();
-            }}
             onOpen={openFile}
             onSaved={markSaved}
           />
@@ -304,18 +276,12 @@ function GlobalTab({
 
 interface ProjectTabProps {
   project: { id: string; name: string; path: string; remote?: unknown } | null;
-  mcpServers: McpServer[];
-  mcpLoading: boolean;
-  onToggleMcp: (name: string, enabled: boolean) => Promise<void>;
   onOpen: (path: string) => void;
   onSaved: () => void;
 }
 
 function ProjectTab({
   project,
-  mcpServers,
-  mcpLoading,
-  onToggleMcp,
   onOpen,
   onSaved
 }: ProjectTabProps) {
@@ -336,27 +302,6 @@ function ProjectTab({
       {!project.remote && (
         <ProjectClaudeSettings projectPath={project.path} onSaved={onSaved} onOpen={onOpen} />
       )}
-
-      <Section
-        title="MCP servers"
-        help="Merged from ~/.claude.json (user) and <project>/.mcp.json (project). Toggling writes the disabled flag to .claude/settings.local.json."
-      >
-        {mcpLoading ? (
-          <p className="settings-help">Loading…</p>
-        ) : mcpServers.length === 0 ? (
-          <p className="settings-help">No MCP servers configured for this project.</p>
-        ) : (
-          <ul className="settings-list">
-            {mcpServers.map((server) => (
-              <McpServerRow
-                key={`${server.scope}:${server.name}`}
-                server={server}
-                onToggle={(enabled) => onToggleMcp(server.name, enabled)}
-              />
-            ))}
-          </ul>
-        )}
-      </Section>
 
       <Section title="Quick open" help="Opens project config files in Cursor.">
         <div className="settings-btn-row">
@@ -947,52 +892,4 @@ function CheckboxField({
   );
 }
 
-const SCOPE_LABEL: Record<McpServer['scope'], string> = {
-  user: 'user',
-  project: 'project',
-  session: 'session'
-};
-
-function McpServerRow({
-  server,
-  onToggle
-}: {
-  server: McpServer;
-  onToggle: (enabled: boolean) => Promise<void>;
-}) {
-  const [busy, setBusy] = useState(false);
-
-  const handleChange = async (checked: boolean) => {
-    setBusy(true);
-    try {
-      await onToggle(checked);
-    } catch {
-      // noop
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <li className={`settings-list-row mcp-row ${busy ? 'is-busy' : ''}`}>
-      <input
-        type="checkbox"
-        checked={server.enabled}
-        disabled={busy}
-        onChange={(e) => handleChange(e.target.checked)}
-      />
-      <div className="mcp-row-body">
-        <div className="mcp-row-head">
-          <span className="mcp-row-name">{server.name}</span>
-          <span className={`mcp-scope mcp-scope--${server.scope}`}>{SCOPE_LABEL[server.scope]}</span>
-        </div>
-        {server.command && (
-          <div className="mcp-row-cmd">
-            {[server.command, ...(server.args ?? [])].join(' ')}
-          </div>
-        )}
-      </div>
-    </li>
-  );
-}
 

@@ -9,7 +9,24 @@ interface Props {
   tabs: TerminalSession[];
   activeTabId: string | undefined;
   onSelect: (id: string) => void;
+  /**
+   * Hide-not-kill close. The tab disappears but its pty keeps running as a
+   * headless background session. Clicking the X, middle-clicking, and the
+   * context-menu "Hide" item all route here.
+   */
   onClose: (id: string) => void;
+  /**
+   * Hard kill — drops the pty and removes the session for good. Only the
+   * context-menu "Kill" action calls this; the X button never does.
+   */
+  onKill?: (id: string) => void;
+  /**
+   * Hidden (headless) sessions for this project. Displayed in the new-tab
+   * popover so the user can restore one. Empty list = no popover row.
+   */
+  hiddenTabs?: TerminalSession[];
+  /** Restore a hidden tab back to the tab strip (clear its headless flag). */
+  onRestoreHidden?: (id: string) => void;
   onNew: (profile: LaunchProfileId) => void;
   onReorder?: (fromId: string, toId: string) => void;
   onRename?: (id: string, title: string) => void;
@@ -37,7 +54,7 @@ interface TabContextMenu {
   y: number;
 }
 
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder, onRename, onDuplicate, onRestart, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
+export function TabBar({ tabs, activeTabId, onSelect, onClose, onKill, hiddenTabs, onRestoreHidden, onNew, onReorder, onRename, onDuplicate, onRestart, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
   const splitSet = new Set((splitTabIds ?? []).filter((x): x is string => !!x));
   const [menuOpen, setMenuOpen] = useState(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -82,15 +99,15 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
     };
   }, [tabMenu]);
 
-  const closeOthers = (id: string) => {
+  const hideOthers = (id: string) => {
     for (const t of tabs) if (t.id !== id && !t.pinned) onClose(t.id);
   };
-  const closeToRight = (id: string) => {
+  const hideToRight = (id: string) => {
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
     for (const t of tabs.slice(idx + 1)) if (!t.pinned) onClose(t.id);
   };
-  const closeExited = () => {
+  const hideExited = () => {
     for (const t of tabs) if (t.status === 'exited' && !t.pinned) onClose(t.id);
   };
 
@@ -158,7 +175,15 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
             setDragOverId(null);
           }}
         >
-          {unread[t.id] && activeTabId !== t.id && <span className="tab-unread" />}
+          {t.attention === 'waiting' ? (
+            <span
+              className="tab-attention"
+              title="Claude is waiting on you"
+              aria-label="needs attention"
+            />
+          ) : (
+            unread[t.id] && activeTabId !== t.id && <span className="tab-unread" />
+          )}
           <span className={`tab-profile-icon profile-${t.profile}`} aria-hidden="true">
             {profileIcon(t.profile)}
           </span>
@@ -196,10 +221,16 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
             </span>
           ) : (
             <button
+              type="button"
               className="tab-close"
-              aria-label={`Close ${t.title}`}
+              aria-label={`Hide ${t.title}`}
+              title="Hide tab (terminal keeps running)"
               onClick={(e) => {
                 e.stopPropagation();
+                // Drop focus before triggering hide so the button doesn't
+                // stay :focus-visible when the next tab takes its place
+                // under the cursor.
+                e.currentTarget.blur();
                 onClose(t.id);
               }}
             >
@@ -334,27 +365,41 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
             <button
               onClick={() => { setTabMenu(null); onClose(t.id); }}
               disabled={!!t.pinned}
+              title="Hide the tab; the terminal keeps running in the background."
             >
-              Close
+              Hide
             </button>
             <button
-              onClick={() => { setTabMenu(null); closeOthers(t.id); }}
+              onClick={() => { setTabMenu(null); hideOthers(t.id); }}
               disabled={!hasOthers}
             >
-              Close others
+              Hide others
             </button>
             <button
-              onClick={() => { setTabMenu(null); closeToRight(t.id); }}
+              onClick={() => { setTabMenu(null); hideToRight(t.id); }}
               disabled={!hasRight}
             >
-              Close to the right
+              Hide to the right
             </button>
             <button
-              onClick={() => { setTabMenu(null); closeExited(); }}
+              onClick={() => { setTabMenu(null); hideExited(); }}
               disabled={!hasExited}
             >
-              Close exited
+              Hide exited
             </button>
+            {onKill && (
+              <>
+                <div className="tab-context-sep" />
+                <button
+                  className="tab-context-danger"
+                  onClick={() => { setTabMenu(null); onKill(t.id); }}
+                  disabled={!!t.pinned}
+                  title="Kill the pty and drop the session — cannot be undone."
+                >
+                  Kill (drop pty)
+                </button>
+              </>
+            )}
           </div>
         );
       })()}
@@ -397,6 +442,35 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder,
           >
             shell
           </button>
+          {hiddenTabs && hiddenTabs.length > 0 && onRestoreHidden && (
+            <>
+              <div className="tab-context-sep" />
+              <div className="tab-menu-section-label">
+                Hidden ({hiddenTabs.length})
+              </div>
+              {hiddenTabs.map((t) => (
+                <button
+                  key={t.id}
+                  className="tab-menu-hidden"
+                  title={`${t.title} · ${t.profile}${
+                    t.status === 'exited' ? ' · exited' : ''
+                  }`}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onRestoreHidden(t.id);
+                  }}
+                >
+                  <span className={`tab-profile-icon profile-${t.profile}`} aria-hidden>
+                    {profileIcon(t.profile)}
+                  </span>
+                  <span className="tab-menu-hidden-title">{t.title}</span>
+                  {t.status === 'exited' && (
+                    <span className="tab-exit-marker">exited</span>
+                  )}
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>

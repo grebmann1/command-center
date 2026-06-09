@@ -64,6 +64,14 @@ export interface InboxEntry {
   docs?: InboxDoc[];
   /** Agent's message body (markdown). Renders below docs. */
   comments?: string;
+  /**
+   * Originating terminal session, when the creation path knows it. Set by
+   * the scheduler when a notify-on-exit run completes. Absent for legacy
+   * entries on disk and for paths that don't track session identity —
+   * readers must treat undefined as "no preferred tab; fall back to the
+   * project's last active tab."
+   */
+  sessionId?: string;
 }
 
 export interface TerminalSession {
@@ -78,6 +86,19 @@ export interface TerminalSession {
   createdAt: number;
   extraArgs?: string[];
   pinned?: boolean;
+  /**
+   * Set to `'waiting'` when the pty stream looks like Claude is blocked on
+   * the user (BEL or a known permission-prompt phrase). Cleared on the next
+   * user input or when the renderer acks via `terminals:clearAttention`.
+   */
+  attention?: 'waiting';
+  /**
+   * Headless sessions are hidden from the tab strip but their pty keeps
+   * running. The user produces them by clicking the tab's X — we intentionally
+   * don't kill the pty so background work survives. Restore via the new-tab
+   * popover's "Hidden" section.
+   */
+  headless?: boolean;
 }
 
 export interface AppConfig {
@@ -264,6 +285,9 @@ export type Result<T> =
 
 /** Per-fire record persisted in a schedule's status.runs ring buffer. */
 export interface ScheduleRun {
+  /** Stable per-run id (uuid). Older records may not have it; renderer
+   *  falls back to `at + sessionId` for keys. */
+  id?: string;
   /** ISO-8601 timestamp of when the fire began. */
   at: string;
   result: 'success' | 'error' | 'skipped';
@@ -323,6 +347,11 @@ export interface ScheduledTask {
   updatedAt: string;
   /** Set by the loader for UI display; not persisted. */
   source?: 'global' | { projectId: string };
+  /**
+   * When true, on each run exit we append an InboxEntry summarising the run
+   * (last 20 log lines, duration, result). Default false.
+   */
+  notifyInbox?: boolean;
 }
 
 export interface ScheduleCreateInput {
@@ -337,6 +366,7 @@ export interface ScheduleCreateInput {
   /** When omitted, the schedule is written to the global directory. */
   scope?: 'global' | { projectId: string };
   retain?: number;
+  notifyInbox?: boolean;
 }
 
 /**
@@ -378,6 +408,7 @@ export interface ScheduleUpdateInput {
   prompt?: string;
   every?: string;
   retain?: number;
+  notifyInbox?: boolean;
 }
 
 export type SkillSource = 'user' | 'plugin' | 'project';
@@ -416,6 +447,20 @@ export interface SkillBundleInput {
 
 export type SkillBundleApplyMode = 'additive' | 'exclusive';
 
+/**
+ * Result of applying a bundle. `applied` is the count of user/project skills
+ * the apply actually wrote to settings. `skippedPlugin` is the count of plugin
+ * skills in the bundle that were ignored — plugin skills are managed via
+ * Claude Code's `/plugin` command and can't be toggled from settings.json.
+ */
+export interface SkillBundleApplyResult {
+  ok: boolean;
+  applied: number;
+  skippedPlugin: number;
+  message?: string;
+}
+
+/** @deprecated Legacy per-project MCP shape; replaced by McpServerEntry. */
 export interface McpServer {
   name: string;
   scope: 'user' | 'project' | 'session';
@@ -423,6 +468,55 @@ export interface McpServer {
   args?: string[];
   env?: Record<string, string>;
   enabled: boolean;
+}
+
+export type PluginSource = 'user' | 'marketplace';
+
+export interface PluginProvides {
+  skills: string[];
+  commands: string[];
+  mcpServers: string[];
+}
+
+export interface PluginEntry {
+  /** `<name>@<marketplace>` — matches `enabledPlugins` key in
+   *  `~/.claude/settings.json`. */
+  id: string;
+  name: string;
+  source: PluginSource;
+  /** Undefined when source === 'user'. */
+  marketplace?: string;
+  version?: string;
+  description?: string;
+  /** Root install dir of the plugin. */
+  path: string;
+  provides: PluginProvides;
+  enabled: boolean;
+  /** False if .claude-plugin/plugin.json is missing or malformed. */
+  manifestValid: boolean;
+}
+
+export type McpSource = 'user' | 'plugin' | 'project';
+
+export type McpTransport = 'stdio' | 'http' | 'unknown';
+
+export interface McpServerEntry {
+  /** `${source}[:${pluginName}|:${projectId}]:${name}` — collision-free. */
+  id: string;
+  name: string;
+  source: McpSource;
+  pluginName?: string;
+  projectId?: string;
+  projectPath?: string;
+  transport: McpTransport;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  enabled: boolean;
+  /** Set when toggle is disabled in UI (plugin-scope rows). */
+  enabledLockedBy?: 'plugin';
 }
 
 export interface CcApi {
@@ -454,9 +548,19 @@ export interface CcApi {
     write(sessionId: string, data: string): Promise<void>;
     resize(sessionId: string, cols: number, rows: number): Promise<void>;
     close(sessionId: string): Promise<void>;
+    /**
+     * Toggle the headless flag on a live session. Used to "hide" a tab
+     * (X button / ⌘W) without killing its pty, and to restore one from
+     * the Hidden picker.
+     */
+    setHeadless(sessionId: string, headless: boolean): Promise<TerminalSession | null>;
+    /** Drop the attention flag — called when the user views the tab. */
+    clearAttention(sessionId: string): Promise<void>;
     onData(cb: (sessionId: string, data: string) => void): () => void;
     onExit(cb: (sessionId: string, code: number) => void): () => void;
     onTitle(cb: (sessionId: string, title: string) => void): () => void;
+    /** Fired when any session metadata changes (e.g. attention flip). */
+    onUpdated(cb: (session: TerminalSession) => void): () => void;
   };
   config: {
     get(): Promise<AppConfig>;
@@ -486,6 +590,8 @@ export interface CcApi {
   app: {
     onMenuEvent(cb: (event: string) => void): () => void;
     homedir(): Promise<string>;
+    /** Fired when an OS notification click asks the UI to focus a session. */
+    onFocusSession(cb: (sessionId: string, projectId: string) => void): () => void;
   };
   skills: {
     list(projectPath?: string): Promise<SkillEntry[]>;
@@ -503,7 +609,7 @@ export interface CcApi {
         id: string,
         mode: SkillBundleApplyMode,
         projectPath?: string
-      ): Promise<{ ok: boolean; message?: string }>;
+      ): Promise<SkillBundleApplyResult>;
       onChanged(cb: (bundles: SkillBundle[]) => void): () => void;
     };
   };
@@ -520,6 +626,16 @@ export interface CcApi {
   mcp: {
     list(projectPath: string): Promise<McpServer[]>;
     setEnabled(projectPath: string, name: string, enabled: boolean): Promise<void>;
+    listAll(): Promise<McpServerEntry[]>;
+    setEnabledById(id: string, enabled: boolean): Promise<Result<true>>;
+    reveal(id: string): Promise<Result<true>>;
+    onChanged(cb: (entries: McpServerEntry[]) => void): () => void;
+  };
+  plugins: {
+    list(): Promise<PluginEntry[]>;
+    setEnabled(id: string, enabled: boolean): Promise<Result<true>>;
+    reveal(id: string): Promise<Result<true>>;
+    onChanged(cb: (entries: PluginEntry[]) => void): () => void;
   };
   claudeSettings: {
     read(projectPath: string, scope: ClaudeSettingsScope): Promise<ClaudeSettingsResult>;

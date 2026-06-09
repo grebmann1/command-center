@@ -1,5 +1,5 @@
 import { AlertTriangle, GitBranch } from 'lucide-react';
-import { sortProjectsForDisplay, useData, useUi } from '../store';
+import { sortProjectsForDisplay, useData, useUi, visibleTerminals } from '../store';
 import { profileIcon } from '../util/profileIcon';
 import type { Project, TerminalSession } from '@shared/types';
 
@@ -21,7 +21,7 @@ export function OverviewPanel() {
     }
     // No explicit pick: if the project's currently-selected tab is gone or
     // exited, land on a more useful default — the first running session.
-    const list = terminals[p.id] || [];
+    const list = visibleTerminals(terminals[p.id]);
     const current = list.find((t) => t.id === selectedTabId[p.id]);
     if (current && current.status !== 'exited') return;
     const fallback = list.find((t) => t.status !== 'exited') ?? list[0];
@@ -44,7 +44,7 @@ export function OverviewPanel() {
         ) : (
           <div className="overview-grid">
             {sorted.map((p) => {
-              const sessions = terminals[p.id] || [];
+              const sessions = visibleTerminals(terminals[p.id]);
               const git = gitStatus[p.id];
               const crashed = sessions.filter(
                 (s) => s.status === 'exited' && (s.exitCode ?? 0) !== 0

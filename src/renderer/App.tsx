@@ -6,6 +6,8 @@ import { OverviewPanel } from './components/OverviewPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { SchedulerPanel } from './components/SchedulerPanel';
 import { SkillsPanel } from './components/SkillsPanel';
+import { PluginsPanel } from './components/PluginsPanel';
+import { McpPanel } from './components/McpPanel';
 import { InboxView } from './components/InboxView';
 import { CommandPalette } from './components/CommandPalette';
 import { QuickOpen } from './components/QuickOpen';
@@ -13,7 +15,13 @@ import { ResumePicker } from './components/ResumePicker';
 import { SearchPanel } from './components/SearchPanel';
 import { ShortcutsHelp } from './components/ShortcutsHelp';
 import { Toaster } from './components/Toaster';
-import { scheduleGitRefresh, useData, useUi, useUnreadInboxCount } from './store';
+import {
+  scheduleGitRefresh,
+  useData,
+  useUi,
+  useUnreadInboxCount,
+  visibleTerminals
+} from './store';
 import type { LaunchProfileId } from '@shared/types';
 
 const KNOWN_LAUNCH_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
@@ -50,12 +58,20 @@ export function App() {
       document.title = `${inboxBadge}Skills · ${base}`;
       return;
     }
+    if (nav === 'plugins') {
+      document.title = `${inboxBadge}Plugins · ${base}`;
+      return;
+    }
+    if (nav === 'mcp') {
+      document.title = `${inboxBadge}MCP · ${base}`;
+      return;
+    }
     const project = projects.find((p) => p.id === selectedProjectId);
     if (!project) {
       document.title = `${inboxBadge}${base}`;
       return;
     }
-    const tabs = terminals[project.id] || [];
+    const tabs = visibleTerminals(terminals[project.id]);
     const activeId = selectedTabId[project.id];
     const active = tabs.find((t) => t.id === activeId);
     document.title = active
@@ -138,15 +154,23 @@ export function App() {
           if (!activeId) return;
           const tab = (data.terminals[projectId] ?? []).find((t) => t.id === activeId);
           if (tab?.pinned) return;
-          data.closeTerminal(activeId, projectId);
+          // ⌘W hides; the pty keeps running. Use right-click → Kill to drop it.
+          data.hideTerminal(activeId, projectId);
           return;
         }
       }
+    });
+    const offFocusSession = window.cc.app.onFocusSession((sessionId, projectId) => {
+      const ui = useUi.getState();
+      ui.setNav('projects');
+      ui.selectProject(projectId);
+      ui.selectTab(projectId, sessionId);
     });
     return () => {
       offShortcuts();
       offData();
       offMenu();
+      offFocusSession();
       window.removeEventListener('focus', onFocus);
     };
   }, [init]);
@@ -162,7 +186,9 @@ export function App() {
       {nav === 'projects' && overviewOpen && <OverviewPanel />}
       {nav === 'inbox' && <InboxView />}
       {nav === 'scheduler' && <SchedulerPanel />}
+      {nav === 'plugins' && <PluginsPanel />}
       {nav === 'skills' && <SkillsPanel />}
+      {nav === 'mcp' && <McpPanel />}
       {nav === 'settings' && <SettingsPanel />}
       <CommandPaletteHost />
       <QuickOpenHost />

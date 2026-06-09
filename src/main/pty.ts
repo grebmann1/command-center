@@ -7,6 +7,37 @@ import { mcpConfigPathForProject } from './mcp-config.js';
 interface Live {
   session: TerminalSession;
   proc: pty.IPty;
+  /** Last ~256 bytes of stripped output, used to match permission-prompt phrases. */
+  tail?: string;
+  /** Set after we raise attention so we don't spam the renderer on every chunk. */
+  attention?: boolean;
+  /** Bytes of stripped output emitted *after* attention was raised. If the agent
+   *  keeps streaming, it isn't actually waiting — auto-clear past a threshold. */
+  bytesSinceAttention?: number;
+}
+
+/** If the session keeps producing this much non-trivial output after we raised
+ *  attention, treat the original signal as a false positive and drop the pill.
+ *  Real permission prompts halt the output stream until the user answers. */
+const ATTENTION_AUTOCLEAR_BYTES = 4_096;
+
+/**
+ * Phrases Claude Code emits when it's blocking on the user. We keep this
+ * intentionally small — false positives are far worse than false negatives,
+ * since BEL (`\x07`) already covers most prompts.
+ */
+const ATTENTION_MARKERS = [
+  'Do you want to proceed',
+  'Do you want to make this edit',
+  'Do you want to allow',
+  'No, and tell Claude what to do differently'
+];
+
+/** ANSI / control byte stripper for the tail buffer. Cheap, allocation-light. */
+function stripAnsi(s: string): string {
+  // Drop CSI/OSC sequences and the bell char (we capture bell separately).
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x00-\x08\x0b-\x1f]/g, '');
 }
 
 /** Profiles that run a Claude-family CLI (i.e. an MCP host). */
@@ -107,12 +138,17 @@ export class PtyManager extends EventEmitter {
       [...args, ...claudeMcpArgs, ...psArgs, ...(opts.extraArgs ?? [])],
       inboxAllow
     );
+    // Mint the session id up front so we can bake it into the per-session
+    // MCP URL the agent connects back on. This lets `inbox_push` stamp
+    // the originating terminal onto each entry — without it, the inbox UI
+    // can only focus the project, not the specific tab the agent runs in.
+    const sessionId = randomUUID();
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       TERM: 'xterm-256color'
     };
     if (isClaudeProfile(opts.profile) && this.mcpBaseUrl) {
-      env.CC_MCP_URL = `${this.mcpBaseUrl}/mcp/${opts.projectId}`;
+      env.CC_MCP_URL = `${this.mcpBaseUrl}/mcp/${opts.projectId}/${sessionId}`;
     }
     const proc = pty.spawn(command, fullArgs, {
       name: 'xterm-256color',
@@ -123,7 +159,7 @@ export class PtyManager extends EventEmitter {
     });
 
     const session: TerminalSession = {
-      id: randomUUID(),
+      id: sessionId,
       projectId: opts.projectId,
       title: opts.title ?? titleFor(opts.profile),
       profile: opts.profile,
@@ -135,8 +171,14 @@ export class PtyManager extends EventEmitter {
     };
 
     this.live.set(session.id, { session, proc });
+    // Broadcast every newly-created session so scheduler-spawned tabs (which
+    // bypass the renderer's create() return path) still light up the tab strip.
+    this.emit('sessionUpdated', session);
 
-    proc.onData((data) => this.emit('data', session.id, data));
+    proc.onData((data) => {
+      this.detectAttention(session.id, data);
+      this.emit('data', session.id, data);
+    });
     proc.onExit(({ exitCode }) => {
       const live = this.live.get(session.id);
       if (live) {
@@ -206,7 +248,12 @@ export class PtyManager extends EventEmitter {
     };
 
     this.live.set(session.id, { session, proc });
-    proc.onData((data) => this.emit('data', session.id, data));
+    this.emit('sessionUpdated', session);
+
+    proc.onData((data) => {
+      this.detectAttention(session.id, data);
+      this.emit('data', session.id, data);
+    });
     proc.onExit(({ exitCode }) => {
       const live = this.live.get(session.id);
       if (live) {
@@ -221,6 +268,10 @@ export class PtyManager extends EventEmitter {
   }
 
   write(id: string, data: string) {
+    // Any user input is implicit acknowledgement that they've seen the
+    // prompt — clear the attention flag so the badge / OS notification
+    // don't keep nagging.
+    this.clearAttention(id);
     this.live.get(id)?.proc.write(data);
   }
 
@@ -246,6 +297,89 @@ export class PtyManager extends EventEmitter {
 
   killAll() {
     for (const id of this.live.keys()) this.close(id);
+  }
+
+  /**
+   * Inspect a chunk of pty output for "Claude is waiting on the user" signals
+   * — an ASCII BEL or one of a small list of permission-prompt phrases at the
+   * tail of the output. Raises `attention` on first match.
+   *
+   * Conservative on purpose:
+   *  - `claude-yolo` runs with `--dangerously-skip-permissions`, so permission
+   *    prompts are physically impossible. We skip phrase detection entirely
+   *    for that profile (keeping BEL, since `\x07` is also an "alert" bell).
+   *  - Phrase markers must appear in the last ~256 bytes of stripped output
+   *    so a marker echoed mid-stream by the agent's own narration doesn't
+   *    fire the badge.
+   *  - Once raised, the flag auto-clears if the session keeps producing
+   *    output (real prompts halt the stream until answered) — see the
+   *    `bytesSinceAttention` accounting below.
+   */
+  private detectAttention(id: string, data: string) {
+    const live = this.live.get(id);
+    if (!live) return;
+    const stripped = stripAnsi(data);
+    // If attention is already raised, watch for auto-clear: continued output
+    // is the cleanest "actually it wasn't waiting" signal we can get.
+    if (live.attention) {
+      live.bytesSinceAttention = (live.bytesSinceAttention ?? 0) + stripped.length;
+      if (live.bytesSinceAttention > ATTENTION_AUTOCLEAR_BYTES) {
+        this.clearAttention(id);
+      }
+      // Still keep the tail buffer fresh so a *subsequent* prompt re-fires.
+      live.tail = ((live.tail ?? '') + stripped).slice(-512);
+      return;
+    }
+    const tail = ((live.tail ?? '') + stripped).slice(-512);
+    live.tail = tail;
+    const isYolo = live.session.profile === 'claude-yolo';
+    const hasBell = !isYolo && data.indexOf('\x07') !== -1;
+    let matched = hasBell;
+    if (!matched && !isYolo) {
+      // Only count a marker if it lands in the trailing portion — phrases
+      // echoed in the middle of a long agent response don't count.
+      const window = tail.slice(-256);
+      for (const marker of ATTENTION_MARKERS) {
+        if (window.includes(marker)) {
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched) return;
+    live.attention = true;
+    live.bytesSinceAttention = 0;
+    live.session.attention = 'waiting';
+    this.emit('sessionUpdated', live.session);
+    this.emit('attention', live.session);
+  }
+
+  /**
+   * Drop the attention flag (called on user input or via explicit ack from
+   * the renderer when the user opens / focuses the tab). Idempotent.
+   */
+  clearAttention(id: string) {
+    const live = this.live.get(id);
+    if (!live || !live.attention) return;
+    live.attention = false;
+    live.bytesSinceAttention = 0;
+    live.session.attention = undefined;
+    this.emit('sessionUpdated', live.session);
+  }
+
+  /**
+   * Toggle the headless flag on a live session. Headless tabs stay visible
+   * to `list()` but the renderer hides them from the tab strip — useful
+   * when the user X's a tab they don't want killed (the pty keeps running
+   * in the background). Returns the updated session, or null if missing.
+   */
+  setHeadless(id: string, headless: boolean): TerminalSession | null {
+    const live = this.live.get(id);
+    if (!live) return null;
+    if (live.session.headless === headless) return live.session;
+    live.session.headless = headless || undefined;
+    this.emit('sessionUpdated', live.session);
+    return live.session;
   }
 }
 

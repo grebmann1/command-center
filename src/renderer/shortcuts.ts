@@ -199,13 +199,13 @@ export function installShortcuts(): () => void {
       }).catch(() => {});
       return;
     }
-    // cmd+w — close current tab (no-op on pinned tabs)
+    // cmd+w — hide current tab (pty keeps running; right-click → Kill to drop).
     if (e.key === 'w') {
       if (!projectId || !activeTabId) return;
       e.preventDefault();
       const active = tabs.find((t) => t.id === activeTabId);
       if (active?.pinned) return;
-      data.closeTerminal(activeTabId, projectId).catch(() => {});
+      data.hideTerminal(activeTabId, projectId).catch(() => {});
       return;
     }
     // cmd+1..9 (or cmd+shift+1..9) — switch tab / project.

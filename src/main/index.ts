@@ -7,6 +7,7 @@ import {
   screen,
   Menu,
   nativeImage,
+  Notification,
   powerMonitor
 } from 'electron';
 import { join, relative, isAbsolute } from 'node:path';
@@ -24,6 +25,12 @@ import { createInboxStore, type IInboxStore, type InboxEntry } from './inbox-sto
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import { ensureMcpConfigForProject } from './mcp-config.js';
 import { listMcpServers, setMcpServerEnabled } from './mcp.js';
+import {
+  listMcpServersAll,
+  revealMcpServer,
+  setMcpServerEnabledById
+} from './mcp-catalogue.js';
+import { listPlugins, revealPlugin, setPluginEnabled } from './plugins.js';
 import { readClaudeProjectSettings, writeClaudeProjectSettings } from './claude-settings.js';
 import {
   listSkills,
@@ -80,7 +87,30 @@ function emitSkillsChangedDebounced() {
   skillChangeDebounce = setTimeout(() => {
     skillChangeDebounce = null;
     safeSend(IPC.skills.onChanged);
+    // Plugins and MCP share the same on-disk roots (~/.claude/plugins/ and
+    // ~/.claude/settings.json) — fan out the same debounced tick to them
+    // instead of installing duplicate watchers.
+    void emitPluginsChanged();
+    void emitMcpChanged();
   }, 250);
+}
+
+async function emitPluginsChanged() {
+  try {
+    const entries = await listPlugins();
+    safeSend(IPC.plugins.onChanged, entries);
+  } catch (err) {
+    logMainError('emit plugins changed', err);
+  }
+}
+
+async function emitMcpChanged() {
+  try {
+    const entries = await listMcpServersAll(store.listProjects());
+    safeSend(IPC.mcp.onChanged, entries);
+  } catch (err) {
+    logMainError('emit mcp changed', err);
+  }
 }
 
 function watchSkillsTarget(target: string): FSWatcher | null {
@@ -104,7 +134,10 @@ function startSkillsWatchers() {
   const targets = [
     join(home, '.claude', 'skills'),
     join(home, '.claude', 'plugins'),
-    join(home, '.claude', 'settings.json')
+    join(home, '.claude', 'settings.json'),
+    // ~/.claude.json is the canonical source for user-scope MCP servers;
+    // without watching it, McpPanel goes stale after `claude mcp add`.
+    join(home, '.claude.json')
   ];
   for (const target of targets) {
     const w = watchSkillsTarget(target);
@@ -307,6 +340,38 @@ function createWindow() {
   ptys.on('exit', (sessionId: string, code: number) => {
     safeSend(IPC.terminals.onExit, sessionId, code);
   });
+  ptys.on('sessionUpdated', (session) => {
+    safeSend(IPC.terminals.onUpdated, session);
+  });
+  ptys.on('attention', (session) => {
+    notifyAttention(session);
+  });
+}
+
+/**
+ * Show an OS notification when Claude is waiting on the user *and* the
+ * window isn't focused. Clicking the notification focuses the window and
+ * selects the tab.
+ */
+function notifyAttention(session: import('../shared/types.js').TerminalSession) {
+  const focused = win && !win.isDestroyed() && win.isFocused();
+  if (focused) return;
+  if (!Notification.isSupported()) return;
+  const project = store.listProjects().find((p) => p.id === session.projectId);
+  const projectLabel = project?.name ?? 'project';
+  const n = new Notification({
+    title: `Claude is waiting · ${projectLabel}`,
+    body: session.title || 'A session needs your attention',
+    silent: false
+  });
+  n.on('click', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    safeSend('app:focusSession', session.id, session.projectId);
+  });
+  n.show();
 }
 
 function registerIpc() {
@@ -428,6 +493,16 @@ function registerIpc() {
     () => undefined
   );
   safeHandle(IPC.terminals.close, (id: string) => ptys.close(id), () => undefined);
+  safeHandle(
+    IPC.terminals.setHeadless,
+    (id: string, headless: boolean) => ptys.setHeadless(id, headless),
+    () => null
+  );
+  safeHandle(
+    IPC.terminals.clearAttention,
+    (id: string) => ptys.clearAttention(id),
+    () => undefined
+  );
 
   safeHandle(IPC.config.get, () => store.getConfig(), () => store.getConfig());
   safeHandle<[Partial<AppConfig>], AppConfig>(
@@ -509,6 +584,61 @@ function registerIpc() {
       setMcpServerEnabled(projectPath, name, enabled),
     () => undefined
   );
+  safeHandle(
+    IPC.mcp.listAll,
+    () => listMcpServersAll(store.listProjects()),
+    () => []
+  );
+  safeHandle(
+    IPC.mcp.setEnabledById,
+    async (id: string, enabled: boolean) => {
+      const res = await setMcpServerEnabledById(id, enabled, store.listProjects());
+      if (res.ok) void emitMcpChanged();
+      return res;
+    },
+    (err): Result<true> => ({
+      ok: false,
+      code: 'WRITE_FAILED',
+      message: err instanceof Error ? err.message : String(err)
+    })
+  );
+  safeHandle(
+    IPC.mcp.reveal,
+    (id: string) => revealMcpServer(id, store.listProjects()),
+    (err): Result<true> => ({
+      ok: false,
+      code: 'REVEAL_FAILED',
+      message: err instanceof Error ? err.message : String(err)
+    })
+  );
+
+  safeHandle(IPC.plugins.list, () => listPlugins(), () => []);
+  safeHandle(
+    IPC.plugins.setEnabled,
+    async (id: string, enabled: boolean) => {
+      const res = await setPluginEnabled(id, enabled);
+      if (res.ok) {
+        void emitPluginsChanged();
+        // Plugin enable/disable cascades to plugin-source MCPs; refresh.
+        void emitMcpChanged();
+      }
+      return res;
+    },
+    (err): Result<true> => ({
+      ok: false,
+      code: 'WRITE_FAILED',
+      message: err instanceof Error ? err.message : String(err)
+    })
+  );
+  safeHandle(
+    IPC.plugins.reveal,
+    (id: string) => revealPlugin(id),
+    (err): Result<true> => ({
+      ok: false,
+      code: 'REVEAL_FAILED',
+      message: err instanceof Error ? err.message : String(err)
+    })
+  );
 
   safeHandle(
     IPC.claudeSettings.read,
@@ -574,7 +704,7 @@ function registerIpc() {
     IPC.skills.bundles.apply,
     (id: string, mode: SkillBundleApplyMode, projectPath?: string) =>
       skillBundles.apply(id, mode, projectPathToOptions(projectPath)),
-    () => ({ ok: false, message: 'apply failed' })
+    () => ({ ok: false, applied: 0, skippedPlugin: 0, message: 'apply failed' })
   );
   skillBundles.on('changed', (bundles) => {
     safeSend(IPC.skills.bundles.onChanged, bundles);
@@ -664,6 +794,10 @@ function buildAppMenu() {
               {
                 label: 'Settings…',
                 accelerator: 'Cmd+,',
+                // Display the hint only — the renderer's capture-phase keydown
+                // handler (shortcuts.ts) owns this chord. Without this, the
+                // native accelerator AND the JS handler both fire on one press.
+                registerAccelerator: false,
                 click: () => win?.webContents.send('app:openSettings')
               },
               { type: 'separator' as const },
@@ -684,17 +818,21 @@ function buildAppMenu() {
         {
           label: 'New Claude Tab',
           accelerator: 'CmdOrCtrl+T',
+          // Hint only; shortcuts.ts owns the keystroke (see Settings… above).
+          registerAccelerator: false,
           click: () => win?.webContents.send('app:newClaudeTab')
         },
         {
           label: 'Reopen Closed Tab',
           accelerator: 'CmdOrCtrl+Shift+T',
+          registerAccelerator: false,
           click: () => win?.webContents.send('app:reopenTab')
         },
         { type: 'separator' },
         {
           label: 'Close Tab',
           accelerator: 'CmdOrCtrl+W',
+          registerAccelerator: false,
           click: () => win?.webContents.send('app:closeTab')
         }
       ]
@@ -717,16 +855,19 @@ function buildAppMenu() {
         {
           label: 'Toggle Terminals / Explorer',
           accelerator: 'CmdOrCtrl+B',
+          registerAccelerator: false,
           click: () => win?.webContents.send('app:toggleWorkspaceMode')
         },
         {
           label: 'Toggle Inbox',
           accelerator: 'CmdOrCtrl+I',
+          registerAccelerator: false,
           click: () => win?.webContents.send('app:toggleInbox')
         },
         {
           label: 'Command Palette…',
           accelerator: 'CmdOrCtrl+P',
+          registerAccelerator: false,
           click: () => win?.webContents.send('app:openPalette')
         },
         { type: 'separator' },
@@ -762,6 +903,7 @@ function buildAppMenu() {
         {
           label: 'Keyboard Shortcuts',
           accelerator: 'CmdOrCtrl+/',
+          registerAccelerator: false,
           click: () => win?.webContents.send('app:openShortcuts')
         },
         { type: 'separator' },
@@ -796,7 +938,7 @@ app.whenReady().then(() => {
   });
   buildAppMenu();
   registerIpc();
-  scheduler.setDeps({ ptys, store, logger: logMainError });
+  scheduler.setDeps({ ptys, store, inbox: inboxStore, logger: logMainError });
   scheduler.loadAll(store.listProjects());
   // Wake-from-sleep can leave many schedules well past their armed delay;
   // a re-load triggers our `arm()` drift fix so each one re-arms fresh

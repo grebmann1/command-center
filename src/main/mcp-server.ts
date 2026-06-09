@@ -4,11 +4,15 @@
  * Bound to `127.0.0.1:0` (OS picks a free port, captured at boot). The
  * URL path carries identity:
  *
- *   POST /mcp/:projectId   project-scoped surface (inbox_push for now)
+ *   POST /mcp/:projectId               project-scoped surface
+ *   POST /mcp/:projectId/:sessionId    session-scoped surface (preferred)
  *
  * Each request builds a fresh `McpServer` with the inbox tool whose
- * handler closes over `projectId` parsed from the URL — the agent never
- * sees that id in any tool schema, so forgery is impossible.
+ * handler closes over `projectId` (and `sessionId` when present) parsed
+ * from the URL — the agent never sees those ids in any tool schema, so
+ * forgery is impossible. The session-scoped form lets `inbox_push` stamp
+ * the originating terminal onto the entry so the inbox UI can route the
+ * "Open" click back to that exact tab.
  *
  * Modeled after OpenAlice's `src/server/mcp.ts` but stripped of Hono /
  * `@hono/node-server` — Node's built-in `http` listener is sufficient
@@ -54,6 +58,7 @@ export interface McpServerHandle {
 function buildProjectMcpServer(opts: {
   projectId: string;
   projectLabel?: string;
+  sessionId?: string;
   inboxStore: IInboxStore;
 }): McpServer {
   const mcp = new McpServer({ name: 'cc-inbox', version: '0.1.0' });
@@ -62,10 +67,12 @@ function buildProjectMcpServer(opts: {
 }
 
 /**
- * Match `/mcp/:projectId` (no trailing slash, no extra segments). Returns
- * the captured projectId or null. Strict by design: anything else 404s.
+ * Match `/mcp/:projectId` or `/mcp/:projectId/:sessionId`. Strict: any
+ * other shape 404s. Returns null when no match. Exported for unit tests.
  */
-function matchMcpRoute(rawUrl: string | undefined): string | null {
+export function matchMcpRoute(
+  rawUrl: string | undefined
+): { projectId: string; sessionId?: string } | null {
   if (!rawUrl) return null;
   let pathname: string;
   try {
@@ -73,8 +80,12 @@ function matchMcpRoute(rawUrl: string | undefined): string | null {
   } catch {
     return null;
   }
-  const m = /^\/mcp\/([^/]+)$/.exec(pathname);
-  return m ? decodeURIComponent(m[1]) : null;
+  const m = /^\/mcp\/([^/]+)(?:\/([^/]+))?$/.exec(pathname);
+  if (!m) return null;
+  return {
+    projectId: decodeURIComponent(m[1]),
+    sessionId: m[2] ? decodeURIComponent(m[2]) : undefined
+  };
 }
 
 export async function startMcpServer(opts: McpServerOptions): Promise<McpServerHandle> {
@@ -117,13 +128,14 @@ async function handleRequest(
   opts: McpServerOptions,
   log: (msg: string) => void
 ) {
-  const projectId = matchMcpRoute(req.url);
-  if (!projectId) {
+  const route = matchMcpRoute(req.url);
+  if (!route) {
     res.statusCode = 404;
     res.setHeader('content-type', 'text/plain; charset=utf-8');
     res.end('not found');
     return;
   }
+  const { projectId, sessionId } = route;
 
   // Look up the label at request time — a recently renamed project
   // gets its current label snapshotted into the inbox entry.
@@ -140,6 +152,7 @@ async function handleRequest(
   const mcp = buildProjectMcpServer({
     projectId,
     projectLabel,
+    sessionId,
     inboxStore: opts.inboxStore
   });
 

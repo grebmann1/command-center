@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   SkillBundle,
   SkillBundleApplyMode,
+  SkillBundleApplyResult,
   SkillBundleInput,
   SkillEntry
 } from '../shared/types.js';
@@ -138,31 +139,45 @@ export class SkillBundlesStore extends EventEmitter {
 
   /**
    * Apply a bundle:
-   *  - additive: enable every skill listed in the bundle; leave others alone.
-   *  - exclusive: enable bundle skills, disable everything else.
+   *  - additive: enable every user/project skill listed in the bundle; leave others alone.
+   *  - exclusive: enable bundle's user/project skills, disable every other user/project skill.
    *
-   * disabledSkills is keyed by short skill name (Claude Code's matcher),
-   * but bundle skillIds are qualified `${source}:${qualifiedName}` ids — we
-   * resolve via `listSkills()` to bridge the two.
+   * Plugin skills are filtered out — they're managed via Claude Code's
+   * `/plugin` command and can't be toggled from settings.json. We keep their
+   * ids in the bundle's skillIds (so re-applying after a plugin gets removed
+   * doesn't lose intent) but they don't influence the write.
+   *
+   * skillOverrides is keyed by short skill name (per Claude Code docs); bundle
+   * skillIds are qualified `${source}:${qualifiedName}` ids — we resolve via
+   * `listSkills()` to bridge the two.
    */
   async apply(
     id: string,
     mode: SkillBundleApplyMode,
     options: ListSkillsOptions = {}
-  ): Promise<{ ok: boolean; message?: string }> {
+  ): Promise<SkillBundleApplyResult> {
     const bundle = readBundleFile(join(bundlesDir(), `${id}.json`));
-    if (!bundle) return { ok: false, message: `Bundle not found: ${id}` };
+    if (!bundle) {
+      return { ok: false, applied: 0, skippedPlugin: 0, message: `Bundle not found: ${id}` };
+    }
     const all = await listSkills(options);
     const byId = new Map<string, SkillEntry>(all.map((s) => [s.id, s]));
     const toEnableNames = new Set<string>();
+    let skippedPlugin = 0;
     for (const sid of bundle.skillIds) {
       const skill = byId.get(sid);
-      if (skill) toEnableNames.add(skill.name);
+      if (!skill) continue;
+      if (skill.source === 'plugin') {
+        skippedPlugin += 1;
+        continue;
+      }
+      toEnableNames.add(skill.name);
     }
     const updates: Array<{ name: string; enabled: boolean }> = [];
     if (mode === 'exclusive') {
       const seen = new Set<string>();
       for (const s of all) {
+        if (s.source === 'plugin') continue;
         if (seen.has(s.name)) continue;
         seen.add(s.name);
         updates.push({ name: s.name, enabled: toEnableNames.has(s.name) });
@@ -173,7 +188,7 @@ export class SkillBundlesStore extends EventEmitter {
       }
     }
     await setManyEnabled(updates);
-    return { ok: true };
+    return { ok: true, applied: updates.length, skippedPlugin };
   }
 
   /** Path of the bundles dir (for "Open in Finder"). */

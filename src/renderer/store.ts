@@ -7,11 +7,20 @@ import type {
   ClaudeSessionSummary,
   GitStatus,
   InboxEntry,
+  McpServerEntry,
+  PluginEntry,
   ScheduledTask,
   ScheduleTemplate
 } from '@shared/types';
 
-export type NavId = 'projects' | 'inbox' | 'scheduler' | 'skills' | 'settings';
+export type NavId =
+  | 'projects'
+  | 'inbox'
+  | 'scheduler'
+  | 'plugins'
+  | 'skills'
+  | 'mcp'
+  | 'settings';
 
 export interface Toast {
   id: string;
@@ -93,6 +102,12 @@ interface UiState {
   workbenchEnabled: boolean;
   setWorkbenchEnabled: (on: boolean) => void;
   setNav: (n: NavId) => void;
+  /** Cross-panel deep-link prefilter: a Plugin row's "4 skills" chip writes
+   *  `catalogueFilter.skills = pluginName`, then navs to skills. The skills
+   *  panel reads it on mount, applies it as a search prefill, and clears
+   *  the slot. Same for `catalogueFilter.mcp`. */
+  catalogueFilter: { skills?: string; mcp?: string };
+  setCatalogueFilter: (key: 'skills' | 'mcp', value: string | undefined) => void;
   selectProject: (id: string | null) => void;
   selectTab: (projectId: string, tabId: string | undefined) => void;
   setPaletteOpen: (open: boolean) => void;
@@ -217,6 +232,14 @@ export const useUi = create<UiState>((set) => ({
     queueMicrotask(() => window.location.reload());
   },
   setNav: (nav) => set({ nav }),
+  catalogueFilter: {},
+  setCatalogueFilter: (key, value) =>
+    set((s) => ({
+      catalogueFilter:
+        value === undefined
+          ? Object.fromEntries(Object.entries(s.catalogueFilter).filter(([k]) => k !== key))
+          : { ...s.catalogueFilter, [key]: value }
+    })),
   selectProject: (id) => {
     set({ selectedProjectId: id, overviewOpen: false });
     if (!id) {
@@ -234,12 +257,18 @@ export const useUi = create<UiState>((set) => ({
     window.cc.projects.touch(id).catch(() => {});
     useData.getState().loadGitStatus(id);
   },
-  selectTab: (projectId, tabId) =>
+  selectTab: (projectId, tabId) => {
+    if (tabId) {
+      // Viewing the tab is acknowledgement — drop the attention flag in main
+      // so the OS notification doesn't re-fire on the next bell.
+      window.cc.terminals.clearAttention(tabId).catch(() => {});
+    }
     set((s) => {
       const unread = { ...s.unread };
       if (tabId) delete unread[tabId];
       return { selectedTabId: { ...s.selectedTabId, [projectId]: tabId }, unread };
-    }),
+    });
+  },
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
   setQuickOpenOpen: (quickOpenOpen) => set({ quickOpenOpen }),
   setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
@@ -435,11 +464,29 @@ interface DataState {
     opts?: { extraArgs?: string[]; title?: string; cwd?: string }
   ) => Promise<TerminalSession | null>;
   closeTerminal: (sessionId: string, projectId: string) => Promise<void>;
+  /**
+   * Hide a tab without killing its pty. The session stays alive as a
+   * headless background runner; the user can promote it back via the
+   * Headless picker (right-click on the +). Used by the tab's X button.
+   */
+  hideTerminal: (sessionId: string, projectId: string) => Promise<void>;
+  /** Bring a hidden tab back to the tab strip. */
+  restoreTerminal: (sessionId: string, projectId: string) => Promise<void>;
   restartTerminal: (sessionId: string, projectId: string) => Promise<TerminalSession | null>;
   reorderTerminal: (projectId: string, fromId: string, toId: string) => void;
   renameTerminal: (projectId: string, sessionId: string, title: string) => void;
   setPinned: (projectId: string, sessionId: string, pinned: boolean) => void;
   markExited: (sessionId: string, exitCode?: number) => void;
+}
+
+/**
+ * Filter out hidden (headless) terminals from a project's tab strip. Hidden
+ * sessions still have a live pty — they're just not shown in the UI. The
+ * scheduler creates them this way; the user also produces them by clicking
+ * the tab's X (which calls `hideTerminal`, not `closeTerminal`).
+ */
+export function visibleTerminals(list: TerminalSession[] | undefined): TerminalSession[] {
+  return (list ?? []).filter((t) => !t.headless);
 }
 
 export function sortProjectsForDisplay(projects: Project[]): Project[] {
@@ -536,6 +583,50 @@ export const useData = create<DataState>((set, get) => ({
     }
     window.cc.scheduler.onTemplatesChanged((templates) => {
       useScheduleTemplates.setState({ templates });
+    });
+
+    // Plugins + MCP catalogues: same one-shot + push pattern. Main fans out
+    // a single debounced fs.watch into `plugins:onChanged` and `mcp:onChanged`
+    // so we never poll.
+    try {
+      const entries = await window.cc.plugins.list();
+      usePlugins.setState({ entries, loading: false });
+    } catch {
+      usePlugins.setState({ loading: false });
+    }
+    window.cc.plugins.onChanged((entries) => {
+      usePlugins.setState({ entries });
+    });
+
+    try {
+      const entries = await window.cc.mcp.listAll();
+      useMcpCatalogue.setState({ entries, loading: false });
+    } catch {
+      useMcpCatalogue.setState({ loading: false });
+    }
+    window.cc.mcp.onChanged((entries) => {
+      useMcpCatalogue.setState({ entries });
+    });
+
+    // Session metadata changes (e.g. attention flips, exit transitions, or
+    // a scheduler-spawned tab being broadcast) come in via this push so the
+    // tab strip re-renders without polling.
+    window.cc.terminals.onUpdated((session) => {
+      set((s) => {
+        const list = s.terminals[session.projectId];
+        if (!list) {
+          return { terminals: { ...s.terminals, [session.projectId]: [session] } };
+        }
+        const idx = list.findIndex((t) => t.id === session.id);
+        if (idx === -1) {
+          return {
+            terminals: { ...s.terminals, [session.projectId]: [...list, session] }
+          };
+        }
+        const next = list.slice();
+        next[idx] = { ...next[idx], ...session };
+        return { terminals: { ...s.terminals, [session.projectId]: next } };
+      });
     });
   },
 
@@ -715,12 +806,17 @@ export const useData = create<DataState>((set, get) => ({
         console.error('terminal create failed', result);
         return null;
       }
-      set((s) => ({
-        terminals: {
-          ...s.terminals,
-          [projectId]: [...(s.terminals[projectId] || []), result.value]
-        }
-      }));
+      // Idempotent append: ptys.create() emits `sessionUpdated` synchronously,
+      // which the onUpdated handler may have already appended before this IPC
+      // promise resolves (the two messages race). Dedupe by id so a click
+      // never yields two tabs for the same session.
+      set((s) => {
+        const list = s.terminals[projectId] || [];
+        if (list.some((t) => t.id === result.value.id)) return s;
+        return {
+          terminals: { ...s.terminals, [projectId]: [...list, result.value] }
+        };
+      });
       return result.value;
     } catch (err) {
       pushErrorToast(errorMessage(err, 'Failed to create terminal'));
@@ -767,6 +863,80 @@ export const useData = create<DataState>((set, get) => ({
       const target = targetIdx >= 0 ? next[targetIdx]?.id : undefined;
       ui.selectTab(projectId, target);
     }
+  },
+
+  async hideTerminal(sessionId, projectId) {
+    // Flip the session's headless flag in main; visibleTerminals() filters
+    // headless out so it disappears from the tab strip without killing the
+    // pty. The session keeps running and can be restored via the headless
+    // picker. We optimistically update the local copy so the UI reacts
+    // before the IPC round-trip resolves.
+    const list = get().terminals[projectId] || [];
+    const target = list.find((t) => t.id === sessionId);
+    if (!target) return;
+    const targetIdx = list.findIndex((t) => t.id === sessionId);
+    set((s) => ({
+      terminals: {
+        ...s.terminals,
+        [projectId]: (s.terminals[projectId] ?? []).map((t) =>
+          t.id === sessionId ? { ...t, headless: true } : t
+        )
+      }
+    }));
+    useUi.getState().clearUnread(sessionId);
+    useUi.getState().removeFromSplit(projectId, sessionId);
+    try {
+      await window.cc.terminals.setHeadless(sessionId, true);
+    } catch (err) {
+      // Revert on failure so the tab reappears rather than vanishing
+      // silently. Failure is rare (only if the pty is already gone).
+      pushErrorToast(errorMessage(err, 'Failed to hide tab'));
+      set((s) => ({
+        terminals: {
+          ...s.terminals,
+          [projectId]: (s.terminals[projectId] ?? []).map((t) =>
+            t.id === sessionId ? { ...t, headless: undefined } : t
+          )
+        }
+      }));
+      return;
+    }
+    // Same selection-advance logic as closeTerminal: if the hidden tab was
+    // active, pick the right neighbor (or left, or none).
+    const ui = useUi.getState();
+    if (ui.selectedTabId[projectId] === sessionId) {
+      const next = visibleTerminals(get().terminals[projectId]);
+      const advanceIdx = Math.min(targetIdx, next.length - 1);
+      const advance = advanceIdx >= 0 ? next[advanceIdx]?.id : undefined;
+      ui.selectTab(projectId, advance);
+    }
+  },
+
+  async restoreTerminal(sessionId, projectId) {
+    set((s) => ({
+      terminals: {
+        ...s.terminals,
+        [projectId]: (s.terminals[projectId] ?? []).map((t) =>
+          t.id === sessionId ? { ...t, headless: undefined } : t
+        )
+      }
+    }));
+    try {
+      await window.cc.terminals.setHeadless(sessionId, false);
+    } catch (err) {
+      pushErrorToast(errorMessage(err, 'Failed to restore tab'));
+      // Re-hide on failure to keep state consistent.
+      set((s) => ({
+        terminals: {
+          ...s.terminals,
+          [projectId]: (s.terminals[projectId] ?? []).map((t) =>
+            t.id === sessionId ? { ...t, headless: true } : t
+          )
+        }
+      }));
+      return;
+    }
+    useUi.getState().selectTab(projectId, sessionId);
   },
 
   async restartTerminal(sessionId, projectId) {
@@ -1021,6 +1191,26 @@ interface ScheduleTemplatesState {
 
 export const useScheduleTemplates = create<ScheduleTemplatesState>(() => ({
   templates: [],
+  loading: true
+}));
+
+interface PluginsLiveState {
+  entries: PluginEntry[];
+  loading: boolean;
+}
+
+export const usePlugins = create<PluginsLiveState>(() => ({
+  entries: [],
+  loading: true
+}));
+
+interface McpLiveState {
+  entries: McpServerEntry[];
+  loading: boolean;
+}
+
+export const useMcpCatalogue = create<McpLiveState>(() => ({
+  entries: [],
   loading: true
 }));
 

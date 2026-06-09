@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent
+} from 'react';
 import {
   Clock,
   Plus,
@@ -23,6 +29,8 @@ import {
   XCircle,
   CircleSlash,
   Folder,
+  Square,
+  ExternalLink,
   type LucideIcon
 } from 'lucide-react';
 import type {
@@ -30,6 +38,7 @@ import type {
   Project,
   ScheduledTask,
   ScheduleCreateInput,
+  ScheduleRun,
   ScheduleTemplate
 } from '@shared/types';
 import { parseEvery, formatInterval } from '@shared/parse-every';
@@ -426,6 +435,7 @@ function ScheduleRow({
   const terminals = useData((s) => s.terminals);
   const setNav = useUi((s) => s.setNav);
   const selectTab = useUi((s) => s.selectTab);
+  const selectProject = useUi((s) => s.selectProject);
   const pushToast = useUi((s) => s.pushToast);
 
   const toggle = async () => {
@@ -438,14 +448,9 @@ function ScheduleRow({
       pushToast(`Run failed: ${result.message}`, 'error');
       return;
     }
-    const sessionId = result.value.status.lastRunSessionId;
-    if (sessionId) {
-      pushToast(`Fired "${task.name}" — view terminal`, 'info');
-      setNav('projects');
-      selectTab(task.projectId, sessionId);
-    } else {
-      pushToast(`Fired "${task.name}"`, 'info');
-    }
+    // Tab appears in the project automatically (scheduler spawns visibly);
+    // the toast confirms the fire so the user knows it took effect.
+    pushToast(`Fired "${task.name}"`, 'info');
   };
 
   const projectTerminals = terminals[task.projectId] ?? [];
@@ -454,30 +459,157 @@ function ScheduleRow({
       (s) => s.id === sessionId && (s.status === 'running' || s.status === 'starting')
     );
 
-  const jumpToRun = (sessionId: string | undefined) => {
-    if (!sessionId) return;
-    if (!isSessionAlive(sessionId)) return;
-    setNav('projects');
-    selectTab(task.projectId, sessionId);
-  };
-
   const runs = task.status.runs ?? [];
   const hasHistory = runs.length > 0;
 
+  // Walk runs newest→oldest to find the most-recent sessionId that's still
+  // alive. Fixes the case where a fire was skipped (no sessionId on the head
+  // record) but the previous run's session is still active and should be
+  // surfaced as "running".
+  const liveSessionId = (() => {
+    for (const run of runs) {
+      if (run.sessionId && isSessionAlive(run.sessionId)) return run.sessionId;
+    }
+    return null;
+  })();
+  const liveSession = liveSessionId
+    ? projectTerminals.find((s) => s.id === liveSessionId) ?? null
+    : null;
+  const needsAttention = liveSession?.attention === 'waiting';
+
+  const promoteAndOpen = (sessionId: string) => {
+    // Scheduled fires now spawn visible tabs directly; this is just a deep-link
+    // helper that switches the user's view to the running session.
+    setNav('projects');
+    selectProject(task.projectId);
+    selectTab(task.projectId, sessionId);
+  };
+
+  const jumpToRun = (sessionId: string | undefined) => {
+    if (!sessionId) return;
+    if (!isSessionAlive(sessionId)) return;
+    void promoteAndOpen(sessionId);
+  };
+
+  const stopLive = async (e?: ReactMouseEvent) => {
+    e?.stopPropagation();
+    if (!liveSessionId) return;
+    try {
+      await window.cc.terminals.close(liveSessionId);
+      pushToast(`Stopped "${task.name}"`, 'info');
+    } catch {
+      pushToast(`Failed to stop "${task.name}"`, 'error');
+    }
+  };
+
+  const openLive = (e?: ReactMouseEvent) => {
+    e?.stopPropagation();
+    if (!liveSessionId) return;
+    void promoteAndOpen(liveSessionId);
+  };
+
+  const statusKind = liveSessionId ? 'running' : task.enabled ? 'idle' : 'off';
+  const statusLabel = liveSessionId ? 'running' : task.enabled ? 'idle' : 'off';
+
+  // Stop the row's expand-toggle from firing when the user clicks
+  // an inner control. Each handler still runs normally.
+  const stop = (e: ReactMouseEvent) => e.stopPropagation();
+
   return (
-    <li className={`scheduler-card ${task.enabled ? '' : 'is-disabled'} ${expanded ? 'is-expanded' : ''}`}>
-      <div className="scheduler-card-main">
-        <label className="scheduler-toggle" title={task.enabled ? 'Disable' : 'Enable'}>
+    <li className={`scheduler-card ${task.enabled ? '' : 'is-disabled'} ${expanded ? 'is-expanded' : ''} ${liveSessionId ? 'is-running' : ''}`}>
+      <div
+        className="scheduler-card-main scheduler-card-main--compact"
+        role="button"
+        tabIndex={0}
+        onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setExpanded((v) => !v);
+          }
+        }}
+        aria-expanded={expanded}
+        title={expanded ? 'Click to collapse' : 'Click to expand'}
+      >
+        <span
+          className={`scheduler-status-dot scheduler-status-dot--${statusKind}`}
+          aria-label={statusLabel}
+          title={statusLabel}
+        />
+        <label className="scheduler-toggle" onClick={stop} title={task.enabled ? 'Disable schedule' : 'Enable schedule'}>
           <input type="checkbox" checked={task.enabled} onChange={toggle} />
           <span aria-hidden />
         </label>
-        <div className="scheduler-card-body">
-          <div className="scheduler-card-title">{task.name}</div>
-          <div className="scheduler-card-meta">
-            <span className="scheduler-pill scheduler-pill--interval">every {task.schedule.every}</span>
-            <span className="scheduler-pill">{projectName}</span>
-            <span className="scheduler-pill">{PROFILE_LABEL[task.profile]}</span>
-          </div>
+        <div className="scheduler-card-compact-body">
+          <span className="scheduler-card-title">{task.name}</span>
+          <span className="scheduler-card-compact-meta">
+            {projectName} · {PROFILE_LABEL[task.profile]} · every {task.schedule.every}
+          </span>
+        </div>
+        <div className="scheduler-card-compact-when">
+          {liveSessionId ? (
+            needsAttention ? (
+              <span
+                className="scheduler-pill scheduler-pill--attention"
+                title="Claude is waiting on you — click Open"
+              >
+                needs you
+              </span>
+            ) : (
+              <span className="scheduler-pill scheduler-pill--running" title="Terminal session is live">
+                running
+              </span>
+            )
+          ) : task.enabled && nextRun ? (
+            <span className="scheduler-card-compact-next" title="Next fire">
+              in {formatCountdown(nextRun)}
+            </span>
+          ) : (
+            <span className="scheduler-card-compact-next scheduler-card-compact-next--muted">paused</span>
+          )}
+        </div>
+        <div className="scheduler-card-actions" onClick={stop}>
+          {liveSessionId && (
+            <>
+              <button
+                className="scheduler-icon-btn"
+                onClick={openLive}
+                title="Open running terminal"
+                aria-label="Open running terminal"
+              >
+                <ExternalLink size={14} />
+              </button>
+              <button
+                className="scheduler-icon-btn scheduler-icon-btn--danger"
+                onClick={stopLive}
+                title="Stop running terminal"
+                aria-label="Stop running terminal"
+              >
+                <Square size={14} />
+              </button>
+            </>
+          )}
+          {!liveSessionId && (
+            <button className="scheduler-icon-btn" onClick={runNow} title="Run now" aria-label="Run now">
+              <Play size={14} />
+            </button>
+          )}
+          <button
+            className={`scheduler-icon-btn scheduler-icon-btn--chevron ${expanded ? 'is-open' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
+            title={expanded ? 'Hide details' : 'Show details'}
+            aria-label="Toggle details"
+            aria-expanded={expanded}
+          >
+            <ChevronDown size={14} />
+          </button>
+        </div>
+      </div>
+      {expanded && (
+        <div className="scheduler-card-detail">
           {task.description && (
             <div className="scheduler-card-desc">{task.description}</div>
           )}
@@ -509,41 +641,29 @@ function ScheduleRow({
               <span className="scheduler-status-value">{task.status.runCount}</span>
             </span>
           </div>
+          <div className="scheduler-card-detail-actions">
+            <button className="scheduler-icon-btn" onClick={onEdit} title="Edit" aria-label="Edit">
+              <Pencil size={14} />
+            </button>
+            <button
+              className="scheduler-icon-btn"
+              onClick={onDuplicate}
+              title="Duplicate"
+              aria-label="Duplicate"
+            >
+              <Copy size={14} />
+            </button>
+            <button
+              className="scheduler-icon-btn scheduler-icon-btn--danger"
+              onClick={onAskDelete}
+              title="Delete"
+              aria-label="Delete"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
         </div>
-        <div className="scheduler-card-actions">
-          <button className="scheduler-icon-btn" onClick={runNow} title="Run now" aria-label="Run now">
-            <Play size={14} />
-          </button>
-          <button className="scheduler-icon-btn" onClick={onEdit} title="Edit" aria-label="Edit">
-            <Pencil size={14} />
-          </button>
-          <button
-            className="scheduler-icon-btn"
-            onClick={onDuplicate}
-            title="Duplicate"
-            aria-label="Duplicate"
-          >
-            <Copy size={14} />
-          </button>
-          <button
-            className="scheduler-icon-btn scheduler-icon-btn--danger"
-            onClick={onAskDelete}
-            title="Delete"
-            aria-label="Delete"
-          >
-            <Trash2 size={14} />
-          </button>
-          <button
-            className={`scheduler-icon-btn scheduler-icon-btn--chevron ${expanded ? 'is-open' : ''}`}
-            onClick={() => setExpanded((v) => !v)}
-            title={expanded ? 'Hide history' : 'Show history'}
-            aria-label="Toggle history"
-            aria-expanded={expanded}
-          >
-            <ChevronDown size={14} />
-          </button>
-        </div>
-      </div>
+      )}
       {expanded && (
         <div className="scheduler-card-history">
           <div className="scheduler-card-history-header">
@@ -658,6 +778,9 @@ function ScheduleModal({
   const [prompt, setPrompt] = useState(
     task?.prompt ?? seededTask?.prompt ?? seededTemplate?.defaults.prompt ?? ''
   );
+  const [notifyInbox, setNotifyInbox] = useState<boolean>(
+    task?.notifyInbox ?? seededTask?.notifyInbox ?? false
+  );
   const [scope, setScope] = useState<'global' | 'project'>(() => {
     if (task?.source && task.source !== 'global') return 'project';
     if (seededTask?.source && seededTask.source !== 'global') return 'project';
@@ -720,7 +843,8 @@ function ScheduleModal({
           every,
           prompt: prompt.trim() || undefined,
           extraArgs: seededTemplate?.defaults.extraArgs ?? seededTask?.extraArgs,
-          scope: scope === 'project' ? { projectId } : 'global'
+          scope: scope === 'project' ? { projectId } : 'global',
+          notifyInbox
         };
         const result = await window.cc.scheduler.create(input);
         if (!result.ok) {
@@ -735,7 +859,8 @@ function ScheduleModal({
           projectId,
           profile,
           every,
-          prompt
+          prompt,
+          notifyInbox
         });
         if (!result.ok) {
           setError(result.message);
@@ -919,8 +1044,23 @@ function ScheduleModal({
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               rows={4}
-              placeholder="Typed into the new terminal on launch (followed by Enter)."
+              placeholder="Passed to the spawned terminal as the initial prompt."
             />
+          </div>
+          <div className="scheduler-form-field">
+            <label className="scheduler-checkbox-row">
+              <input
+                type="checkbox"
+                checked={notifyInbox}
+                onChange={(e) => setNotifyInbox(e.target.checked)}
+              />
+              <span>
+                Notify on completion
+                <span className="scheduler-form-optional">
+                  {' '}— append an inbox entry summarising each run.
+                </span>
+              </span>
+            </label>
           </div>
           {error && <div className="modal-error">{error}</div>}
         </div>

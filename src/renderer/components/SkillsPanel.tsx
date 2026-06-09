@@ -33,6 +33,8 @@ export function SkillsPanel() {
   const projects = useData((s) => s.projects);
   const selectedProjectId = useUi((s) => s.selectedProjectId);
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
+  const catalogueFilter = useUi((s) => s.catalogueFilter);
+  const setCatalogueFilter = useUi((s) => s.setCatalogueFilter);
 
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [bundles, setBundles] = useState<SkillBundle[]>([]);
@@ -41,6 +43,22 @@ export function SkillsPanel() {
   const [query, setQuery] = useState('');
   const [editingBundle, setEditingBundle] = useState<SkillBundle | 'new' | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
+  const [applyNote, setApplyNote] = useState<string | null>(null);
+  const [pluginBannerDismissed, setPluginBannerDismissed] = useState(() => {
+    try {
+      return localStorage.getItem('cc.skills.pluginBannerDismissed') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const dismissPluginBanner = () => {
+    setPluginBannerDismissed(true);
+    try {
+      localStorage.setItem('cc.skills.pluginBannerDismissed', '1');
+    } catch {
+      // ignore quota errors
+    }
+  };
 
   const reload = useCallback(async () => {
     try {
@@ -60,6 +78,14 @@ export function SkillsPanel() {
   useEffect(() => {
     reload();
   }, [reload]);
+
+  // Honour cross-panel deep-links (e.g., a plugin row's "4 skills" chip).
+  useEffect(() => {
+    if (catalogueFilter.skills) {
+      setQuery(catalogueFilter.skills);
+      setCatalogueFilter('skills', undefined);
+    }
+  }, [catalogueFilter.skills, setCatalogueFilter]);
 
   useEffect(() => {
     const offSkills = window.cc.skills.onChanged(() => {
@@ -97,6 +123,10 @@ export function SkillsPanel() {
   }, [skills]);
 
   const toggleSkill = async (skill: SkillEntry, enabled: boolean) => {
+    // Plugin skills are managed via Claude Code's /plugin command and can't be
+    // disabled from settings.json. The UI shouldn't expose a toggle for them,
+    // but defend in depth in case the row falls through.
+    if (skill.source === 'plugin') return;
     setSkills((prev) =>
       prev.map((s) => (s.name === skill.name ? { ...s, enabled } : s))
     );
@@ -124,6 +154,15 @@ export function SkillsPanel() {
     if (result.ok) {
       await reload();
       flashSaved();
+      if (result.skippedPlugin > 0) {
+        const skill = result.skippedPlugin === 1 ? 'skill' : 'skills';
+        setApplyNote(
+          `${result.skippedPlugin} plugin ${skill} skipped (managed by /plugin).`
+        );
+        window.setTimeout(() => setApplyNote(null), 5000);
+      } else {
+        setApplyNote(null);
+      }
     }
   };
 
@@ -142,12 +181,32 @@ export function SkillsPanel() {
             <p className="settings-help scheduler-subtitle">
               Discover skills from <code>~/.claude/skills</code>,{' '}
               <code>~/.claude/plugins</code>, and the active project's{' '}
-              <code>.claude/skills</code>. Toggling a skill writes to{' '}
-              <code>disabledSkills</code> in <code>~/.claude/settings.json</code>.
+              <code>.claude/skills</code>. Toggling a user or project skill writes to{' '}
+              <code>skillOverrides</code> in <code>~/.claude/settings.json</code>.
               Group skills into bundles to enable/disable them in batches.
             </p>
           </div>
         </div>
+
+        {!pluginBannerDismissed && (
+          <aside className="skills-plugin-banner" role="note">
+            <div>
+              <strong>Plugin skills are managed by Claude Code's <code>/plugin</code> command.</strong>{' '}
+              The toggle in this panel only takes effect for user and project skills —
+              plugin skills appear here for visibility but must be enabled or disabled
+              via the CLI.
+            </div>
+            <button
+              type="button"
+              className="skills-plugin-banner-dismiss"
+              onClick={dismissPluginBanner}
+              aria-label="Dismiss"
+              title="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </aside>
+        )}
 
         <div className="skills-layout">
           <section className="skills-left">
@@ -251,6 +310,7 @@ export function SkillsPanel() {
         </div>
 
         {savedFlash && <div className="settings-saved">Saved</div>}
+        {applyNote && <div className="skills-apply-note">{applyNote}</div>}
       </div>
 
       {editingBundle && (
@@ -285,16 +345,27 @@ function SkillRow({
     return 'User';
   })();
 
+  const isPluginManaged = skill.source === 'plugin';
   return (
-    <li className={`skills-row ${skill.enabled ? '' : 'is-disabled'}`}>
-      <label className="skills-row-toggle" title={skill.enabled ? 'Disable' : 'Enable'}>
-        <input
-          type="checkbox"
-          checked={skill.enabled}
-          onChange={(e) => onToggle(e.target.checked)}
-        />
-        <span aria-hidden />
-      </label>
+    <li className={`skills-row ${skill.enabled ? '' : 'is-disabled'} ${isPluginManaged ? 'is-plugin-managed' : ''}`}>
+      {isPluginManaged ? (
+        <span
+          className="skills-row-managed"
+          title="Plugin skills can't be disabled from settings.json. Use Claude Code's /plugin command to disable the parent plugin."
+          aria-label="Managed by plugin"
+        >
+          plugin
+        </span>
+      ) : (
+        <label className="skills-row-toggle" title={skill.enabled ? 'Disable' : 'Enable'}>
+          <input
+            type="checkbox"
+            checked={skill.enabled}
+            onChange={(e) => onToggle(e.target.checked)}
+          />
+          <span aria-hidden />
+        </label>
+      )}
       <div className="skills-row-body">
         <div className="skills-row-head">
           <span className="skills-row-name">{skill.name}</span>

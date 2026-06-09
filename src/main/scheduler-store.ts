@@ -64,6 +64,7 @@ export function validateScheduleFile(raw: unknown): ScheduledTask | { error: str
       ? (r.extraArgs as unknown[]).filter((s): s is string => typeof s === 'string')
       : undefined,
     prompt: typeof r.prompt === 'string' ? r.prompt : undefined,
+    notifyInbox: typeof r.notifyInbox === 'boolean' ? r.notifyInbox : false,
     schedule: { every: schedule.every },
     overlap: 'skip',
     history:
