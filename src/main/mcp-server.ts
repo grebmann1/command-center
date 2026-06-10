@@ -27,6 +27,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { IInboxStore } from './inbox-store.js';
 import type { Project } from '../shared/types.js';
 import { registerInboxPushTool } from './inbox-mcp-tool.js';
+import { registerScheduleReportTool } from './schedule-report-mcp-tool.js';
 
 export interface ProjectLookup {
   /** Return the current project meta or null if unknown. Called per-request. */
@@ -45,6 +46,18 @@ export interface McpServerOptions {
    * always 200s so the hook stays fire-and-forget.
    */
   onStopHook?: (projectId: string, sessionId: string) => void;
+  /**
+   * Called when a scheduled agent files a run report via the `schedule_report`
+   * tool. The url path carries identity (`/mcp/:projectId/:sessionId`), so the
+   * summary is attributable to an exact session — the scheduler attaches it to
+   * the matching run. Best-effort; the tool returns success regardless.
+   */
+  onReport?: (
+    projectId: string,
+    sessionId: string,
+    summary: string,
+    status?: 'success' | 'partial' | 'failure'
+  ) => void;
 }
 
 export interface McpServerHandle {
@@ -67,9 +80,23 @@ function buildProjectMcpServer(opts: {
   projectLabel?: string;
   sessionId?: string;
   inboxStore: IInboxStore;
+  onReport?: McpServerOptions['onReport'];
 }): McpServer {
   const mcp = new McpServer({ name: 'cc-inbox', version: '0.1.0' });
   registerInboxPushTool(mcp, opts);
+  // schedule_report attaches an agent-authored summary to the originating
+  // scheduled run. It needs a session to attach to, so we only register it on
+  // the session-scoped route — otherwise the agent would see a tool in its
+  // list that can only ever fail. Bind projectId into the callback so the
+  // tool's handler only needs the (sessionId, summary, status) shape.
+  if (opts.sessionId) {
+    registerScheduleReportTool(mcp, {
+      sessionId: opts.sessionId,
+      onReport: opts.onReport
+        ? (sessionId, summary, status) => opts.onReport!(opts.projectId, sessionId, summary, status)
+        : undefined
+    });
+  }
   return mcp;
 }
 
@@ -199,7 +226,8 @@ async function handleRequest(
     projectId,
     projectLabel,
     sessionId,
-    inboxStore: opts.inboxStore
+    inboxStore: opts.inboxStore,
+    onReport: opts.onReport
   });
 
   // Ensure transport + mcp tear down once the response finishes, even on

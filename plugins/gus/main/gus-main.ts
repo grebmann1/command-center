@@ -22,6 +22,7 @@ import type { MainModule, MainModuleContext } from '../../../src/shared/module-m
 import {
   type GusIdentity,
   type GusSprint,
+  type GusTeam,
   type GusWorkItem,
   type GusWorkDetail,
   type GusChatterPost,
@@ -52,6 +53,10 @@ interface RawWork {
   Story_Points__c?: number | null;
   Sprint__c?: string | null;
   Sprint__r?: { Name?: string } | null;
+  Scrum_Team__c?: string | null;
+  Scrum_Team__r?: { Name?: string } | null;
+  Assignee__c?: string | null;
+  Assignee__r?: { Name?: string } | null;
   Product_Tag__r?: { Name?: string } | null;
   Epic__r?: { Name?: string } | null;
   LastModifiedDate?: string;
@@ -60,7 +65,6 @@ interface RawWork {
 /** Extra fields fetched only for the detail view. */
 interface RawWorkDetail extends RawWork {
   Details__c?: string | null;
-  Assignee__r?: { Name?: string } | null;
   QA_Engineer__r?: { Name?: string } | null;
   Scheduled_Build__r?: { Name?: string } | null;
   Found_in_Build__r?: { Name?: string } | null;
@@ -232,6 +236,10 @@ function mapWork(r: RawWork): GusWorkItem {
     storyPoints: typeof r.Story_Points__c === 'number' ? r.Story_Points__c : undefined,
     sprintId: r.Sprint__c ?? undefined,
     sprintName: r.Sprint__r?.Name ?? undefined,
+    teamId: r.Scrum_Team__c ?? undefined,
+    teamName: r.Scrum_Team__r?.Name ?? undefined,
+    assigneeId: r.Assignee__c ?? undefined,
+    assignee: r.Assignee__r?.Name ?? undefined,
     productTag: r.Product_Tag__r?.Name ?? undefined,
     epicName: r.Epic__r?.Name ?? undefined,
     lastModified: r.LastModifiedDate
@@ -240,19 +248,19 @@ function mapWork(r: RawWork): GusWorkItem {
 
 const WORK_FIELDS =
   'Id, Name, Subject__c, Status__c, Priority__c, RecordType.Name, Story_Points__c, ' +
-  'Sprint__c, Sprint__r.Name, Product_Tag__r.Name, Epic__r.Name, LastModifiedDate';
+  'Sprint__c, Sprint__r.Name, Scrum_Team__c, Scrum_Team__r.Name, ' +
+  'Assignee__c, Assignee__r.Name, Product_Tag__r.Name, Epic__r.Name, LastModifiedDate';
 
 /** Heavier field set for the single-record detail view. */
 const WORK_DETAIL_FIELDS =
   WORK_FIELDS +
-  ', Details__c, Assignee__r.Name, QA_Engineer__r.Name, ' +
+  ', Details__c, QA_Engineer__r.Name, ' +
   'Scheduled_Build__r.Name, Found_in_Build__r.Name, CreatedDate';
 
 function mapWorkDetail(r: RawWorkDetail): GusWorkDetail {
   return {
     ...mapWork(r),
     detailsHtml: r.Details__c ?? undefined,
-    assignee: r.Assignee__r?.Name ?? undefined,
     qaEngineer: r.QA_Engineer__r?.Name ?? undefined,
     scheduledBuild: r.Scheduled_Build__r?.Name ?? undefined,
     foundInBuild: r.Found_in_Build__r?.Name ?? undefined,
@@ -323,6 +331,52 @@ export const gusMainModule: MainModule = {
         return Array.from(byId.values()).sort((a, b) =>
           (b.startDate ?? '').localeCompare(a.startDate ?? '')
         );
+      },
+
+      /**
+       * Scrum teams the current user has open work on — the candidate set for
+       * the backlog team picker. `openCount` is the user's open work on each
+       * team (a relevance signal), not the team's full backlog size.
+       */
+      async listTeams(): Promise<GusTeam[]> {
+        const { userId } = await loadIdentity(log);
+        const soql =
+          `SELECT Status__c, Scrum_Team__c, Scrum_Team__r.Name FROM ADM_Work__c ` +
+          `WHERE Assignee__r.Id = '${soqlEscape(userId)}' AND Scrum_Team__c != null LIMIT 2000`;
+        const rows = await sfQuery<RawWork>(soql, log);
+        const byId = new Map<string, GusTeam>();
+        for (const r of rows) {
+          if (!r.Scrum_Team__c || isClosedStatus(r.Status__c ?? '')) continue;
+          const existing = byId.get(r.Scrum_Team__c);
+          if (existing) {
+            existing.openCount += 1;
+          } else {
+            byId.set(r.Scrum_Team__c, {
+              id: r.Scrum_Team__c,
+              name: r.Scrum_Team__r?.Name ?? '(unnamed team)',
+              openCount: 1
+            });
+          }
+        }
+        return Array.from(byId.values()).sort((a, b) => b.openCount - a.openCount);
+      },
+
+      /**
+       * A team's backlog: open work on the team that isn't scheduled into any
+       * sprint (`Sprint__c = null`). Team-wide (not assignee-scoped) and
+       * read-only in the UI. Ordered by Sprint_Rank__c (the team's manual
+       * triage order) so the most-ready items surface first.
+       */
+      async listBacklog(opts: { teamId: string; includeClosed?: boolean }): Promise<GusWorkItem[]> {
+        const teamId = opts?.teamId;
+        if (typeof teamId !== 'string' || !teamId) throw new Error('Missing team id');
+        const soql =
+          `SELECT ${WORK_FIELDS} FROM ADM_Work__c ` +
+          `WHERE Scrum_Team__c = '${soqlEscape(teamId)}' AND Sprint__c = null ` +
+          `ORDER BY Sprint_Rank__c NULLS LAST, LastModifiedDate DESC LIMIT 500`;
+        const rows = await sfQuery<RawWork>(soql, log);
+        const items = rows.map(mapWork);
+        return opts?.includeClosed ? items : items.filter((it) => !isClosedStatus(it.status));
       },
 
       /** Full detail for one work item, fetched when a card is opened. */

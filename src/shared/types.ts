@@ -301,6 +301,16 @@ export interface ScheduleRun {
   durationMs?: number;
   /** Free-text reason — populated for `error` and `skipped`. */
   message?: string;
+  /**
+   * Agent-authored markdown summary of what this run did. Set via the
+   * `schedule_report` MCP tool, keyed by `sessionId`. This is a human-readable
+   * report, NOT pty output. Absent until the agent files one (claude profiles).
+   */
+  report?: string;
+  /** ISO-8601 time the report was attached. */
+  reportedAt?: string;
+  /** Agent's self-assessment of the run, independent of the pty exit code. */
+  reportStatus?: 'success' | 'partial' | 'failure';
 }
 
 export interface ScheduleStatus {

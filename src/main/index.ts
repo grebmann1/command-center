@@ -1016,6 +1016,11 @@ app.whenReady().then(() => {
     // kill-signal error.
     onStopHook: (_projectId: string, sessionId: string) => {
       ptys.closeExpected(sessionId);
+    },
+    // A scheduled agent filed a run report via schedule_report. Attach it to
+    // the matching run by sessionId (projectId is implied by the session).
+    onReport: (_projectId: string, sessionId: string, summary: string, status) => {
+      scheduler.attachReport(sessionId, summary, status);
     }
   })
     .then(async (handle) => {

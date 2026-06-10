@@ -46,6 +46,27 @@ const INBOX_USAGE_GUIDANCE = [
   'least one of `docs` or `comments` must be present.'
 ].join(' ');
 
+/**
+ * Appended (in addition to INBOX_USAGE_GUIDANCE) for scheduled runs only.
+ * Teaches the agent to leave a per-run summary via the `schedule_report` MCP
+ * tool so the scheduler history shows what each run did.
+ */
+const SCHEDULE_REPORT_GUIDANCE = [
+  'This is a SCHEDULED run. Before you finish, call the MCP tool',
+  '`schedule_report` (server: cc-inbox) with a short markdown `summary` of',
+  'what this run did — what you checked, what you found or changed, and',
+  'whether anything needs the user. Optionally set `status` to',
+  "'success' | 'partial' | 'failure'. This summary is attached to the run in",
+  'the scheduler history; it is a REPORT, not a log — summarize, don\'t paste',
+  'raw output.',
+  '',
+  'File the report on EVERY scheduled run. It is separate from `inbox_push`:',
+  'report = always-on per-run record; inbox = only when you need the user to',
+  'act. If this session auto-closes when you finish, you MUST call',
+  '`schedule_report` BEFORE ending your turn — the session is killed the',
+  'moment you stop, so a report left for "later" never gets sent.'
+].join(' ');
+
 export class PtyManager extends EventEmitter {
   private live = new Map<string, Live>();
   /** Base URL of the local MCP server, set after the http listener boots. */
@@ -103,6 +124,13 @@ export class PtyManager extends EventEmitter {
      * alive and replyable from the inbox.
      */
     headless?: boolean;
+    /**
+     * Marks this spawn as a scheduled run. When set (and the profile is
+     * claude-family), we append `SCHEDULE_REPORT_GUIDANCE` to the system prompt
+     * so the agent knows to file a run report via `schedule_report`. Off for
+     * user-opened tabs so they aren't nagged to report.
+     */
+    scheduled?: boolean;
   }): TerminalSession {
     if (opts.remote) {
       return this.createRemote({ ...opts, remote: opts.remote });
@@ -127,7 +155,11 @@ export class PtyManager extends EventEmitter {
           // prompt at spawn so it doesn't pollute the user's global claude
           // config — the guidance only applies to launcher-spawned tabs.
           '--append-system-prompt',
-          INBOX_USAGE_GUIDANCE
+          // Scheduled runs also learn to file a run report; user-opened tabs
+          // get only the inbox guidance.
+          opts.scheduled
+            ? `${INBOX_USAGE_GUIDANCE}\n\n${SCHEDULE_REPORT_GUIDANCE}`
+            : INBOX_USAGE_GUIDANCE
         ]
       : [];
     const psArgs =
@@ -147,7 +179,9 @@ export class PtyManager extends EventEmitter {
     // last-occurrence-wins, which would silently drop this permission when
     // the project also configures allowedTools.
     const inboxAllow = isClaudeProfile(opts.profile) && this.mcpBaseUrl
-      ? ['mcp__cc-inbox__inbox_push']
+      ? opts.scheduled
+        ? ['mcp__cc-inbox__inbox_push', 'mcp__cc-inbox__schedule_report']
+        : ['mcp__cc-inbox__inbox_push']
       : [];
     const fullArgs = mergeAllowedTools(
       [...args, ...claudeMcpArgs, ...psArgs, ...hookArgs, ...(opts.extraArgs ?? [])],

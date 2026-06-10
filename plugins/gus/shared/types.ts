@@ -19,6 +19,12 @@ export interface GusWorkItem {
   storyPoints?: number;
   sprintId?: string;
   sprintName?: string;
+  teamId?: string;
+  teamName?: string;
+  /** Assignee user id — lets the renderer filter a team view down to "mine". */
+  assigneeId?: string;
+  /** Assignee display name. */
+  assignee?: string;
   productTag?: string;
   epicName?: string;
   lastModified?: string;
@@ -32,7 +38,6 @@ export interface GusWorkItem {
 export interface GusWorkDetail extends GusWorkItem {
   /** Rich-text body (`Details__c`) as raw HTML; sanitised before render. */
   detailsHtml?: string;
-  assignee?: string;
   qaEngineer?: string;
   scheduledBuild?: string;
   foundInBuild?: string;
@@ -68,6 +73,17 @@ export interface GusSprint {
   startDate?: string;
   endDate?: string;
   /** Open work items the current user has in this sprint. */
+  openCount: number;
+}
+
+/**
+ * A scrum team the user has work on (ADM_Scrum_Team__c). Used to pick which
+ * team's backlog to view. `openCount` is the current user's open work on the
+ * team — a relevance hint for the picker, not the team's full backlog size.
+ */
+export interface GusTeam {
+  id: string;
+  name: string;
   openCount: number;
 }
 
@@ -129,6 +145,40 @@ const STATUS_TO_KEY = new Map<string, string>(
 /** Which column key a work item's status belongs to (case-insensitive). */
 export function columnKeyForStatus(status: string): string {
   return STATUS_TO_KEY.get(status.trim().toLowerCase()) ?? OTHER_COLUMN_KEY;
+}
+
+export const BACKLOG_UNPRIORITIZED_KEY = 'prio-none';
+
+/**
+ * Backlog columns. A backlog is overwhelmingly `New` work, so grouping it by
+ * status (the My-work board above) collapses into one column. Instead we group
+ * by **priority** — the axis that actually matters for triage. None of these
+ * are drop targets: backlog is team-wide work you don't own, so re-prioritising
+ * belongs in GUS itself. The trailing `prio-none` catches items with no
+ * priority set so nothing disappears.
+ */
+export const BACKLOG_COLUMNS: BoardColumn[] = [
+  { key: 'prio-p0', title: 'P0', status: null, droppable: false },
+  { key: 'prio-p1', title: 'P1', status: null, droppable: false },
+  { key: 'prio-p2', title: 'P2', status: null, droppable: false },
+  { key: 'prio-p3', title: 'P3', status: null, droppable: false },
+  { key: 'prio-p4', title: 'P4', status: null, droppable: false },
+  { key: BACKLOG_UNPRIORITIZED_KEY, title: 'Unprioritized', status: null, droppable: false }
+];
+
+/** Lower-cased priority → backlog column key. Built once. */
+const PRIORITY_TO_KEY = new Map<string, string>([
+  ['p0', 'prio-p0'],
+  ['p1', 'prio-p1'],
+  ['p2', 'prio-p2'],
+  ['p3', 'prio-p3'],
+  ['p4', 'prio-p4']
+]);
+
+/** Which backlog column key a work item's priority belongs to. */
+export function backlogColumnKeyForPriority(priority?: string): string {
+  if (!priority) return BACKLOG_UNPRIORITIZED_KEY;
+  return PRIORITY_TO_KEY.get(priority.trim().toLowerCase()) ?? BACKLOG_UNPRIORITIZED_KEY;
 }
 
 /** Statuses we treat as terminal/closed for the default (open-only) fetch. */

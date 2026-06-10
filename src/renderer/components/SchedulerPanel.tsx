@@ -31,8 +31,11 @@ import {
   Folder,
   Square,
   ExternalLink,
+  FileText,
   type LucideIcon
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type {
   LaunchProfileId,
   Project,
@@ -96,6 +99,10 @@ export function SchedulerPanel() {
   const [editing, setEditing] = useState<ScheduledTask | 'new' | Seed | null>(null);
   const [pickingTemplate, setPickingTemplate] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<ScheduledTask | null>(null);
+  // Run report viewer — lifted here so both the per-task run rows and the
+  // Overview "Recent activity" list open the same modal.
+  const [report, setReport] = useState<{ run: ScheduleRun; taskName: string } | null>(null);
+  const showReport = (run: ScheduleRun, taskName: string) => setReport({ run, taskName });
   const [tick, setTick] = useState(0);
   const [search, setSearch] = useState('');
   /** When the user hits "Pause all", we stash the ids that were enabled so
@@ -250,6 +257,7 @@ export function SchedulerPanel() {
               void useData.getState().restoreTerminal(sessionId, t.projectId);
             }}
             onEdit={(t) => setEditing(t)}
+            onShowReport={showReport}
           />
         ) : scopedTasks.length === 0 ? (
           <EmptyStateWithFeatured
@@ -304,6 +312,7 @@ export function SchedulerPanel() {
                     onEdit={() => setEditing(t)}
                     onDuplicate={() => handleSeedFromTask(t)}
                     onAskDelete={() => setConfirmDelete(t)}
+                    onShowReport={showReport}
                   />
                 ))}
               </ul>
@@ -342,6 +351,13 @@ export function SchedulerPanel() {
               useUi.getState().pushToast(`Delete failed: ${result.message}`, 'error');
             }
           }}
+        />
+      )}
+      {report && (
+        <RunReportModal
+          run={report.run}
+          taskName={report.taskName}
+          onClose={() => setReport(null)}
         />
       )}
     </main>
@@ -429,13 +445,15 @@ function ScheduleRow({
   projectName,
   onEdit,
   onDuplicate,
-  onAskDelete
+  onAskDelete,
+  onShowReport
 }: {
   task: ScheduledTask;
   projectName: string;
   onEdit: () => void;
   onDuplicate: () => void;
   onAskDelete: () => void;
+  onShowReport: (run: ScheduleRun, taskName: string) => void;
 }) {
   const lastRun = task.status.lastRunAt ? new Date(task.status.lastRunAt) : null;
   const nextRun = task.status.nextRunAt ? new Date(task.status.nextRunAt) : null;
@@ -714,6 +732,20 @@ function ScheduleRow({
                       <span className="scheduler-run-message" title={run.message}>
                         {run.message}
                       </span>
+                    )}
+                    {run.report && (
+                      <button
+                        type="button"
+                        className="scheduler-run-report-btn"
+                        title="View run report"
+                        aria-label="View run report"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onShowReport(run, task.name);
+                        }}
+                      >
+                        <FileText size={13} strokeWidth={1.75} />
+                      </button>
                     )}
                   </li>
                 );
@@ -1159,6 +1191,80 @@ function DeleteConfirmModal({
   );
 }
 
+/**
+ * Run report viewer. Renders the agent-authored markdown summary for one run.
+ * Reuses the `.inbox-md` markdown styling (same as InboxDetail) and the shared
+ * modal scaffold. Opened from a run row or the Overview recent-activity list —
+ * works regardless of whether the session is still alive (the whole point: a
+ * report is most useful after the run has finished).
+ */
+function RunReportModal({
+  run,
+  taskName,
+  onClose
+}: {
+  run: ScheduleRun;
+  taskName: string;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    node.addEventListener('keydown', onKey);
+    node.focus();
+    return () => node.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  // Prefer the agent's self-assessment; fall back to the process result. Class
+  // and label use the same value so the pill colour always matches the text.
+  const badge = run.reportStatus ?? run.result;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        ref={ref}
+        className="modal scheduler-report-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Run report"
+        tabIndex={-1}
+      >
+        <header className="modal-header">
+          <h3>{taskName} — run report</h3>
+          <button className="icon-button" onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </header>
+        <div className="scheduler-report-meta">
+          <span className={`scheduler-pill scheduler-pill--${badge}`}>{badge}</span>
+          <span className="scheduler-report-meta-when">
+            {new Date(run.at).toLocaleString()}
+          </span>
+          {run.durationMs !== undefined && (
+            <span className="scheduler-report-meta-dur">{formatDuration(run.durationMs)}</span>
+          )}
+        </div>
+        <div className="modal-body scheduler-report-body">
+          <div className="inbox-md">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                a: (props) => <a {...props} target="_blank" rel="noreferrer" />
+              }}
+            >
+              {run.report ?? ''}
+            </ReactMarkdown>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TemplatePickerModal({
   onClose,
   onPick
@@ -1289,7 +1395,8 @@ function SchedulerOverview({
   tick,
   onJump,
   onOpenTerminal,
-  onEdit
+  onEdit,
+  onShowReport
 }: {
   tasks: ScheduledTask[];
   projects: Project[];
@@ -1297,6 +1404,7 @@ function SchedulerOverview({
   onJump: (t: ScheduledTask) => void;
   onOpenTerminal: (t: ScheduledTask, sessionId: string) => void;
   onEdit: (t: ScheduledTask) => void;
+  onShowReport: (run: ScheduleRun, taskName: string) => void;
 }) {
   const terminalsByProject = useData((s) => s.terminals);
 
@@ -1524,6 +1632,17 @@ function SchedulerOverview({
                       {run.message ? ` · ${run.message}` : ''}
                     </div>
                   </button>
+                  {run.report && (
+                    <button
+                      type="button"
+                      className="scheduler-run-report-btn"
+                      title="View run report"
+                      aria-label="View run report"
+                      onClick={() => onShowReport(run, task.name)}
+                    >
+                      <FileText size={13} strokeWidth={1.75} />
+                    </button>
+                  )}
                   <div className="overview-item-when">
                     <div className="overview-item-abs">{formatRelative(new Date(ts))}</div>
                   </div>

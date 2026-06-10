@@ -54,11 +54,21 @@ describe('inbox MCP server (end-to-end)', () => {
     }
   });
 
-  async function boot(store: IInboxStore, projects: Project[]) {
+  async function boot(
+    store: IInboxStore,
+    projects: Project[],
+    onReport?: (
+      projectId: string,
+      sessionId: string,
+      summary: string,
+      status?: 'success' | 'partial' | 'failure'
+    ) => void
+  ) {
     const map = new Map(projects.map((p) => [p.id, p]));
     handle = await startMcpServer({
       inboxStore: store,
       projects: { get: (id) => map.get(id) ?? null },
+      onReport,
       log: () => {} // keep test output quiet
     });
     return handle;
@@ -214,5 +224,50 @@ describe('inbox MCP server (end-to-end)', () => {
 
     // A fresh connection to the now-closed port must fail to connect.
     await expect(connectClient(url, 'proj-1/sess-A')).rejects.toThrow();
+  });
+
+  it('4. schedule_report: fires onReport with the URL sessionId, schema hides ids', async () => {
+    const store = createMemoryInboxStore();
+    const calls: Array<{ projectId: string; sessionId: string; summary: string; status?: string }> = [];
+    const h = await boot(store, [makeProject('proj-1', 'P1')], (projectId, sessionId, summary, status) =>
+      calls.push({ projectId, sessionId, summary, status })
+    );
+
+    const client = await connectClient(h.url, 'proj-1/sess-A');
+    clients.push(client);
+
+    // The tool schema only exposes { summary, status } — no projectId/sessionId.
+    const tools = await client.listTools();
+    const report = tools.tools.find((t) => t.name === 'schedule_report');
+    expect(report, 'schedule_report tool is registered').toBeTruthy();
+    const props = (report!.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
+    expect(Object.keys(props).sort()).toEqual(['status', 'summary']);
+
+    const res = await client.callTool({
+      name: 'schedule_report',
+      arguments: { summary: 'did the thing', status: 'success' }
+    });
+    expect((res as { isError?: boolean }).isError).toBeFalsy();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].summary).toBe('did the thing');
+    expect(calls[0].status).toBe('success');
+    // Decisive: identity comes from the URL, not the agent.
+    expect(calls[0].projectId).toBe('proj-1');
+    expect(calls[0].sessionId).toBe('sess-A');
+  });
+
+  it('4b. schedule_report is NOT registered on the legacy project-scoped route', async () => {
+    const store = createMemoryInboxStore();
+    const h = await boot(store, [makeProject('proj-1', 'P1')], () => {});
+
+    // No sessionId in the URL → nothing to attach to, so the tool isn't
+    // offered at all (rather than offered-but-always-failing).
+    const client = await connectClient(h.url, 'proj-1');
+    clients.push(client);
+    const tools = await client.listTools();
+    expect(tools.tools.find((t) => t.name === 'schedule_report')).toBeFalsy();
+    // inbox_push is still available on this route.
+    expect(tools.tools.find((t) => t.name === 'inbox_push')).toBeTruthy();
   });
 });

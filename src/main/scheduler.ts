@@ -468,7 +468,10 @@ export class SchedulerManager extends EventEmitter {
         // user opened. The pty stays alive and replyable; if the agent pushes a
         // question to the inbox, the "Open in session" deep-link promotes it to
         // a visible tab on demand. Keeps the tab strip clean for fleets of runs.
-        headless: true
+        headless: true,
+        // Marks this as a scheduled run so pty appends the schedule_report
+        // system-prompt guidance (and only for scheduled spawns).
+        scheduled: true
       });
     } catch (err) {
       this.log(`fire ${id} pty.create`, err);
@@ -580,6 +583,49 @@ export class SchedulerManager extends EventEmitter {
     status.lastRunSessionId = run.sessionId;
     this.persist(live.task);
     this.emit('changed');
+  }
+
+  /**
+   * Attach an agent-authored summary to the run owning `sessionId`. Called from
+   * the `schedule_report` MCP tool via the mcp-server `onReport` callback.
+   *
+   * The route carries only (projectId, sessionId), not a scheduleId, so we scan
+   * live schedules for the one whose runs include this session. The optimistic
+   * `recordRun` at fire time guarantees a matching run exists by the time the
+   * agent could call this. We MERGE (spread) rather than replace — mirroring
+   * `recordRun` — so the report and the exit-time result are commutative:
+   *   - report before exit: merges onto the optimistic run; later onExit spread
+   *     (`{...existing, ...finalRun}`) carries no `report`, so it's preserved.
+   *   - report after exit: merges onto the finalized run.
+   *
+   * Best-effort: if the run was evicted from the ring buffer (extremely
+   * unlikely within one run's lifetime), we log and return — the tool still
+   * reports success (fire-and-forget contract).
+   */
+  attachReport(
+    sessionId: string,
+    summary: string,
+    status?: 'success' | 'partial' | 'failure'
+  ) {
+    for (const live of this.live.values()) {
+      const runs = live.task.status.runs;
+      const idxFromMap = live.runIndexBySession.get(sessionId);
+      const idx =
+        idxFromMap !== undefined && runs[idxFromMap]?.sessionId === sessionId
+          ? idxFromMap
+          : runs.findIndex((r) => r.sessionId === sessionId);
+      if (idx < 0) continue;
+      runs[idx] = {
+        ...runs[idx],
+        report: summary,
+        reportedAt: new Date().toISOString(),
+        reportStatus: status
+      };
+      this.persist(live.task);
+      this.emit('changed');
+      return;
+    }
+    this.log('attachReport', `no run found for session ${sessionId} (report dropped)`);
   }
 }
 

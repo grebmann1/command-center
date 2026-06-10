@@ -4835,13 +4835,57 @@ body.resizing-col {
 
 .scheduler-run-row {
   display: grid;
-  grid-template-columns: 14px 1fr auto auto auto;
+  /* dot · when · result · duration · [message] · [report-btn]. The two
+     trailing columns are optional; empty `auto` tracks collapse to 0. */
+  grid-template-columns: 14px 1fr auto auto auto auto;
   gap: 10px;
   align-items: center;
   padding: 6px 0;
   font-size: 12px;
   color: var(--text-muted);
   border-bottom: 1px solid var(--border);
+}
+
+/* Report affordance — shown on a run row (and Overview item) when a run has
+   an agent-authored report. Works regardless of session liveness. */
+.scheduler-run-report-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--accent-blue);
+  cursor: pointer;
+  transition: background-color 0.1s ease, border-color 0.1s ease;
+}
+
+.scheduler-run-report-btn:hover {
+  background: var(--bg-elevated);
+  border-color: var(--accent-blue);
+}
+
+/* Run report modal */
+.scheduler-report-modal {
+  width: min(640px, 92vw);
+}
+
+.scheduler-report-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.scheduler-report-meta-when {
+  font-variant-numeric: tabular-nums;
+}
+
+.scheduler-report-body {
+  max-height: 60vh;
 }
 
 .scheduler-run-row:last-child {
@@ -5875,10 +5919,25 @@ body.resizing-col {
   color: var(--text-dim);
 }
 
-.scheduler-pill--running {
+.scheduler-pill--running,
+.scheduler-pill--success {
   background: rgba(63, 185, 80, 0.15);
   color: rgb(63, 185, 80);
   border: 1px solid rgba(63, 185, 80, 0.35);
+}
+
+.scheduler-pill--error,
+.scheduler-pill--failure {
+  background: rgba(248, 81, 73, 0.15);
+  color: rgb(248, 81, 73);
+  border: 1px solid rgba(248, 81, 73, 0.35);
+}
+
+.scheduler-pill--skipped,
+.scheduler-pill--partial {
+  background: rgba(210, 153, 34, 0.15);
+  color: rgb(210, 153, 34);
+  border: 1px solid rgba(210, 153, 34, 0.35);
 }
 
 .scheduler-card-detail {
@@ -6352,6 +6411,41 @@ body.resizing-col {
   flex-shrink: 0;
 }
 
+/* My work / Backlog segmented switch at the top of the rail. */
+.gus-mode-switch {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.gus-mode-tab {
+  flex: 1 1 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.gus-mode-tab:hover:not(.active) {
+  color: var(--text-primary);
+}
+.gus-mode-tab.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+}
+.gus-rail-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 4px 8px;
+  line-height: 1.4;
+}
+
 .gus-content {
   min-width: 0;
   display: flex;
@@ -6500,6 +6594,39 @@ body.resizing-col {
   /* Break long unbroken tokens (markup://…, URLs) rather than overflow. */
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* Backlog card: subject leads, identifiers demoted to a quiet footer. At
+   200+ near-identical rows the subject is the only differentiator, so it
+   gets the weight and the W-number/type/age step back. Roomier than the
+   work-board card — a substantial block you can read at a glance, not a
+   thin bar. */
+.gus-card--backlog {
+  gap: 10px;
+  padding: 13px 14px;
+  min-height: 76px;
+  justify-content: space-between;
+}
+.gus-card-subject--lead {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  -webkit-line-clamp: 3;
+}
+.gus-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 2px;
+  border-top: 1px solid var(--border);
+}
+.gus-card-age {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 .gus-card-meta {
   display: flex;

@@ -282,3 +282,57 @@ describe('SchedulerManager.fire — overlap guard', () => {
     expect(ptys.createCalls).toHaveLength(2);
   });
 });
+
+describe('SchedulerManager.attachReport', () => {
+  const runsOf = (manager: SchedulerManager, id: string) =>
+    manager.list().find((t) => t.id === id)!.status.runs;
+
+  it('attaches a report to the run owning the sessionId', () => {
+    const { manager, ptys, task } = makeManager({ prompt: 'work' });
+    autoFire(manager, task.id);
+    const sid = ptys.sessions[0].id;
+
+    manager.attachReport(sid, '## done\nall good', 'success');
+
+    const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
+    expect(run.report).toBe('## done\nall good');
+    expect(run.reportStatus).toBe('success');
+    expect(run.reportedAt).toBeTruthy();
+  });
+
+  it('report survives the exit-time recordRun merge (report BEFORE exit)', () => {
+    const { manager, ptys, task } = makeManager({ prompt: 'work' });
+    autoFire(manager, task.id);
+    const sid = ptys.sessions[0].id;
+
+    // Report arrives while the session is still alive (optimistic run).
+    manager.attachReport(sid, 'early report', 'partial');
+    // Then the pty exits → recordRun overwrites result/duration.
+    ptys.simulateExit(sid, 0);
+
+    const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
+    expect(run.result).toBe('success'); // exit code 0 finalized
+    expect(run.durationMs).toBeDefined();
+    expect(run.report).toBe('early report'); // NOT clobbered by the exit merge
+    expect(run.reportStatus).toBe('partial');
+  });
+
+  it('report attaches to an already-finalized run (report AFTER exit)', () => {
+    const { manager, ptys, task } = makeManager({ prompt: 'work' });
+    autoFire(manager, task.id);
+    const sid = ptys.sessions[0].id;
+
+    ptys.simulateExit(sid, 0); // finalize first
+    manager.attachReport(sid, 'late report', 'success'); // then report
+
+    const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
+    expect(run.result).toBe('success');
+    expect(run.report).toBe('late report');
+  });
+
+  it('is a no-op (no throw) when no run matches the sessionId', () => {
+    const { manager, task } = makeManager({ prompt: 'work' });
+    autoFire(manager, task.id);
+    expect(() => manager.attachReport('no-such-session', 'orphan')).not.toThrow();
+  });
+});

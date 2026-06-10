@@ -22,22 +22,32 @@ import {
   CircleDot,
   Layers,
   CalendarClock,
+  Users,
+  UserCheck,
   X
 } from 'lucide-react';
 import type { ModuleHost } from '../../../src/shared/module-api';
 import { GusDetailModal } from './GusDetailModal';
 import {
   BOARD_COLUMNS,
+  BACKLOG_COLUMNS,
   OTHER_COLUMN,
   OTHER_COLUMN_KEY,
   columnKeyForStatus,
+  backlogColumnKeyForPriority,
   type BoardColumn,
   type GusIdentity,
   type GusSprint,
+  type GusTeam,
   type GusWorkItem
 } from '../shared/types';
 
 const STORAGE_SPRINT_KEY = 'selectedSprintId';
+const STORAGE_MODE_KEY = 'boardMode';
+const STORAGE_TEAM_KEY = 'selectedTeamId';
+
+/** Which board the panel shows: the user's own work, or a team's backlog. */
+type BoardMode = 'work' | 'backlog';
 /** How long the undo toast stays actionable before the write is committed. */
 const UNDO_WINDOW_MS = 6000;
 
@@ -55,6 +65,13 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
   const [items, setItems] = useState<GusWorkItem[]>([]);
   const [sprints, setSprints] = useState<GusSprint[]>([]);
   const [sprintSel, setSprintSel] = useState<SprintSel>('all');
+  const [mode, setMode] = useState<BoardMode>('work');
+  const [teams, setTeams] = useState<GusTeam[]>([]);
+  const [teamSel, setTeamSel] = useState<string | null>(null);
+  // Backlog-only: restrict to one record type (Bug / User Story / …). null = all.
+  const [typeSel, setTypeSel] = useState<string | null>(null);
+  // Backlog-only: show only items assigned to the current user.
+  const [mineOnly, setMineOnly] = useState(false);
   const [includeClosed, setIncludeClosed] = useState(false);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -136,11 +153,18 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
     [sprints, today]
   );
 
-  // Restore the last selected sprint before the first fetch.
+  // Restore the last mode + sprint + team before the first fetch.
   useEffect(() => {
     let live = true;
-    host.storage.get<string>(STORAGE_SPRINT_KEY).then((saved) => {
-      if (live && saved) setSprintSel(saved as SprintSel);
+    Promise.all([
+      host.storage.get<string>(STORAGE_MODE_KEY),
+      host.storage.get<string>(STORAGE_SPRINT_KEY),
+      host.storage.get<string>(STORAGE_TEAM_KEY)
+    ]).then(([savedMode, savedSprint, savedTeam]) => {
+      if (!live) return;
+      if (savedMode === 'backlog') setMode('backlog');
+      if (savedSprint) setSprintSel(savedSprint as SprintSel);
+      if (savedTeam) setTeamSel(savedTeam);
     });
     return () => {
       live = false;
@@ -159,20 +183,45 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
     setLoading(true);
     setError(null);
     try {
-      const [who, work, sp] = await Promise.all([
+      // Identity + the two pickers' option lists are needed in both modes;
+      // fetch them once. The board items themselves depend on the mode.
+      const [who, sp, tm] = await Promise.all([
         host.call<GusIdentity>('whoami'),
-        host.call<GusWorkItem[]>('listWork', { includeClosed, sprintId: effectiveSprintId }),
-        host.call<GusSprint[]>('listSprints')
+        host.call<GusSprint[]>('listSprints'),
+        host.call<GusTeam[]>('listTeams')
       ]);
       setIdentity(who);
-      setItems(work);
       setSprints(sp);
+      setTeams(tm);
+
+      if (mode === 'backlog') {
+        // Resolve the team to query: the saved/selected one if it's still in
+        // the list, else fall back to the user's busiest team (first by count).
+        const team = tm.find((t) => t.id === teamSel) ?? tm[0] ?? null;
+        if (!team) {
+          setItems([]);
+          setError(null);
+          return;
+        }
+        if (team.id !== teamSel) setTeamSel(team.id);
+        const backlog = await host.call<GusWorkItem[]>('listBacklog', {
+          teamId: team.id,
+          includeClosed
+        });
+        setItems(backlog);
+      } else {
+        const work = await host.call<GusWorkItem[]>('listWork', {
+          includeClosed,
+          sprintId: effectiveSprintId
+        });
+        setItems(work);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [host, includeClosed, effectiveSprintId]);
+  }, [host, mode, teamSel, includeClosed, effectiveSprintId]);
 
   useEffect(() => {
     void load();
@@ -181,6 +230,19 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
   const selectSprint = (value: SprintSel) => {
     setSprintSel(value);
     void host.storage.set(STORAGE_SPRINT_KEY, value === 'all' ? '' : value);
+  };
+
+  const selectMode = (value: BoardMode) => {
+    setMode(value);
+    setTypeSel(null); // type filter is backlog-only; don't carry it across modes
+    setMineOnly(false); // ditto the "mine only" cut
+    void host.storage.set(STORAGE_MODE_KEY, value);
+  };
+
+  const selectTeam = (id: string) => {
+    setTeamSel(id);
+    setTypeSel(null); // a type from the prior team may not exist on this one
+    void host.storage.set(STORAGE_TEAM_KEY, id);
   };
 
   const instanceUrl = identity?.instanceUrl ?? 'https://gus.my.salesforce.com';
@@ -270,38 +332,74 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
     };
   }, [stopAutoScroll]);
 
-  // Client-side text filter over the already-fetched items.
+  // The set the backlog filters operate over: all team items, optionally
+  // narrowed to the current user's. The "mine" cut comes first so the type
+  // counts below reflect exactly what's on the board.
+  const backlogBase = useMemo(() => {
+    if (mode !== 'backlog' || !mineOnly || !identity) return items;
+    return items.filter((it) => it.assigneeId === identity.userId);
+  }, [items, mode, mineOnly, identity]);
+
+  // Record types present in the (mine-filtered) backlog, with counts, for the
+  // type filter. Derived before the type/text filters so counts don't shift.
+  const typeCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const it of backlogBase) {
+      const t = it.type ?? 'Other';
+      map.set(t, (map.get(t) ?? 0) + 1);
+    }
+    return Array.from(map.entries())
+      .map(([type, count]) => ({ type, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [backlogBase]);
+
+  // Client-side text + type filter over the base set.
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
-      (it) =>
+    const byType = mode === 'backlog' && typeSel;
+    if (!q && !byType) return backlogBase;
+    return backlogBase.filter((it) => {
+      if (byType && (it.type ?? 'Other') !== typeSel) return false;
+      if (!q) return true;
+      return (
         it.subject.toLowerCase().includes(q) ||
         it.name.toLowerCase().includes(q) ||
         (it.epicName ?? '').toLowerCase().includes(q) ||
         (it.productTag ?? '').toLowerCase().includes(q)
-    );
-  }, [items, query]);
+      );
+    });
+  }, [backlogBase, query, mode, typeSel]);
 
-  // Group filtered items by column key.
+  // Group filtered items by column key. In work mode columns are statuses;
+  // in backlog mode they're priorities (backlog is almost all `New`, so a
+  // status board would collapse into one column).
   const byColumn = useMemo(() => {
     const map: Record<string, GusWorkItem[]> = {};
     for (const it of filtered) {
-      const key = columnKeyForStatus(it.status);
+      const key =
+        mode === 'backlog'
+          ? backlogColumnKeyForPriority(it.priority)
+          : columnKeyForStatus(it.status);
       (map[key] ??= []).push(it);
     }
     return map;
-  }, [filtered]);
+  }, [filtered, mode]);
 
-  // Which columns to render: board columns (Closed only when opted in), plus
-  // the catch-all "Other" column when it actually has items.
+  // Which columns to render. Backlog: the fixed priority columns. Work: the
+  // status board (Closed only when opted in) plus the catch-all "Other"
+  // column when it actually has items.
   const columns = useMemo(() => {
+    if (mode === 'backlog') return BACKLOG_COLUMNS;
     const base = BOARD_COLUMNS.filter((c) => c.key !== 'closed' || includeClosed);
     const otherCount = (byColumn[OTHER_COLUMN_KEY] ?? []).length;
     return otherCount > 0 ? [...base, OTHER_COLUMN] : base;
-  }, [includeClosed, byColumn]);
+  }, [mode, includeClosed, byColumn]);
 
   const totalShown = filtered.length;
+  const activeTeam = useMemo(
+    () => (mode === 'backlog' ? teams.find((t) => t.id === teamSel) ?? null : null),
+    [mode, teams, teamSel]
+  );
 
   return (
     <section className="gus-panel">
@@ -309,7 +407,11 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
         <div className="gus-header-title">
           <Layers size={16} className="gus-header-icon" aria-hidden />
           <h2>GUS</h2>
-          {identity && <span className="gus-user">{identity.username}</span>}
+          {mode === 'backlog' ? (
+            activeTeam && <span className="gus-user">{activeTeam.name} backlog</span>
+          ) : (
+            identity && <span className="gus-user">{identity.username}</span>
+          )}
         </div>
         <div className="gus-header-actions">
           <span className="gus-count-pill">
@@ -350,48 +452,134 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
             )}
           </div>
 
-          <div className="gus-rail-section">
-            <div className="gus-rail-label">Sprint</div>
+          <div className="gus-mode-switch" role="tablist" aria-label="Board mode">
             <button
               type="button"
-              className={`gus-rail-item ${sprintSel === 'all' ? 'active' : ''}`}
-              onClick={() => selectSprint('all')}
+              role="tab"
+              aria-selected={mode === 'work'}
+              className={`gus-mode-tab ${mode === 'work' ? 'active' : ''}`}
+              onClick={() => selectMode('work')}
             >
-              <span className="gus-rail-item-name">All sprints</span>
+              My work
             </button>
             <button
               type="button"
-              className={`gus-rail-item ${sprintSel === 'current' ? 'active' : ''}`}
-              onClick={() => selectSprint('current')}
-              disabled={!currentSprint}
-              title={currentSprint ? currentSprint.name : 'No sprint covers today'}
+              role="tab"
+              aria-selected={mode === 'backlog'}
+              className={`gus-mode-tab ${mode === 'backlog' ? 'active' : ''}`}
+              onClick={() => selectMode('backlog')}
             >
-              <CalendarClock size={13} aria-hidden />
-              <span className="gus-rail-item-name">Current sprint</span>
-              {currentSprint && <span className="gus-rail-count">{currentSprint.openCount}</span>}
+              Backlog
             </button>
-
-            <div className="gus-rail-divider" />
-
-            {sprints.map((s) => {
-              const isCurrent = currentSprint?.id === s.id;
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  className={`gus-rail-item ${sprintSel === s.id ? 'active' : ''}`}
-                  onClick={() => selectSprint(s.id)}
-                  title={s.startDate && s.endDate ? `${s.startDate} → ${s.endDate}` : s.name}
-                >
-                  <span className="gus-rail-item-name">
-                    {s.name}
-                    {isCurrent && <span className="gus-now-dot" title="Current sprint" />}
-                  </span>
-                  <span className="gus-rail-count">{s.openCount}</span>
-                </button>
-              );
-            })}
           </div>
+
+          {mode === 'work' ? (
+            <div className="gus-rail-section">
+              <div className="gus-rail-label">Sprint</div>
+              <button
+                type="button"
+                className={`gus-rail-item ${sprintSel === 'all' ? 'active' : ''}`}
+                onClick={() => selectSprint('all')}
+              >
+                <span className="gus-rail-item-name">All sprints</span>
+              </button>
+              <button
+                type="button"
+                className={`gus-rail-item ${sprintSel === 'current' ? 'active' : ''}`}
+                onClick={() => selectSprint('current')}
+                disabled={!currentSprint}
+                title={currentSprint ? currentSprint.name : 'No sprint covers today'}
+              >
+                <CalendarClock size={13} aria-hidden />
+                <span className="gus-rail-item-name">Current sprint</span>
+                {currentSprint && <span className="gus-rail-count">{currentSprint.openCount}</span>}
+              </button>
+
+              <div className="gus-rail-divider" />
+
+              {sprints.map((s) => {
+                const isCurrent = currentSprint?.id === s.id;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={`gus-rail-item ${sprintSel === s.id ? 'active' : ''}`}
+                    onClick={() => selectSprint(s.id)}
+                    title={s.startDate && s.endDate ? `${s.startDate} → ${s.endDate}` : s.name}
+                  >
+                    <span className="gus-rail-item-name">
+                      {s.name}
+                      {isCurrent && <span className="gus-now-dot" title="Current sprint" />}
+                    </span>
+                    <span className="gus-rail-count">{s.openCount}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="gus-rail-section">
+              <div className="gus-rail-label">Team</div>
+              {teams.length === 0 && !loading && (
+                <div className="gus-rail-hint">No teams found on your work.</div>
+              )}
+              {teams.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`gus-rail-item ${teamSel === t.id ? 'active' : ''}`}
+                  onClick={() => selectTeam(t.id)}
+                  title={t.name}
+                >
+                  <Users size={13} aria-hidden />
+                  <span className="gus-rail-item-name">{t.name}</span>
+                  <span className="gus-rail-count" title="Your open work on this team">
+                    {t.openCount}
+                  </span>
+                </button>
+              ))}
+
+              <div className="gus-rail-divider" />
+              <button
+                type="button"
+                className={`gus-rail-item ${mineOnly ? 'active' : ''}`}
+                onClick={() => {
+                  setMineOnly((v) => !v);
+                  setTypeSel(null); // the prior type may not exist in the new set
+                }}
+                title="Show only backlog items assigned to you"
+              >
+                <UserCheck size={13} aria-hidden />
+                <span className="gus-rail-item-name">Assigned to me</span>
+              </button>
+
+              {typeCounts.length > 1 && (
+                <>
+                  <div className="gus-rail-divider" />
+                  <div className="gus-rail-label">Type</div>
+                  <button
+                    type="button"
+                    className={`gus-rail-item ${typeSel === null ? 'active' : ''}`}
+                    onClick={() => setTypeSel(null)}
+                  >
+                    <span className="gus-rail-item-name">All types</span>
+                    <span className="gus-rail-count">{backlogBase.length}</span>
+                  </button>
+                  {typeCounts.map(({ type, count }) => (
+                    <button
+                      key={type}
+                      type="button"
+                      className={`gus-rail-item ${typeSel === type ? 'active' : ''}`}
+                      onClick={() => setTypeSel((cur) => (cur === type ? null : type))}
+                      title={type}
+                    >
+                      <span className="gus-rail-item-name">{type}</span>
+                      <span className="gus-rail-count">{count}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
 
           <label className="gus-toggle" title="Include closed / rejected work">
             <input
@@ -468,6 +656,7 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
                           item={item}
                           draggable={col.droppable}
                           dragging={draggingId === item.id}
+                          subjectFirst={mode === 'backlog'}
                           onOpen={() => openItem(item)}
                           onDragStart={(e) => {
                             e.dataTransfer.setData('text/gus-id', item.id);
@@ -499,7 +688,9 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
           )}
 
           {loading && items.length === 0 && !error && (
-            <div className="gus-loading">Loading your GUS work…</div>
+            <div className="gus-loading">
+              {mode === 'backlog' ? 'Loading the team backlog…' : 'Loading your GUS work…'}
+            </div>
           )}
         </div>
       </div>
@@ -540,17 +731,88 @@ function typeIcon(type?: string) {
   return <CircleDot size={12} aria-hidden />;
 }
 
+/**
+ * Compact relative age from an ISO timestamp, e.g. `3d`, `5mo`, `2y`. The
+ * staleness cue on backlog cards — how long an item has sat untouched. Returns
+ * null for missing/future dates so the caller can omit the badge.
+ */
+function timeAgo(iso?: string): string | null {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return null;
+  const sec = Math.floor((Date.now() - then) / 1000);
+  if (sec < 0) return null;
+  if (sec < 60) return 'now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d`;
+  const mo = Math.floor(day / 30);
+  if (mo < 12) return `${mo}mo`;
+  return `${Math.floor(mo / 12)}y`;
+}
+
 interface CardProps {
   item: GusWorkItem;
   draggable: boolean;
   dragging: boolean;
+  /**
+   * Backlog cards lead with the subject (the only thing that distinguishes
+   * one of 200+ near-identical rows) and demote the W-number/type/age to a
+   * quiet footer. They also drop the priority badge — in the backlog board the
+   * column already *is* the priority, so the badge is pure noise.
+   */
+  subjectFirst: boolean;
   onOpen: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
 }
 
-function GusCard({ item, draggable, dragging, onOpen, onDragStart, onDragEnd }: CardProps) {
+function GusCard({
+  item,
+  draggable,
+  dragging,
+  subjectFirst,
+  onOpen,
+  onDragStart,
+  onDragEnd
+}: CardProps) {
   const typeClass = (item.type ?? 'other').toLowerCase().replace(/\s+/g, '-');
+
+  if (subjectFirst) {
+    const age = timeAgo(item.lastModified);
+    return (
+      <div
+        className={`gus-card gus-card--backlog ${dragging ? 'is-dragging' : ''}`}
+        onClick={onOpen}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
+        title={`${item.name} — click for details`}
+      >
+        <div className="gus-card-subject gus-card-subject--lead">{item.subject}</div>
+        <div className="gus-card-foot">
+          <span className={`gus-card-type gus-card-type--${typeClass}`}>
+            {typeIcon(item.type)}
+            <span>{item.name}</span>
+          </span>
+          {age && (
+            <span className="gus-card-age" title={`Last modified ${item.lastModified ?? ''}`}>
+              {age}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`gus-card ${dragging ? 'is-dragging' : ''} ${draggable ? 'is-draggable' : ''}`}

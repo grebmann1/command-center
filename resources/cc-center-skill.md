@@ -215,6 +215,50 @@ When the user asks to schedule/automate something:
 
 ---
 
+## Reporting what a run did (`schedule_report`)
+
+When **you** are the agent running *inside* a scheduled session (not authoring
+the schedule — actually executing one), leave a summary of what the run did so
+the user can see the outcome in the scheduler's run history without re-reading
+your terminal output.
+
+Call the MCP tool **`schedule_report`** (server: `cc-inbox`) at the **end** of
+the run:
+
+```
+schedule_report({
+  summary: "Ran the test suite (142 passed). Bumped lodash 4.17.20 → 4.17.21 to clear a prototype-pollution advisory; lockfile updated. No other drift.",
+  status: "success"   // optional: 'success' | 'partial' | 'failure'
+})
+```
+
+- `summary` is short **markdown** — what you checked, what you found or changed,
+  and whether anything needs the user. It is a **report, not a log**: summarize,
+  don't paste raw output.
+- `status` is your own assessment, independent of the process exit code.
+- The summary is attached to **this run** in the scheduler history (the app
+  routes it by the session identity baked into the MCP URL — you can't report
+  against another run). A 📄 affordance appears on the run row; clicking it
+  shows your markdown.
+
+**`schedule_report` vs `inbox_push`:**
+
+| | `schedule_report` | `inbox_push` |
+| --- | --- | --- |
+| Purpose | Per-run record of what happened | Proactively flag something the user should act on |
+| Cadence | **Every** scheduled run | Only when you need attention |
+| Surfaces in | Scheduler run history | The inbox |
+
+File a report on every scheduled run; push to the inbox only when warranted.
+
+**Timing — important.** If the schedule has `autoCloseOnFinish: true`, the
+session is **killed the moment you stop responding**. You MUST call
+`schedule_report` **before** ending your turn — a report you intend to send
+"after" will never go out. (You'll know this guidance applies because it's
+injected into your system prompt for scheduled runs.)
+
+---
+
 ## Gotchas
 
 - **Filename must match `id` for schedules.** A mismatch means the app's

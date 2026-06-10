@@ -185,6 +185,7 @@ export function GusDetailModal({ host, item, instanceUrl, onClose }: Props) {
     ['Type', d.type],
     ['Points', typeof d.storyPoints === 'number' ? String(d.storyPoints) : undefined],
     ['Sprint', d.sprintName],
+    ['Team', d.teamName],
     ['Product', d.productTag],
     ['Epic', d.epicName],
     ['Assignee', d.assignee],
