@@ -97,12 +97,6 @@ export interface TerminalSession {
   extraArgs?: string[];
   pinned?: boolean;
   /**
-   * Set to `'waiting'` when the pty stream looks like Claude is blocked on
-   * the user (BEL or a known permission-prompt phrase). Cleared on the next
-   * user input or when the renderer acks via `terminals:clearAttention`.
-   */
-  attention?: 'waiting';
-  /**
    * Headless sessions are hidden from the tab strip but their pty keeps
    * running. The user produces them by clicking the tab's X — we intentionally
    * don't kill the pty so background work survives. Restore via the new-tab
@@ -584,12 +578,10 @@ export interface CcApi {
      * the Hidden picker.
      */
     setHeadless(sessionId: string, headless: boolean): Promise<TerminalSession | null>;
-    /** Drop the attention flag — called when the user views the tab. */
-    clearAttention(sessionId: string): Promise<void>;
     onData(cb: (sessionId: string, data: string) => void): () => void;
     onExit(cb: (sessionId: string, code: number) => void): () => void;
     onTitle(cb: (sessionId: string, title: string) => void): () => void;
-    /** Fired when any session metadata changes (e.g. attention flip). */
+    /** Fired when any session metadata changes (e.g. title/headless/exit). */
     onUpdated(cb: (session: TerminalSession) => void): () => void;
   };
   config: {

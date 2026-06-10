@@ -7,7 +7,6 @@ import {
   screen,
   Menu,
   nativeImage,
-  Notification,
   powerMonitor
 } from 'electron';
 import { join, relative, isAbsolute } from 'node:path';
@@ -24,6 +23,7 @@ import { getGitStatus, showHead, discardChanges } from './git.js';
 import { createInboxStore, type IInboxStore, type InboxEntry } from './inbox-store.js';
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import { ensureMcpConfigForProject } from './mcp-config.js';
+import { installCcCenterSkill } from './skill-installer.js';
 import { listMcpServers, setMcpServerEnabled } from './mcp.js';
 import {
   listMcpServersAll,
@@ -359,35 +359,6 @@ function createWindow() {
   ptys.on('sessionUpdated', (session) => {
     safeSend(IPC.terminals.onUpdated, session);
   });
-  ptys.on('attention', (session) => {
-    notifyAttention(session);
-  });
-}
-
-/**
- * Show an OS notification when Claude is waiting on the user *and* the
- * window isn't focused. Clicking the notification focuses the window and
- * selects the tab.
- */
-function notifyAttention(session: import('../shared/types.js').TerminalSession) {
-  const focused = win && !win.isDestroyed() && win.isFocused();
-  if (focused) return;
-  if (!Notification.isSupported()) return;
-  const project = store.listProjects().find((p) => p.id === session.projectId);
-  const projectLabel = project?.name ?? 'project';
-  const n = new Notification({
-    title: `Claude is waiting · ${projectLabel}`,
-    body: session.title || 'A session needs your attention',
-    silent: false
-  });
-  n.on('click', () => {
-    if (!win || win.isDestroyed()) return;
-    if (win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
-    safeSend('app:focusSession', session.id, session.projectId);
-  });
-  n.show();
 }
 
 function registerIpc() {
@@ -402,6 +373,7 @@ function registerIpc() {
         logMainError(`ensureMcpConfigForProject(${project.id})`, err)
       );
       templates.rebindProjects();
+      scheduler.rebindWatchers();
       return { ok: true, value: project };
     } catch (err) {
       return { ok: false, code: 'ADD_FAILED', message: String(err) };
@@ -429,6 +401,7 @@ function registerIpc() {
       ptys.list(id).forEach((s) => ptys.close(s.id));
       store.removeProject(id);
       scheduler.onProjectRemoved(id);
+      scheduler.rebindWatchers();
       templates.rebindProjects();
       // If the removed project was the one whose .claude/skills we were watching,
       // tear the watcher down — its path is now gone or owned by no-one.
@@ -521,11 +494,6 @@ function registerIpc() {
     IPC.terminals.setHeadless,
     (id: string, headless: boolean) => ptys.setHeadless(id, headless),
     () => null
-  );
-  safeHandle(
-    IPC.terminals.clearAttention,
-    (id: string) => ptys.clearAttention(id),
-    () => undefined
   );
 
   safeHandle(IPC.config.get, () => store.getConfig(), () => store.getConfig());
@@ -989,6 +957,9 @@ app.whenReady().then(() => {
   registerIpc();
   scheduler.setDeps({ ptys, store, inbox: inboxStore, logger: logMainError });
   scheduler.loadAll(store.listProjects());
+  // Watch schedule dirs so a skill- or hand-authored schedule file goes live
+  // without restart. Self-writes (run-history churn) are suppressed internally.
+  scheduler.startWatching();
   // macOS menu-bar presence for the scheduler: live schedule list, a
   // running-count badge, and show/quit controls. Reads the same scheduler +
   // pty state the window does. Non-fatal if it fails to start.
@@ -1023,6 +994,12 @@ app.whenReady().then(() => {
   templates.start();
   skillBundles.start();
   startSkillsWatchers();
+  // Deploy the bundled `cc-center` skill into ~/.claude/skills so it shows up
+  // in the skill catalogue and teaches agents how to author schedules/templates
+  // in .cc-center. Idempotent + best-effort — never blocks boot.
+  installCcCenterSkill(logMainError).catch((err) =>
+    logMainError('installCcCenterSkill', err)
+  );
   // Boot app modules (plugins/*). Each module's setup() runs once; failures
   // are isolated per-module so a broken module never blocks app start.
   moduleHost.setupAll(MAIN_MODULES).catch((err) => logMainError('moduleHost.setupAll', err));
@@ -1102,6 +1079,7 @@ app.on('before-quit', (event) => {
     }
     quitConfirmed = true;
   }
+  scheduler.stopWatching();
   scheduler.stopAll();
   tray?.stop();
   tray = null;

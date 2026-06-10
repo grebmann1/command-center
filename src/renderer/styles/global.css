@@ -1698,21 +1698,6 @@ body.resizing-col {
   box-shadow: 0 0 6px rgba(47, 129, 247, 0.6);
 }
 
-.tab-attention {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #f0883e;
-  flex: 0 0 auto;
-  box-shadow: 0 0 8px rgba(240, 136, 62, 0.85);
-  animation: tab-attention-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes tab-attention-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.55; transform: scale(0.82); }
-}
-
 .tab-profile-icon {
   display: inline-grid;
   place-items: center;
@@ -5884,13 +5869,6 @@ body.resizing-col {
   background: rgba(63, 185, 80, 0.15);
   color: rgb(63, 185, 80);
   border: 1px solid rgba(63, 185, 80, 0.35);
-}
-
-.scheduler-pill--attention {
-  background: rgba(240, 136, 62, 0.18);
-  color: #f0883e;
-  border: 1px solid rgba(240, 136, 62, 0.45);
-  animation: tab-attention-pulse 1.4s ease-in-out infinite;
 }
 
 .scheduler-card-detail {

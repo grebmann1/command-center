@@ -256,7 +256,12 @@ export const useUi = create<UiState>((set) => ({
       }
       return { sidebarCollapsed: next };
     }),
-  setNav: (nav) => set({ nav }),
+  // Entering the scheduler always lands on Overview — the cross-scope summary
+  // is the right "home" when you click in. Switching to global/project scope
+  // happens inside the panel via setSchedulerTab, so this only resets on
+  // re-entry, not when the user navigates the scope rail.
+  setNav: (nav) =>
+    set(nav === 'scheduler' ? { nav, schedulerTab: 'overview' } : { nav }),
   catalogueFilter: {},
   setCatalogueFilter: (key, value) =>
     set((s) => ({
@@ -283,11 +288,6 @@ export const useUi = create<UiState>((set) => ({
     useData.getState().loadGitStatus(id);
   },
   selectTab: (projectId, tabId) => {
-    if (tabId) {
-      // Viewing the tab is acknowledgement — drop the attention flag in main
-      // so the OS notification doesn't re-fire on the next bell.
-      window.cc.terminals.clearAttention(tabId).catch(() => {});
-    }
     set((s) => {
       const unread = { ...s.unread };
       if (tabId) delete unread[tabId];
@@ -691,8 +691,8 @@ export const useData = create<DataState>((set, get) => ({
       useMcpCatalogue.setState({ entries });
     });
 
-    // Session metadata changes (e.g. attention flips, exit transitions, or
-    // a scheduler-spawned tab being broadcast) come in via this push so the
+    // Session metadata changes (e.g. title/headless changes, exit transitions,
+    // or a scheduler-spawned tab being broadcast) come in via this push so the
     // tab strip re-renders without polling.
     window.cc.terminals.onUpdated((session) => {
       set((s) => {

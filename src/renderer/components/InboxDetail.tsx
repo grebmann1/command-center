@@ -112,9 +112,9 @@ function EmptyState() {
 function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }) {
   const projects = useData((s) => s.projects);
   const terminals = useData((s) => s.terminals);
+  const restoreTerminal = useData((s) => s.restoreTerminal);
   const setNav = useUi((s) => s.setNav);
   const selectProject = useUi((s) => s.selectProject);
-  const selectTab = useUi((s) => s.selectTab);
 
   const aliveProject = projects.find((p) => p.id === entry.projectId) ?? null;
   const projectAlive = aliveProject !== null;
@@ -135,10 +135,12 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
     if (!aliveProject) return;
     selectProject(aliveProject.id);
     setNav('projects');
-    // Focus the originating terminal when known and still running.
-    // selectTab no-ops cleanly when the id isn't in the project's tab list.
+    // Focus the originating terminal when known and still running. Scheduled
+    // sessions are headless, so we restoreTerminal (un-hide + select) rather
+    // than selectTab — selectTab silently no-ops for an id that isn't in the
+    // visible tab list, which is exactly the case for a headless session.
     if (aliveSession) {
-      selectTab(aliveProject.id, aliveSession.id);
+      void restoreTerminal(aliveSession.id, aliveProject.id);
     }
   };
 

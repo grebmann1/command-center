@@ -21,7 +21,6 @@ export const IPC = {
     resize: 'terminals:resize',
     close: 'terminals:close',
     setHeadless: 'terminals:setHeadless',
-    clearAttention: 'terminals:clearAttention',
     onData: 'terminals:onData',
     onExit: 'terminals:onExit',
     onTitle: 'terminals:onTitle',

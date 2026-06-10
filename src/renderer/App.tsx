@@ -187,7 +187,11 @@ export function App() {
       const ui = useUi.getState();
       ui.setNav('projects');
       ui.selectProject(projectId);
-      ui.selectTab(projectId, sessionId);
+      // restoreTerminal un-hides a headless session (e.g. a scheduled run)
+      // AND selects it. selectTab alone silently no-ops for a headless id, so
+      // the tray "focus session" click would otherwise focus nothing. Safe for
+      // already-visible sessions too.
+      void useData.getState().restoreTerminal(sessionId, projectId);
     });
     return () => {
       offShortcuts();

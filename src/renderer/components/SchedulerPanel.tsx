@@ -242,11 +242,12 @@ export function SchedulerPanel() {
               }
             }}
             onOpenTerminal={(t, sessionId) => {
-              // Switch to the project's tab strip and select the live session
-              // — same path as a Scheduler row's "Open" button.
+              // Scheduled fires are headless — restoreTerminal un-hides the
+              // session before selecting it. selectTab alone would be reverted
+              // by Workspace's reconciliation (the headless id isn't visible).
               useUi.getState().setNav('projects');
               useUi.getState().selectProject(t.projectId);
-              useUi.getState().selectTab(t.projectId, sessionId);
+              void useData.getState().restoreTerminal(sessionId, t.projectId);
             }}
             onEdit={(t) => setEditing(t)}
           />
@@ -440,8 +441,8 @@ function ScheduleRow({
   const nextRun = task.status.nextRunAt ? new Date(task.status.nextRunAt) : null;
   const [expanded, setExpanded] = useState(false);
   const terminals = useData((s) => s.terminals);
+  const restoreTerminal = useData((s) => s.restoreTerminal);
   const setNav = useUi((s) => s.setNav);
-  const selectTab = useUi((s) => s.selectTab);
   const selectProject = useUi((s) => s.selectProject);
   const pushToast = useUi((s) => s.pushToast);
 
@@ -455,8 +456,9 @@ function ScheduleRow({
       pushToast(`Run failed: ${result.message}`, 'error');
       return;
     }
-    // Tab appears in the project automatically (scheduler spawns visibly);
-    // the toast confirms the fire so the user knows it took effect.
+    // The fire spawns a headless background session (surfaced under the
+    // project's "Background" list and via the inbox); the toast confirms it
+    // took effect, and "Running now" / row deep-links can promote it to a tab.
     pushToast(`Fired "${task.name}"`, 'info');
   };
 
@@ -479,17 +481,14 @@ function ScheduleRow({
     }
     return null;
   })();
-  const liveSession = liveSessionId
-    ? projectTerminals.find((s) => s.id === liveSessionId) ?? null
-    : null;
-  const needsAttention = liveSession?.attention === 'waiting';
-
   const promoteAndOpen = (sessionId: string) => {
-    // Scheduled fires now spawn visible tabs directly; this is just a deep-link
-    // helper that switches the user's view to the running session.
+    // Scheduled fires spawn headless, so the session is filtered out of the
+    // visible tab strip. restoreTerminal un-hides it (no-op if already visible)
+    // AND selects it — selectTab alone would be reverted by Workspace's
+    // reconciliation effect, since the headless id isn't in the visible list.
     setNav('projects');
     selectProject(task.projectId);
-    selectTab(task.projectId, sessionId);
+    void restoreTerminal(sessionId, task.projectId);
   };
 
   const jumpToRun = (sessionId: string | undefined) => {
@@ -555,18 +554,9 @@ function ScheduleRow({
         </div>
         <div className="scheduler-card-compact-when">
           {liveSessionId ? (
-            needsAttention ? (
-              <span
-                className="scheduler-pill scheduler-pill--attention"
-                title="Claude is waiting on you — click Open"
-              >
-                needs you
-              </span>
-            ) : (
-              <span className="scheduler-pill scheduler-pill--running" title="Terminal session is live">
-                running
-              </span>
-            )
+            <span className="scheduler-pill scheduler-pill--running" title="Terminal session is live">
+              running
+            </span>
           ) : task.enabled && nextRun ? (
             <span className="scheduler-card-compact-next" title="Next fire">
               in {formatCountdown(nextRun)}

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { watch, existsSync, mkdirSync, type FSWatcher } from 'node:fs';
 import type {
   Project,
   ScheduleCreateInput,
@@ -10,7 +11,13 @@ import type {
 import { MIN_INTERVAL_MS, parseEvery as parseEveryShared } from '../shared/parse-every.js';
 import type { PtyManager } from './pty.js';
 import type { IInboxStore } from './inbox-store.js';
-import { deleteSchedule, listAllSchedules, saveSchedule } from './scheduler-store.js';
+import {
+  deleteSchedule,
+  globalDir,
+  listAllSchedules,
+  projectDir,
+  saveSchedule
+} from './scheduler-store.js';
 import type { store as Store } from './store.js';
 
 /** Profiles that drive a Claude Code CLI — the only ones we treat the
@@ -58,6 +65,19 @@ export class SchedulerManager extends EventEmitter {
   private live = new Map<string, Live>();
   /** Lazily set after the window opens. We don't fire before then. */
   private deps: Deps | null = null;
+
+  /** fs.watch handles, keyed by the watched directory path. */
+  private watchers = new Map<string, FSWatcher>();
+  private watchDebounce: NodeJS.Timeout | null = null;
+  /**
+   * Epoch-ms until which directory-watch events are ignored. We bump this on
+   * every `persist()` (the scheduler writes its own JSON on each fire), so the
+   * watcher only reacts to *external* edits — a skill or the user dropping a
+   * schedule file — not to our own run-history churn. Without this, a fire's
+   * `recordRun` → `persist` would trip the watcher and `loadAll` would wipe
+   * in-flight timer/run-index state.
+   */
+  private suppressWatchUntil = 0;
 
   setDeps(deps: Deps) {
     this.deps = deps;
@@ -162,7 +182,11 @@ export class SchedulerManager extends EventEmitter {
   remove(id: string) {
     this.disarm(id);
     this.live.delete(id);
-    if (this.deps) deleteSchedule(id, this.deps.store.listProjects());
+    if (this.deps) {
+      // Our own delete — keep the watcher quiet (mirrors persist()).
+      this.suppressWatchUntil = Date.now() + 1_000;
+      deleteSchedule(id, this.deps.store.listProjects());
+    }
     this.emit('changed');
   }
 
@@ -177,6 +201,117 @@ export class SchedulerManager extends EventEmitter {
   stopAll() {
     for (const id of [...this.live.keys()]) this.disarm(id);
     this.live.clear();
+  }
+
+  /**
+   * Watch the global + per-project schedule directories so externally-authored
+   * schedule files (e.g. the `cc-center` skill writing one, or a hand-edit)
+   * go live without an app restart. Our own writes are suppressed via
+   * `suppressWatchUntil`, so this only fires on external changes.
+   *
+   * Call once after `loadAll` at boot, and again via `rebindWatchers` when the
+   * project list changes (so new projects' dirs get watched).
+   */
+  startWatching() {
+    this.rebindWatchers();
+  }
+
+  /** (Re)attach watchers to the current set of schedule directories. */
+  rebindWatchers() {
+    for (const w of this.watchers.values()) {
+      try {
+        w.close();
+      } catch {
+        /* already closed */
+      }
+    }
+    this.watchers.clear();
+
+    const dirs = [globalDir()];
+    if (this.deps) {
+      for (const p of this.deps.store.listProjects()) dirs.push(projectDir(p));
+    }
+    for (const dir of dirs) this.attachWatcher(dir);
+  }
+
+  stopWatching() {
+    for (const w of this.watchers.values()) {
+      try {
+        w.close();
+      } catch {
+        /* already closed */
+      }
+    }
+    this.watchers.clear();
+    if (this.watchDebounce) {
+      clearTimeout(this.watchDebounce);
+      this.watchDebounce = null;
+    }
+  }
+
+  private attachWatcher(dir: string) {
+    if (this.watchers.has(dir)) return;
+    try {
+      if (!existsSync(dir)) {
+        // Create the global dir so we can watch it from boot; skip per-project
+        // dirs that don't exist yet (rebindWatchers re-runs when projects change,
+        // and most projects won't have a schedules dir).
+        if (dir === globalDir()) {
+          mkdirSync(dir, { recursive: true });
+        } else {
+          return;
+        }
+      }
+      const w = watch(dir, { persistent: false }, () => this.scheduleReload());
+      w.on('error', (err) => {
+        this.log(`watch ${dir}`, err);
+        try {
+          w.close();
+        } catch {
+          /* already closed */
+        }
+        if (this.watchers.get(dir) === w) this.watchers.delete(dir);
+      });
+      this.watchers.set(dir, w);
+    } catch (err) {
+      // Watching is best-effort — some filesystems (network mounts) don't
+      // support it. The schedule still loads on next boot / project-add.
+      this.log(`watch ${dir}`, err);
+    }
+  }
+
+  /** Coalesce burst events (an editor/agent save = create+rename+modify). */
+  private scheduleReload() {
+    if (this.watchDebounce) clearTimeout(this.watchDebounce);
+    this.watchDebounce = setTimeout(() => {
+      this.watchDebounce = null;
+      // Skip our own run-history writes.
+      if (Date.now() < this.suppressWatchUntil) return;
+      if (!this.deps) return;
+      // Don't yank state out from under an in-flight fire. loadAll() calls
+      // stopAll(), which clears timers and run-index maps — reloading mid-fire
+      // would orphan the exit handler's recordRun. Defer instead.
+      if (this.hasLiveSession()) {
+        this.scheduleReload();
+        return;
+      }
+      this.loadAll(this.deps.store.listProjects());
+    }, 250);
+  }
+
+  /** True if any schedule has a spawned terminal session still running. */
+  private hasLiveSession(): boolean {
+    if (!this.deps) return false;
+    for (const live of this.live.values()) {
+      for (const r of live.task.status.runs) {
+        if (!r.sessionId) continue;
+        const sessions = this.deps.ptys.list(live.task.projectId);
+        if (sessions.some((s) => s.id === r.sessionId && s.status !== 'exited')) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
@@ -211,6 +346,9 @@ export class SchedulerManager extends EventEmitter {
 
   private persist(task: ScheduledTask) {
     if (!this.deps) return;
+    // Our own write — keep the watcher quiet long enough for the fs event to
+    // land and be ignored, so run-history churn doesn't trigger a reload.
+    this.suppressWatchUntil = Date.now() + 1_000;
     saveSchedule(task, this.deps.store.listProjects());
   }
 

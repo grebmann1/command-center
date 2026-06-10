@@ -12,8 +12,8 @@ import { join } from 'node:path';
 import type { LaunchProfileId, Project, ScheduledTask } from '../shared/types.js';
 import { parseEvery } from '../shared/parse-every.js';
 
-const globalDir = () => join(app.getPath('home'), '.cc-center', 'schedules');
-const projectDir = (project: Project) => join(project.path, '.cc-center', 'schedules');
+export const globalDir = () => join(app.getPath('home'), '.cc-center', 'schedules');
+export const projectDir = (project: Project) => join(project.path, '.cc-center', 'schedules');
 
 const VALID_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
 

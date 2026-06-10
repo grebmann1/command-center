@@ -37,7 +37,6 @@ const api: CcApi = {
     close: (id) => ipcRenderer.invoke(IPC.terminals.close, id),
     setHeadless: (id, headless) =>
       ipcRenderer.invoke(IPC.terminals.setHeadless, id, headless),
-    clearAttention: (id) => ipcRenderer.invoke(IPC.terminals.clearAttention, id),
     onData: (cb) => {
       const handler = (_e: unknown, id: string, data: string) => cb(id, data);
       ipcRenderer.on(IPC.terminals.onData, handler);

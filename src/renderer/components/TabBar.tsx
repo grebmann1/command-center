@@ -210,15 +210,7 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
             setDragOverId(null);
           }}
         >
-          {t.attention === 'waiting' ? (
-            <span
-              className="tab-attention"
-              title="Claude is waiting on you"
-              aria-label="needs attention"
-            />
-          ) : (
-            unread[t.id] && activeTabId !== t.id && <span className="tab-unread" />
-          )}
+          {unread[t.id] && activeTabId !== t.id && <span className="tab-unread" />}
           <span className={`tab-profile-icon profile-${t.profile}`} aria-hidden="true">
             {profileIcon(t.profile)}
           </span>
@@ -514,9 +506,6 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
                       {profileIcon(t.profile)}
                     </span>
                     <span className="tab-menu-hidden-title">{t.title}</span>
-                    {t.attention === 'waiting' && (
-                      <span className="tab-attention" aria-label="needs attention" />
-                    )}
                   </button>
                   {onKillBackground && (
                     <button
