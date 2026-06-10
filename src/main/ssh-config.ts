@@ -2,6 +2,7 @@ import { execFile, type ExecFileException } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, dirname, isAbsolute, basename } from 'node:path';
 import { homedir } from 'node:os';
+import { augmentPath } from './env.js';
 import type { SshHostEntry, SshSyncResult } from '../shared/types.js';
 
 /**
@@ -63,8 +64,10 @@ function runSfworkList(): Promise<string | null> {
         maxBuffer: 4 * 1024 * 1024,
         env: {
           ...process.env,
-          // `sfwork` resolves via the user's shell PATH (e.g. /usr/local/bin);
-          // GUI-launched Electron may not inherit it, so search common dirs.
+          // `sfwork` resolves via the user's shell PATH (e.g. /usr/local/bin).
+          // `ensureProcessPath()` already repairs the global PATH at boot, so
+          // this is defensive-only — it re-adds the same fallback dirs in case
+          // this runs before boot repair (e.g. a unit test).
           PATH: augmentPath(process.env.PATH),
           // `sfwork` is a honu-wrapped Python CLI. Two of its per-run behaviors
           // crash ("Python quit unexpectedly") when spawned headless from a GUI
@@ -104,14 +107,6 @@ export function classifySfworkFailure(err: ExecFileException, output: string): s
     return 'sfwork needs you to re-authenticate — run `sfwork list` in a terminal, then Refresh.';
   }
   return 'Could not refresh from sfwork — showing hosts already in ~/.ssh/config.';
-}
-
-/** Prepend common CLI install dirs so a GUI launch can still find `sfwork`. */
-function augmentPath(current: string | undefined): string {
-  const extra = ['/usr/local/bin', '/opt/homebrew/bin', join(homedir(), '.local', 'bin')];
-  const parts = (current ?? '').split(':').filter(Boolean);
-  for (const dir of extra) if (!parts.includes(dir)) parts.push(dir);
-  return parts.join(':');
 }
 
 async function parseFile(path: string, seen: Set<string>, out: SshHostEntry[]): Promise<void> {

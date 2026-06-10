@@ -16,6 +16,7 @@ import { dirname } from 'node:path';
 import { IPC } from '../shared/ipc.js';
 import { store } from './store.js';
 import { PtyManager } from './pty.js';
+import { AgentStatusTracker } from './agent-status.js';
 import { listClaudeSessions } from './claude.js';
 import { listDir, readFile as fsReadFile, writeFile as fsWriteFile, walkFiles, searchFiles } from './fs.js';
 import { openIn } from './openers.js';
@@ -43,6 +44,7 @@ import { SkillBundlesStore } from './skill-bundles-store.js';
 import { ScheduleGroupsStore } from './schedule-groups-store.js';
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import { listSshHosts, syncWorkspaceHosts } from './ssh-config.js';
+import { ensureProcessPath } from './env.js';
 import { SchedulerManager } from './scheduler.js';
 import { TrayController } from './tray.js';
 import { TemplateStore } from './template-store.js';
@@ -204,6 +206,7 @@ function setActiveProjectSkillsWatcher(
 
 let win: BrowserWindow | null = null;
 const ptys = new PtyManager();
+const agentStatus = new AgentStatusTracker();
 const inboxStore: IInboxStore = createInboxStore();
 const scheduler = new SchedulerManager();
 let tray: TrayController | null = null;
@@ -356,12 +359,19 @@ function createWindow() {
 
   ptys.on('data', (sessionId: string, data: string) => {
     safeSend(IPC.terminals.onData, sessionId, data);
+    // Feed the raw PTY stream through the OSC-title detector. Cheap and
+    // off the render path — only emits when the agent state actually changes.
+    agentStatus.observeData(sessionId, data);
   });
   ptys.on('exit', (sessionId: string, code: number) => {
     safeSend(IPC.terminals.onExit, sessionId, code);
+    agentStatus.remove(sessionId);
   });
   ptys.on('sessionUpdated', (session) => {
     safeSend(IPC.terminals.onUpdated, session);
+  });
+  agentStatus.on('status', (sessionId: string, state) => {
+    safeSend(IPC.terminals.onAgentStatus, sessionId, state);
   });
 }
 
@@ -983,6 +993,11 @@ function buildAppMenu() {
 }
 
 app.whenReady().then(() => {
+  // Repair PATH before any pty/opener/scheduler spawn. A GUI launch
+  // (Finder/Dock) inherits a minimal PATH that omits ~/.local/bin,
+  // /opt/homebrew/bin, etc. — so a bare `claude` spawn would ENOENT and
+  // the tab would open already-exited. Must run before the first spawn.
+  ensureProcessPath();
   // Apply branding before any window opens so the dock + About panel pick it up.
   app.setName('Claude Code Terminal Center');
   const iconPath = resolveIconPath();

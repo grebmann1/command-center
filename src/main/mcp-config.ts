@@ -14,7 +14,9 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, rename } from 'node:fs/promises';
+import { mkdirSync, writeFileSync, renameSync } from 'node:fs';
 
 const MCP_CONFIG_DIR = join(homedir(), '.cc-center', 'mcp');
 
@@ -55,5 +57,30 @@ export async function ensureMcpConfigForProject(projectId: string): Promise<stri
   const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(tmp, configBody(), 'utf-8');
   await rename(tmp, target);
+  return target;
+}
+
+/**
+ * Synchronous twin of `ensureMcpConfigForProject`, called from `pty.create`
+ * right before a claude spawn passes `--mcp-config <path>` to this file.
+ *
+ * The async writers (project-add fire-and-forget, boot backfill loop) run
+ * *after* `setMcpBaseUrl`, so there's a window where the base URL is known but
+ * the file isn't on disk yet — or a prior write silently failed. Launching
+ * claude with `--mcp-config` pointing at a missing file means the cc-inbox
+ * server never loads. Writing it synchronously at the spawn site closes that
+ * race for good: idempotent, cheap, and independent of boot ordering.
+ *
+ * Best-effort: a failure here must not block the terminal from opening, so the
+ * caller treats a thrown error as "skip MCP injection for this spawn".
+ */
+export function ensureMcpConfigForProjectSync(projectId: string): string {
+  const target = mcpConfigPathForProject(projectId);
+  mkdirSync(MCP_CONFIG_DIR, { recursive: true });
+  // Unique per call (not just per pid) so two concurrent spawns for the same
+  // project can't race on the same tmp path before their renames land.
+  const tmp = `${target}.tmp-${process.pid}-${randomUUID()}`;
+  writeFileSync(tmp, configBody(), 'utf-8');
+  renameSync(tmp, target);
   return target;
 }

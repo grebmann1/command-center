@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
+  AgentState,
   Project,
   TerminalSession,
   LaunchProfileId,
@@ -13,6 +14,13 @@ import type {
   ScheduleTemplate,
   ScheduleGroup
 } from '@shared/types';
+import {
+  snapshotTabs,
+  planRestore,
+  readSnapshot,
+  writeSnapshot,
+  type SessionSnapshotMap
+} from './util/sessionRestore';
 
 /** Built-in nav destinations. App modules (plugins/*) add their own ids. */
 export type CoreNavId =
@@ -114,6 +122,12 @@ interface UiState {
   // space. Persisted in localStorage so it survives reloads.
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
+  // sidebar: per-section collapse state in the list rail (Scheduler/Settings),
+  // keyed by a stable section id like 'scheduler:groups'. Collapsed sections
+  // hide their rows so a long rail stays scannable. Persisted in localStorage
+  // as a JSON map. Absent key = expanded (the default).
+  collapsedSections: Record<string, boolean>;
+  toggleSection: (key: string) => void;
   setNav: (n: NavId) => void;
   /** Cross-panel deep-link prefilter: a Plugin row's "4 skills" chip writes
    *  `catalogueFilter.skills = pluginName`, then navs to skills. The skills
@@ -177,6 +191,20 @@ export function applyListPaneWidth(px: number) {
 export function applyTheme(theme: 'dark' | 'light' | undefined) {
   const t = theme === 'light' ? 'light' : 'dark';
   document.documentElement.dataset.theme = t;
+}
+
+// Restore the per-section collapse map persisted by toggleSection. A malformed
+// or missing value just yields an empty map (everything expanded).
+function readCollapsedSections(): Record<string, boolean> {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem('cc.collapsedSections');
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 // Debounced write of workspaceMode -> AppConfig.workspaceModes.
@@ -277,6 +305,17 @@ export const useUi = create<UiState>((set, get) => ({
         // ignore quota errors
       }
       return { sidebarCollapsed: next };
+    }),
+  collapsedSections: readCollapsedSections(),
+  toggleSection: (key) =>
+    set((s) => {
+      const next = { ...s.collapsedSections, [key]: !s.collapsedSections[key] };
+      try {
+        localStorage.setItem('cc.collapsedSections', JSON.stringify(next));
+      } catch {
+        // ignore quota errors
+      }
+      return { collapsedSections: next };
     }),
   // Entering the scheduler always lands on Overview — the cross-scope summary
   // is the right "home" when you click in. Switching to global/project scope
@@ -520,6 +559,17 @@ interface DataState {
   setFontSize: (n: number) => void;
   setInboxGuidanceEnabled: (on: boolean) => void;
   reopenLastClosed: (projectId: string) => Promise<TerminalSession | null>;
+  /**
+   * Re-spawn the visible tabs that were open last launch (claude tabs resume
+   * via `--continue`). Idempotent across the app launch: runs at most once,
+   * guarded by `sessionsRestored`. Called from init() after live hydration.
+   */
+  restoreSessions: (skipProjectIds?: Set<string>) => Promise<void>;
+  /**
+   * Persist the current per-project visible-tab layout to localStorage so the
+   * next launch can restore it. Cheap; called after any tab create/close.
+   */
+  persistOpenSessions: () => void;
   loadProjects: () => Promise<void>;
   loadClaudeSessions: (projectId: string) => Promise<void>;
   addProject: () => Promise<Project | null>;
@@ -569,6 +619,21 @@ interface DataState {
   setPinned: (projectId: string, sessionId: string, pinned: boolean) => void;
   markExited: (sessionId: string, exitCode?: number) => void;
 }
+
+/**
+ * Guards `restoreSessions` to one run per app launch. Module-level (not store
+ * state) so a store re-creation during a hot reload doesn't re-trigger restore,
+ * but a genuine app relaunch (fresh module graph) resets it to false.
+ */
+let sessionsRestored = false;
+/**
+ * True only while `restoreSessions` is spawning its planned tabs. Suppresses
+ * `persistOpenSessions` for the duration so the in-loop createTerminal /
+ * markExited calls can't rewrite (and partially clobber) the snapshot before
+ * the whole plan has been consumed — an interrupted restore would otherwise
+ * lose the un-spawned tail. We persist once, explicitly, after the loop.
+ */
+let restoringSessions = false;
 
 /**
  * Filter out hidden (headless) terminals from a project's tab strip. Hidden
@@ -652,6 +717,10 @@ export const useData = create<DataState>((set, get) => ({
       // made "Running now" read 0 while the scheduler kept skipping fires with
       // "previous run still active". Pull the current list per project so the
       // store reflects what main actually has alive.
+      // Track projects whose hydration IPC failed: we couldn't learn whether
+      // they have live ptys, so restore must skip them (else we'd risk double-
+      // spawning on top of an invisible running session).
+      const hydrationFailed = new Set<string>();
       await Promise.all(
         projects.map(async (p) => {
           try {
@@ -660,10 +729,18 @@ export const useData = create<DataState>((set, get) => ({
               set((s) => ({ terminals: { ...s.terminals, [p.id]: sessions } }));
             }
           } catch {
-            /* ignore — a missing project's terminals just stay empty */
+            /* couldn't read this project's live terminals — skip it on restore */
+            hydrationFailed.add(p.id);
           }
         })
       );
+
+      // Silently restore the tabs that were open last launch. Runs once per
+      // app launch (guarded), after live ptys have hydrated above so we never
+      // double-spawn on top of a session that outlived a renderer reload.
+      // planRestore() folds `--continue` into claude tabs so they resume their
+      // prior conversation, and skips deleted/remote/already-live projects.
+      await get().restoreSessions(hydrationFailed);
     } catch (err) {
       pushErrorToast(errorMessage(err, 'Failed to initialize app state'));
     }
@@ -763,6 +840,16 @@ export const useData = create<DataState>((set, get) => ({
         next[idx] = { ...next[idx], ...session };
         return { terminals: { ...s.terminals, [session.projectId]: next } };
       });
+    });
+
+    // Live agent-state pushes land in their own store (useAgentStatus), keyed
+    // by session id, with a precomputed per-project rollup. We resolve the
+    // owning project from useData here so the status event itself stays a
+    // lean (sessionId, state) pair.
+    window.cc.terminals.onAgentStatus((sessionId, state) => {
+      const projectId = findProjectIdForSession(sessionId);
+      if (!projectId) return;
+      useAgentStatus.getState().apply(sessionId, projectId, state);
     });
   },
 
@@ -953,10 +1040,55 @@ export const useData = create<DataState>((set, get) => ({
           terminals: { ...s.terminals, [projectId]: [...list, result.value] }
         };
       });
+      get().persistOpenSessions();
       return result.value;
     } catch (err) {
       pushErrorToast(errorMessage(err, 'Failed to create terminal'));
       return null;
+    }
+  },
+
+  persistOpenSessions() {
+    // Suppressed during restore: the in-loop createTerminal/markExited calls
+    // would otherwise rewrite the snapshot from a partially-restored state and
+    // an interruption could drop the un-spawned tail. restoreSessions persists
+    // once when it finishes.
+    if (restoringSessions) return;
+    const { terminals } = get();
+    const snapshot: SessionSnapshotMap = {};
+    for (const [projectId, list] of Object.entries(terminals)) {
+      const snap = snapshotTabs(list);
+      if (snap.length > 0) snapshot[projectId] = snap;
+    }
+    writeSnapshot(snapshot);
+  },
+
+  async restoreSessions(skipProjectIds) {
+    if (sessionsRestored) return; // once per app launch
+    sessionsRestored = true;
+    const { projects, terminals } = get();
+    const plan = planRestore(readSnapshot(), projects, terminals, skipProjectIds);
+    if (plan.length === 0) return;
+    restoringSessions = true;
+    try {
+      // Spawn sequentially: a burst of concurrent claude --continue launches
+      // can race the same per-project .mcp.json write and thrash the CLI's
+      // session store. Order within a project is preserved (plan is tab order).
+      for (const item of plan) {
+        const created = await get().createTerminal(item.projectId, item.profile, 80, 24, {
+          extraArgs: item.extraArgs,
+          title: item.title,
+          cwd: item.cwd
+        });
+        if (created && item.pinned) {
+          get().setPinned(item.projectId, created.id, true);
+        }
+      }
+    } finally {
+      // Clear first, then persist once so the snapshot reflects the fully
+      // restored layout (and survives even if a spawn above threw).
+      restoringSessions = false;
+      get().persistOpenSessions();
     }
   },
 
@@ -1011,6 +1143,7 @@ export const useData = create<DataState>((set, get) => ({
       const target = targetIdx >= 0 ? next[targetIdx]?.id : undefined;
       ui.selectTab(projectId, target);
     }
+    get().persistOpenSessions();
   },
 
   async hideTerminal(sessionId, projectId) {
@@ -1221,6 +1354,7 @@ export const useData = create<DataState>((set, get) => ({
       next.splice(toIdx, 0, moved);
       return { terminals: { ...s.terminals, [projectId]: next } };
     });
+    get().persistOpenSessions();
   },
 
   setPinned(projectId, sessionId, pinned) {
@@ -1238,6 +1372,7 @@ export const useData = create<DataState>((set, get) => ({
       const next = without.slice(0, insertAt).concat(updated, without.slice(insertAt));
       return { terminals: { ...s.terminals, [projectId]: next } };
     });
+    get().persistOpenSessions();
   },
 
   renameTerminal(projectId, sessionId, title) {
@@ -1251,6 +1386,7 @@ export const useData = create<DataState>((set, get) => ({
         }
       };
     });
+    get().persistOpenSessions();
   },
 
   markExited(sessionId, exitCode) {
@@ -1291,6 +1427,10 @@ export const useData = create<DataState>((set, get) => ({
       }
       return { terminals, detachedStack };
     });
+    // A tab that just exited (headless reaped, or a visible shell/claude that
+    // ended) should drop out of the restore snapshot so next launch doesn't
+    // resurrect a session the user let die. snapshotTabs filters exited tabs.
+    get().persistOpenSessions();
   },
 
   async loadGitStatus(projectId) {
@@ -1357,6 +1497,87 @@ export const useInbox = create<InboxLiveState>((set) => ({
       return { entries: s.entries.filter((e) => e.id !== id) };
     })
 }));
+
+/**
+ * Live agent status (working / blocked / done / idle), kept in its OWN store —
+ * deliberately not on the `TerminalSession` objects in `useData`. Status ticks
+ * far more often than session metadata; routing it through `useData` would
+ * rebuild the `terminals` map on every tick and re-render every list/strip that
+ * selects it (the render-storm the arch council made binding — BC 7/10).
+ *
+ * `byId` is the per-session state. `rollup` is the precomputed per-project
+ * most-urgent state, updated imperatively in `apply` (O(affected project), not
+ * O(projects × sessions)) so consumers read `rollup[projectId]` as a stable
+ * primitive and never run a fresh-object selector — the zustand infinite-loop
+ * trap (see MEMORY `zustand-selector-stable-ref`).
+ */
+const AGENT_STATE_RANK: Record<AgentState, number> = {
+  blocked: 4,
+  done: 3,
+  working: 2,
+  idle: 1,
+  unknown: 0
+};
+
+/** Resolve which project a session belongs to from the live terminals map.
+ *  Returns null if the session isn't known yet (e.g. a status push that races
+ *  ahead of the sessionUpdated that registers the tab). */
+function findProjectIdForSession(sessionId: string): string | null {
+  const { terminals } = useData.getState();
+  for (const [projectId, list] of Object.entries(terminals)) {
+    if (list.some((t) => t.id === sessionId)) return projectId;
+  }
+  return null;
+}
+
+interface AgentStatusState {
+  byId: Record<string, AgentState>;
+  rollup: Record<string, AgentState>;
+  /** Apply one session's new state. `projectId` lets us recompute that one
+   *  project's rollup without scanning every project. */
+  apply: (sessionId: string, projectId: string, state: AgentState) => void;
+  /** Drop a session (pty exited / tab closed) and refresh its project rollup. */
+  clear: (sessionId: string, projectId: string) => void;
+}
+
+export const useAgentStatus = create<AgentStatusState>((set, get) => ({
+  byId: {},
+  rollup: {},
+  apply: (sessionId, projectId, state) =>
+    set((s) => {
+      if (s.byId[sessionId] === state) return s;
+      const byId = { ...s.byId, [sessionId]: state };
+      return { byId, rollup: recomputeRollup(byId, projectId, s.rollup) };
+    }),
+  clear: (sessionId, projectId) =>
+    set((s) => {
+      if (!(sessionId in s.byId)) return s;
+      const byId = { ...s.byId };
+      delete byId[sessionId];
+      return { byId, rollup: recomputeRollup(byId, projectId, s.rollup) };
+    })
+}));
+
+/**
+ * Recompute one project's rollup = the most-urgent agent state across its live
+ * sessions. Reads session→project membership from `useData` so we don't have to
+ * thread it through every status event. Returns a new `rollup` object only when
+ * that project's value actually changed (keeps the reference stable otherwise).
+ */
+function recomputeRollup(
+  byId: Record<string, AgentState>,
+  projectId: string,
+  prev: Record<string, AgentState>
+): Record<string, AgentState> {
+  const sessions = useData.getState().terminals[projectId] ?? [];
+  let best: AgentState = 'unknown';
+  for (const sess of sessions) {
+    const st = byId[sess.id];
+    if (st && AGENT_STATE_RANK[st] > AGENT_STATE_RANK[best]) best = st;
+  }
+  if (prev[projectId] === best) return prev;
+  return { ...prev, [projectId]: best };
+}
 
 interface InboxSelectionState {
   selectedEntryId: string | null;

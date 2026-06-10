@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from '../shared/ipc.js';
 import type {
+  AgentState,
   CcApi,
   CreateTerminalRequest,
   InboxEntry,
@@ -56,6 +57,11 @@ const api: CcApi = {
       const handler = (_e: unknown, session: TerminalSession) => cb(session);
       ipcRenderer.on(IPC.terminals.onUpdated, handler);
       return () => ipcRenderer.off(IPC.terminals.onUpdated, handler);
+    },
+    onAgentStatus: (cb) => {
+      const handler = (_e: unknown, id: string, state: AgentState) => cb(id, state);
+      ipcRenderer.on(IPC.terminals.onAgentStatus, handler);
+      return () => ipcRenderer.off(IPC.terminals.onAgentStatus, handler);
     }
   },
   config: {

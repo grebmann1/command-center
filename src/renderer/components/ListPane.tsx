@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, EyeOff, Layers, Settings } from 'lucide-react';
+import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, EyeOff, Layers, Settings, ChevronRight } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
 import {
   useData,
@@ -40,12 +40,49 @@ interface MenuState {
   y: number;
 }
 
+/**
+ * A collapsible rail section header. Clicking the label toggles `collapsed`
+ * (persisted in the store under `sectionKey`); callers render the section body
+ * only when not collapsed. An optional `action` renders on the right (e.g. the
+ * manage-groups gear) and doesn't trigger the collapse.
+ */
+function SectionHeader({
+  label,
+  sectionKey,
+  action
+}: {
+  label: string;
+  sectionKey: string;
+  action?: React.ReactNode;
+}) {
+  const collapsed = useUi((s) => !!s.collapsedSections[sectionKey]);
+  const toggleSection = useUi((s) => s.toggleSection);
+  return (
+    <div className={`settings-scope-label settings-scope-label--toggle ${action ? 'settings-scope-label--action' : ''}`}>
+      <button
+        type="button"
+        className="list-section-toggle"
+        onClick={() => toggleSection(sectionKey)}
+        aria-expanded={!collapsed}
+        title={collapsed ? `Expand ${label}` : `Collapse ${label}`}
+      >
+        <ChevronRight size={11} className={`list-section-chevron ${collapsed ? '' : 'open'}`} />
+        <span>{label}</span>
+      </button>
+      {action}
+    </div>
+  );
+}
+
 export function ListPane() {
   const nav = useUi((s) => s.nav);
 
   if (nav === 'settings') return <SettingsPane />;
   if (nav === 'scheduler') return <SchedulerPane />;
   if (nav === 'inbox') return <InboxPane />;
+  if (nav === 'skills' || nav === 'mcp' || nav === 'plugins') {
+    return <CataloguePane nav={nav as 'skills' | 'mcp' | 'plugins'} />;
+  }
   // App modules (plugins/*) own the whole content area and bring their own
   // filter rail — they don't want the Projects list column.
   if (MODULE_IDS.includes(nav)) return null;
@@ -746,6 +783,7 @@ function SchedulerPane() {
   const selectGroup = useUi((s) => s.selectGroup);
   const groups = useScheduleGroups((s) => s.groups);
   const tasks = useScheduler((s) => s.tasks);
+  const collapsedSections = useUi((s) => s.collapsedSections);
   const sortedProjects = sortProjectsForDisplay(projects);
   const [filter, setFilter] = useState('');
   const [managingGroups, setManagingGroups] = useState(false);
@@ -801,55 +839,62 @@ function SchedulerPane() {
           </div>
         </div>
 
-        <div className="settings-scope-label settings-scope-label--action">
-          <span>Groups</span>
-          <button
-            className="list-section-action"
-            onClick={() => setManagingGroups(true)}
-            title="Manage groups"
-            aria-label="Manage groups"
-          >
-            <Settings size={12} />
-          </button>
-        </div>
-        {groups.map((g) => {
-          const active = schedulerTab === 'group' && selectedGroupId === g.id;
-          const Icon = groupIcon(g.icon);
-          const count = countForGroup(g.id);
-          return (
-            <div
-              key={g.id}
-              className={`project-item ${active ? 'active' : ''}`}
-              onClick={() => selectGroup(g.id)}
-              title={g.name}
+        <SectionHeader
+          label="Groups"
+          sectionKey="scheduler:groups"
+          action={
+            <button
+              className="list-section-action"
+              onClick={() => setManagingGroups(true)}
+              title="Manage groups"
+              aria-label="Manage groups"
             >
-              <Icon
-                size={14}
-                className="settings-scope-icon"
-                style={{ color: g.color ?? GROUP_FALLBACK_COLOR }}
-              />
+              <Settings size={12} />
+            </button>
+          }
+        />
+        {!collapsedSections['scheduler:groups'] && (
+          <>
+            {groups.map((g) => {
+              const active = schedulerTab === 'group' && selectedGroupId === g.id;
+              const Icon = groupIcon(g.icon);
+              const count = countForGroup(g.id);
+              return (
+                <div
+                  key={g.id}
+                  className={`project-item ${active ? 'active' : ''}`}
+                  onClick={() => selectGroup(g.id)}
+                  title={g.name}
+                >
+                  <Icon
+                    size={14}
+                    className="settings-scope-icon"
+                    style={{ color: g.color ?? GROUP_FALLBACK_COLOR }}
+                  />
+                  <div className="project-meta">
+                    <div className="project-name">{g.name}</div>
+                  </div>
+                  {count > 0 && <span className="list-count-badge">{count}</span>}
+                </div>
+              );
+            })}
+            <div
+              className={`project-item ${schedulerTab === 'global' ? 'active' : ''}`}
+              onClick={() => setSchedulerTab('global')}
+              title="Global schedules with no group"
+            >
+              <Layers size={14} className="settings-scope-icon" />
               <div className="project-meta">
-                <div className="project-name">{g.name}</div>
+                <div className="project-name">Ungrouped</div>
+                <div className="project-path">App-wide, no group</div>
               </div>
-              {count > 0 && <span className="list-count-badge">{count}</span>}
+              {ungroupedCount > 0 && <span className="list-count-badge">{ungroupedCount}</span>}
             </div>
-          );
-        })}
-        <div
-          className={`project-item ${schedulerTab === 'global' ? 'active' : ''}`}
-          onClick={() => setSchedulerTab('global')}
-          title="Global schedules with no group"
-        >
-          <Layers size={14} className="settings-scope-icon" />
-          <div className="project-meta">
-            <div className="project-name">Ungrouped</div>
-            <div className="project-path">App-wide, no group</div>
-          </div>
-          {ungroupedCount > 0 && <span className="list-count-badge">{ungroupedCount}</span>}
-        </div>
+          </>
+        )}
 
-        <div className="settings-scope-label">Project</div>
-        {sortedProjects.length === 0 ? (
+        <SectionHeader label="Project" sectionKey="scheduler:project" />
+        {collapsedSections['scheduler:project'] ? null : sortedProjects.length === 0 ? (
           <div className="list-empty">No projects yet.</div>
         ) : visibleProjects.length === 0 ? (
           <div className="list-empty">No projects match &ldquo;{filter}&rdquo;.</div>
@@ -884,12 +929,119 @@ function SchedulerPane() {
   );
 }
 
+/**
+ * Sidebar rail for the Skills / MCP / Plugins catalogue panels. Looks like the
+ * Scheduler rail (a Scope summary row + a collapsible Project list) but without
+ * the schedule Groups — these panels only distinguish "global sources" from a
+ * single project's `.claude/` scope, which the panels read off `selectedProjectId`.
+ *
+ * Plugins have no per-project scope (they live under ~/.claude), so for that nav
+ * we show only the global row and skip the project list entirely.
+ */
+function CataloguePane({ nav }: { nav: 'skills' | 'mcp' | 'plugins' }) {
+  const projects = useData((s) => s.projects);
+  const selectedProjectId = useUi((s) => s.selectedProjectId);
+  const selectProject = useUi((s) => s.selectProject);
+  const projectCollapsed = useUi((s) => !!s.collapsedSections['catalogue:project']);
+  const sortedProjects = sortProjectsForDisplay(projects);
+  const [filter, setFilter] = useState('');
+  const q = filter.trim().toLowerCase();
+  const visibleProjects = q
+    ? sortedProjects.filter(
+        (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q)
+      )
+    : sortedProjects;
+
+  const title = nav === 'skills' ? 'Skills' : nav === 'mcp' ? 'MCP' : 'Plugins';
+  const supportsProjectScope = nav !== 'plugins';
+  const globalActive = selectedProjectId === null;
+
+  return (
+    <section className="list-pane">
+      <header className="list-header">
+        <h2>{title}</h2>
+      </header>
+      {supportsProjectScope && projects.length > 4 && (
+        <div className="list-filter">
+          <Search size={12} className="list-filter-icon" />
+          <input
+            placeholder="Filter projects"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          {filter && (
+            <button
+              className="list-filter-clear"
+              aria-label="Clear filter"
+              onClick={() => setFilter('')}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      )}
+      <div className="list-body">
+        <div className="settings-scope-label">Scope</div>
+        <div
+          className={`project-item ${globalActive ? 'active' : ''}`}
+          onClick={() => selectProject(null)}
+          title="User and plugin sources (no project)"
+        >
+          <Layers size={14} className="settings-scope-icon" />
+          <div className="project-meta">
+            <div className="project-name">Global</div>
+            <div className="project-path">User &amp; plugin sources</div>
+          </div>
+        </div>
+
+        {supportsProjectScope ? (
+          <>
+            <SectionHeader label="Project" sectionKey="catalogue:project" />
+            {projectCollapsed ? null : sortedProjects.length === 0 ? (
+              <div className="list-empty">No projects yet.</div>
+            ) : visibleProjects.length === 0 ? (
+              <div className="list-empty">No projects match &ldquo;{filter}&rdquo;.</div>
+            ) : (
+              visibleProjects.map((p) => {
+                const active = selectedProjectId === p.id;
+                return (
+                  <div
+                    key={p.id}
+                    className={`project-item ${active ? 'active' : ''}`}
+                    onClick={() => selectProject(p.id)}
+                    title={p.path}
+                  >
+                    <span
+                      className="project-dot"
+                      style={p.color ? { background: p.color } : undefined}
+                    />
+                    <div className="project-meta">
+                      <div className="project-name">{p.name}</div>
+                      <div className="project-path">{p.path}</div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </>
+        ) : (
+          <p className="list-scope-note">
+            Plugins live under <code>~/.claude</code> and aren&rsquo;t scoped to a
+            project.
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function SettingsPane() {
   const projects = useData((s) => s.projects);
   const selectedProjectId = useUi((s) => s.selectedProjectId);
   const selectProject = useUi((s) => s.selectProject);
   const settingsTab = useUi((s) => s.settingsTab);
   const setSettingsTab = useUi((s) => s.setSettingsTab);
+  const projectCollapsed = useUi((s) => !!s.collapsedSections['settings:project']);
   const sortedProjects = sortProjectsForDisplay(projects);
   const [filter, setFilter] = useState('');
   const q = filter.trim().toLowerCase();
@@ -935,8 +1087,8 @@ function SettingsPane() {
             <div className="project-path">App-wide defaults</div>
           </div>
         </div>
-        <div className="settings-scope-label">Project</div>
-        {sortedProjects.length === 0 ? (
+        <SectionHeader label="Project" sectionKey="settings:project" />
+        {projectCollapsed ? null : sortedProjects.length === 0 ? (
           <div className="list-empty">No projects yet.</div>
         ) : visibleProjects.length === 0 ? (
           <div className="list-empty">No projects match &ldquo;{filter}&rdquo;.</div>

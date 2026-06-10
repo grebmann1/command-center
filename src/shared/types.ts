@@ -84,6 +84,26 @@ export interface InboxEntry {
   sessionId?: string;
 }
 
+/**
+ * Live agent state for a session, inferred from detection signals (OSC title
+ * spinner, screen-scan, lifecycle hooks). Deliberately separate from
+ * {@link TerminalSession.status}, which tracks the pty *process* lifecycle
+ * (starting/running/exited) — `AgentState` tracks what the *agent inside* the
+ * pty is doing. The two are orthogonal: a `running` pty can be `idle`, and a
+ * just-`exited` pty has no agent state at all.
+ *
+ *  - `working` — agent is actively producing output / running a tool.
+ *  - `blocked` — agent is waiting on the user (permission prompt, question).
+ *  - `done`    — agent finished its turn but the user hasn't looked yet.
+ *  - `idle`    — at the prompt, nothing pending, and the user has seen it.
+ *  - `unknown` — plain shell, or no detector has a confident read yet.
+ *
+ * See `docs/live-agent-status-plan.md`. State lives in a dedicated main-side
+ * store and streams over the `onAgentStatus` IPC channel — NOT on this object
+ * — so status ticks don't rebuild the `terminals` map (render-storm guard).
+ */
+export type AgentState = 'working' | 'blocked' | 'done' | 'idle' | 'unknown';
+
 export interface TerminalSession {
   id: string;
   projectId: string;
@@ -637,6 +657,13 @@ export interface CcApi {
     onTitle(cb: (sessionId: string, title: string) => void): () => void;
     /** Fired when any session metadata changes (e.g. title/headless/exit). */
     onUpdated(cb: (session: TerminalSession) => void): () => void;
+    /**
+     * Live agent-state pushes (working/blocked/done/idle). Dedicated channel,
+     * deliberately not folded into {@link onUpdated}: it fires far more often
+     * and must land in a separate store slice so it can't rebuild the session
+     * list on every tick. See `docs/live-agent-status-plan.md`.
+     */
+    onAgentStatus(cb: (sessionId: string, state: AgentState) => void): () => void;
   };
   config: {
     get(): Promise<AppConfig>;

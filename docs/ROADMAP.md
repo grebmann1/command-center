@@ -5,6 +5,56 @@ can be picked up cold. `Status` ∈ {parked, planned, in-progress, shipped, drop
 
 ---
 
+## Live Agent Status Awareness
+
+**Status:** planned (designed 2026-06-10 via Zana arch council)
+**Full plan:** [`docs/live-agent-status-plan.md`](./live-agent-status-plan.md)
+**Tickets:** [`docs/live-agent-status-tickets.md`](./live-agent-status-tickets.md)
+**Inspiration:** `herdr` (cloned at `~/Documents/claude-workspace/herdr`)
+
+### One-line
+Live per-tab agent state (🔴 blocked / 🟡 working / 🔵 done-unseen / 🟢 idle),
+rolled up to project/sidebar, with tab-aware notifications.
+
+### Council verdict
+APPROVE WITH CONDITIONS (security-reviewer + performance-engineer + researcher).
+20 binding conditions; all traced to tickets LAS-00…LAS-14.
+
+### Key insight (don't re-derive)
+Detection is **screen-scan-PRIMARY, hooks ADVISORY** — NOT hook-primary. herdr
+removed Claude lifecycle-state hooks in v5 (`herdr/src/integration/mod.rs:1374`)
+because `SubagentStop` fires after turn-end and revives idle panes; screen-scan
+(`herdr/.../claude.toml`) is its Claude authority. `blocked` is screen-only
+(`Notification` hook is unreliable for permission prompts). Hooks only accelerate
+`idle→working` and stamp `done`.
+
+### Where we beat herdr (the enhancement — LAS-07b + idle-veto)
+Because we *launch* Claude (herdr only watches the screen) we have two signals it
+gave up on: (1) **OSC-title spinner parsed from the raw PTY byte stream** in
+`pty.ts` — near-zero-cost `working`/`done`, and it works for **hidden/unfocused
+tabs** (herdr needs the rendered title); (2) **hook idle-veto** — a `PreToolUse`
+with no closing `Stop`/`PostToolUse` means a tool is in flight, so we *suppress* a
+false `idle` during a quiet-screen moment. herdr can only *delay* a false idle;
+we *know* it's false. "idle" = `❯` prompt box + no question + title not a spinner
++ no tool in flight, held ~300 ms.
+
+### Three non-negotiables
+1. **Don't re-key `/hook/stop/...`** — scheduler auto-close depends on it
+   (`scheduler.ts:664`). Add lifecycle as a new route that *also* drives it.
+2. **One composed `--settings`** (`composeSettings()`) — live-status + scheduler +
+   parked Personas all want it; Claude takes a single flag (last wins).
+3. **Status in a dedicated store, not on `TerminalSession`** — else every tick
+   render-storms `terminals` consumers; rollup precomputed, read as a primitive
+   (zustand infinite-loop trap, see UI-state memory).
+
+### Entry points
+- Hooks/spawn: `src/main/pty.ts` (`buildStopHookSettings` :563, `CC_HOOK_URL` :206).
+- Callback route: `src/main/mcp-server.ts` (:126-194).
+- Scheduler done path: `src/main/scheduler.ts` (`onAgentFinished` :664).
+- Store: `src/renderer/store.ts` (`onUpdated` :750). Detector ref: `herdr/src/detect/`.
+
+---
+
 ## Launchable Personas
 
 **Status:** parked (brainstormed + planned 2026-06-09, deferred for later thought)

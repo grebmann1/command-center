@@ -1,9 +1,37 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X, Pin, EyeOff, Trash2, ChevronLeft, Moon } from 'lucide-react';
 import type { LaunchProfileId, TerminalSession } from '@shared/types';
-import { useUi } from '../store';
+import { useUi, useAgentStatus } from '../store';
 import { getTerminal } from '../util/findRegistry';
 import { profileIcon } from '../util/profileIcon';
+import type { AgentState } from '@shared/types';
+
+/** Human label for the status dot's tooltip + aria. */
+const AGENT_STATE_LABEL: Record<AgentState, string> = {
+  blocked: 'Blocked — needs you',
+  working: 'Working',
+  done: 'Done — unseen',
+  idle: 'Idle',
+  unknown: ''
+};
+
+/**
+ * Live agent-state dot for a tab. Subscribes by id to a PRIMITIVE (the state
+ * string), so one session's transition repaints only its own dot — never the
+ * tab strip (BC 8). Renders nothing for `unknown` (plain shells, no signal yet)
+ * so non-agent tabs stay clean.
+ */
+function AgentStatusDot({ sessionId }: { sessionId: string }) {
+  const state = useAgentStatus((s) => s.byId[sessionId] ?? 'unknown');
+  if (state === 'unknown') return null;
+  return (
+    <span
+      className={`tab-agent-dot agent-${state}`}
+      title={AGENT_STATE_LABEL[state]}
+      aria-label={AGENT_STATE_LABEL[state]}
+    />
+  );
+}
 
 /** Persisted, app-global preference for whether the in-strip background tray is
  *  expanded. A plain UI pref (not per-project), so it lives in localStorage
@@ -244,6 +272,7 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
           <span className={`tab-profile-icon profile-${t.profile}`} aria-hidden="true">
             {profileIcon(t.profile)}
           </span>
+          <AgentStatusDot sessionId={t.id} />
           {renamingId === t.id ? (
             <input
               className="tab-rename"

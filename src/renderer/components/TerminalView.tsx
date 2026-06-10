@@ -50,6 +50,10 @@ export function TerminalView({ session, area }: Props) {
   const [dropOver, setDropOver] = useState(false);
   const fontSize = useData((s) => s.fontSize);
   const disposedRef = useRef(false);
+  // Tracks whether the viewport is pinned to the bottom (tailing live output).
+  // Computed from buffer indices, not the DOM, so it stays correct even when
+  // the tab is hidden (display:none) and xterm's own measurement is zeroed.
+  const stickToBottomRef = useRef(true);
 
   useLayoutEffect(() => {
     if (!ref.current) return;
@@ -108,8 +112,29 @@ export function TerminalView({ session, area }: Props) {
       void window.cc.terminals.resize(session.id, term.cols, term.rows).catch(() => {});
     });
 
+    // Track the user's scroll intent: any wheel/scroll that lands above the
+    // last line breaks the "tail" lock; scrolling back to the bottom re-arms
+    // it. We read buffer indices rather than DOM offsets so this is correct
+    // even while the tab is hidden.
+    const atBottom = () => {
+      const buf = term.buffer.active;
+      return buf.viewportY >= buf.baseY;
+    };
+    const offScroll = term.onScroll(() => {
+      stickToBottomRef.current = atBottom();
+    });
+
     const offData = window.cc.terminals.onData((id, data) => {
-      if (id === session.id) term.write(data);
+      if (id !== session.id) return;
+      // Decide BEFORE writing whether we were tailing; new rows push baseY
+      // down, and xterm's built-in auto-scroll can miss the last row when the
+      // viewport height is stale (hidden tab, mid-resize), leaving the wheel
+      // unable to reach bottom until an arrow key forces a sync. Re-pinning in
+      // the write callback (after the buffer settles) closes that gap.
+      const follow = stickToBottomRef.current;
+      term.write(data, () => {
+        if (follow && !disposedRef.current) term.scrollToBottom();
+      });
     });
     const offExit = window.cc.terminals.onExit((id, code) => {
       if (id !== session.id) return;
@@ -119,7 +144,7 @@ export function TerminalView({ session, area }: Props) {
       const label = bad ? `[exited code ${code}]` : '[session exited]';
       term.write(`\r\n${sgr}${label}\x1b[0m\r\n`);
     });
-    offsRef.current = [offData, offExit];
+    offsRef.current = [offData, offExit, () => offScroll.dispose()];
 
     const onInput = term.onData((data) => {
       void window.cc.terminals.write(session.id, data).catch(() => {});
@@ -179,6 +204,10 @@ export function TerminalView({ session, area }: Props) {
             void window.cc.terminals
               .resize(session.id, termRef.current.cols, termRef.current.rows)
               .catch(() => {});
+            // Output that arrived while hidden couldn't auto-scroll (zero-height
+            // viewport). If we were tailing, snap to bottom now that the tab is
+            // measurable again so the latest output is visible.
+            if (stickToBottomRef.current) termRef.current.scrollToBottom();
           }
           // Only focus the primary area ('a') on transition; secondary panes
           // get focus only from explicit click.

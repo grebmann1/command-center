@@ -24,7 +24,10 @@ export const IPC = {
     onData: 'terminals:onData',
     onExit: 'terminals:onExit',
     onTitle: 'terminals:onTitle',
-    onUpdated: 'terminals:onUpdated'
+    onUpdated: 'terminals:onUpdated',
+    /** Live agent-state pushes (working/blocked/done/idle). Dedicated channel —
+     *  kept off `onUpdated` so status ticks don't rebuild the session list. */
+    onAgentStatus: 'terminals:onAgentStatus'
   },
   config: {
     get: 'config:get',

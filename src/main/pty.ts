@@ -2,7 +2,7 @@ import * as pty from 'node-pty';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type { LaunchProfileId, TerminalSession, AppConfig, ProjectSettings, ProjectRemote } from '../shared/types.js';
-import { mcpConfigPathForProject } from './mcp-config.js';
+import { ensureMcpConfigForProjectSync } from './mcp-config.js';
 
 interface Live {
   session: TerminalSession;
@@ -98,6 +98,22 @@ export class PtyManager extends EventEmitter {
     this.mcpBaseUrl = url;
   }
 
+  /**
+   * Ensure the per-project `.mcp.json` exists on disk and return its path,
+   * or null if the write failed. Null makes the caller skip MCP injection
+   * entirely (terminal still opens) rather than launch claude with a
+   * `--mcp-config` that points at nothing.
+   */
+  private safeEnsureMcpConfig(projectId: string): string | null {
+    try {
+      return ensureMcpConfigForProjectSync(projectId);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[pty] ensureMcpConfigForProjectSync(${projectId}) failed:`, err);
+      return null;
+    }
+  }
+
   create(opts: {
     projectId: string;
     profile: LaunchProfileId;
@@ -147,10 +163,20 @@ export class PtyManager extends EventEmitter {
     // that file is `${CC_MCP_URL}`, which Claude evaluates against the
     // env we inject below — keeps the per-project config file static
     // (just one file per project) but identity-bearing at spawn time.
-    const claudeMcpArgs = isClaudeProfile(opts.profile) && this.mcpBaseUrl
+    //
+    // Guarantee the file exists *now*, synchronously, rather than trusting an
+    // earlier async write to have landed. The async writers race app boot;
+    // pointing `--mcp-config` at a not-yet-written file would silently drop
+    // the inbox server. If even the sync write fails, fall back to no MCP
+    // injection so the terminal still opens.
+    const mcpConfigPath =
+      isClaudeProfile(opts.profile) && this.mcpBaseUrl
+        ? this.safeEnsureMcpConfig(opts.projectId)
+        : null;
+    const claudeMcpArgs = mcpConfigPath
       ? [
           '--mcp-config',
-          mcpConfigPathForProject(opts.projectId),
+          mcpConfigPath,
           // Teach the agent when to use inbox_push. Appended to the system
           // prompt at spawn so it doesn't pollute the user's global claude
           // config — the guidance only applies to launcher-spawned tabs.
@@ -184,7 +210,10 @@ export class PtyManager extends EventEmitter {
     // second --allowedTools flag) because some claude-cli versions take
     // last-occurrence-wins, which would silently drop this permission when
     // the project also configures allowedTools.
-    const inboxAllow = isClaudeProfile(opts.profile) && this.mcpBaseUrl
+    // Gate the inbox allowlist on the config file actually being in place
+    // (mcpConfigPath), not just mcpBaseUrl — no point pre-approving a tool
+    // whose server we failed to wire up.
+    const inboxAllow = mcpConfigPath
       ? opts.scheduled
         ? ['mcp__cc-inbox__inbox_push', 'mcp__cc-inbox__schedule_report']
         : ['mcp__cc-inbox__inbox_push']
@@ -197,7 +226,7 @@ export class PtyManager extends EventEmitter {
       ...(process.env as Record<string, string>),
       TERM: 'xterm-256color'
     };
-    if (isClaudeProfile(opts.profile) && this.mcpBaseUrl) {
+    if (mcpConfigPath) {
       env.CC_MCP_URL = `${this.mcpBaseUrl}/mcp/${opts.projectId}/${sessionId}`;
     }
     if (wantsStopHook) {

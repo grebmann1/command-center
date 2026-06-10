@@ -37,9 +37,11 @@ vi.mock('node-pty', () => ({
   }
 }));
 
-// mcp-config touches no electron APIs but keep the import graph minimal.
+// mcp-config touches no electron APIs, but mock it so a claude-profile spawn
+// in this suite never writes a real ~/.cc-center/mcp file. Mirror the exports
+// pty.ts actually imports (the sync ensure), returning a throwaway path.
 vi.mock('../mcp-config.js', () => ({
-  mcpConfigPathForProject: (id: string) => `/tmp/${id}/.mcp.json`
+  ensureMcpConfigForProjectSync: (id: string) => `/tmp/${id}/.mcp.json`
 }));
 
 import { PtyManager } from '../pty.js';
