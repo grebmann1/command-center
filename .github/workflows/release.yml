@@ -43,10 +43,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Apple Silicon only for now. Intel (macos-13 / x64) was dropped —
+          # node-pty can't cross-compile, so x64 needs its own scarce Intel
+          # runner, and Intel Macs are a shrinking share. Re-add a matrix entry
+          # to ship x64 again.
           - os: macos-14
             arch: arm64
-          - os: macos-13
-            arch: x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -112,10 +114,9 @@ jobs:
           body: |
             ### Claude Code Terminal Center ${{ github.ref_name }}
 
-            macOS builds (unsigned). On first launch, right-click the app and
-            choose **Open** to get past Gatekeeper.
+            macOS build (unsigned, Apple Silicon). On first launch, right-click
+            the app and choose **Open** to get past Gatekeeper.
 
             | Mac | Download |
             | --- | --- |
             | Apple Silicon (M-series) | `*-arm64.dmg` |
-            | Intel | `*-x64.dmg` |
