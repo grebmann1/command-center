@@ -1,9 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, X, Pin, EyeOff, Trash2 } from 'lucide-react';
+import { Plus, X, Pin, EyeOff, Trash2, ChevronLeft, Moon } from 'lucide-react';
 import type { LaunchProfileId, TerminalSession } from '@shared/types';
 import { useUi } from '../store';
 import { getTerminal } from '../util/findRegistry';
 import { profileIcon } from '../util/profileIcon';
+
+/** Persisted, app-global preference for whether the in-strip background tray is
+ *  expanded. A plain UI pref (not per-project), so it lives in localStorage
+ *  rather than IPC config — same pattern as cc.sidebarCollapsed. */
+const BG_EXPANDED_KEY = 'cc.bgTrayExpanded';
+function readBgExpanded(): boolean {
+  return typeof localStorage !== 'undefined' && localStorage.getItem(BG_EXPANDED_KEY) === '1';
+}
 
 interface Props {
   tabs: TerminalSession[];
@@ -68,8 +76,24 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [tabMenu, setTabMenu] = useState<TabContextMenu | null>(null);
+  // Whether the in-strip background tray is expanded (persisted, app-global).
+  const [bgExpanded, setBgExpanded] = useState(readBgExpanded);
   const anchor = useRef<HTMLButtonElement>(null);
   const unread = useUi((s) => s.unread);
+
+  const bg = backgroundTabs ?? [];
+  const hasBg = bg.length > 0;
+  const toggleBgTray = () => {
+    setBgExpanded((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(BG_EXPANDED_KEY, next ? '1' : '0');
+      } catch {
+        /* ignore quota errors */
+      }
+      return next;
+    });
+  };
 
   const startRename = (t: TerminalSession) => {
     if (!onRename) return;
@@ -146,9 +170,15 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
     for (const t of tabs) if (t.status === 'exited' && !t.pinned) onClose(t.id);
   };
 
+  // The chip toggles the strip between two views: live tabs (default) and the
+  // background sessions. We never show both at once — easier to scan and to
+  // maintain. If the tray is "open" but there's nothing in the background, fall
+  // back to the live view so the strip is never empty-by-accident.
+  const showBackground = bgExpanded && hasBg;
+
   return (
     <div className="tabbar" role="tablist">
-      {tabs.map((t) => (
+      {!showBackground && tabs.map((t) => (
         <div
           key={t.id}
           className={`tab ${activeTabId === t.id ? 'active' : ''} ${
@@ -270,6 +300,68 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
           )}
         </div>
       ))}
+      {hasBg && (
+        <>
+          <button
+            type="button"
+            className={`tab-bg-chip ${showBackground ? 'is-open' : ''}`}
+            aria-pressed={showBackground}
+            title={
+              showBackground
+                ? 'Showing background sessions — click to return to live tabs'
+                : `${bg.length} session${bg.length > 1 ? 's' : ''} running in the background — click to view`
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleBgTray();
+            }}
+          >
+            {showBackground ? (
+              <>
+                <ChevronLeft size={12} aria-hidden />
+                <span className="tab-bg-chip-label">live tabs</span>
+              </>
+            ) : (
+              <>
+                <Moon size={11} aria-hidden />
+                <span className="tab-bg-chip-count">{bg.length}</span>
+                <span className="tab-bg-chip-label">background</span>
+              </>
+            )}
+          </button>
+          {showBackground &&
+            bg.map((t) => (
+              <div
+                key={t.id}
+                className="tab tab-ghost"
+                role="tab"
+                aria-selected={false}
+                title={`${t.title} · ${t.profile} — running in the background. Click to open it.`}
+                onClick={() => onResumeBackground?.(t.id)}
+              >
+                <span className={`tab-profile-icon profile-${t.profile}`} aria-hidden="true">
+                  {profileIcon(t.profile)}
+                </span>
+                <span className="tab-title">{t.title}</span>
+                {onKillBackground && (
+                  <button
+                    type="button"
+                    className="tab-close"
+                    aria-label={`Close ${t.title}`}
+                    title="Terminate this background session"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.currentTarget.blur();
+                      onKillBackground(t.id);
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            ))}
+        </>
+      )}
       <button
         ref={anchor}
         className="tab-add"
@@ -294,17 +386,6 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
         }}
       >
         <Plus size={14} />
-        {backgroundTabs && backgroundTabs.length > 0 && (
-          <span
-            className="tab-add-bg-count"
-            title={`${backgroundTabs.length} session${
-              backgroundTabs.length > 1 ? 's' : ''
-            } running in the background`}
-            aria-label={`${backgroundTabs.length} background sessions`}
-          >
-            {backgroundTabs.length}
-          </span>
-        )}
       </button>
       {tabMenu && (() => {
         const t = tabs.find((tt) => tt.id === tabMenu.tabId);

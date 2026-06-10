@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, EyeOff } from 'lucide-react';
+import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, EyeOff, Layers, Settings } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
 import {
   useData,
   useUi,
   useInbox,
   useInboxRead,
+  useScheduler,
+  useScheduleGroups,
   sortProjectsForDisplay,
   visibleTerminals,
   backgroundTerminals,
@@ -13,6 +15,8 @@ import {
   LIST_PANE_MIN,
   LIST_PANE_MAX
 } from '../store';
+import { groupIcon, GROUP_FALLBACK_COLOR } from './scheduleGroupMeta';
+import { ScheduleGroupsModal } from './ScheduleGroupsModal';
 import type { OpenTarget } from '@shared/types';
 import { MODULE_IDS } from '../modules';
 import { InboxSidebar } from './InboxSidebar';
@@ -738,14 +742,27 @@ function SchedulerPane() {
   const selectProject = useUi((s) => s.selectProject);
   const schedulerTab = useUi((s) => s.schedulerTab);
   const setSchedulerTab = useUi((s) => s.setSchedulerTab);
+  const selectedGroupId = useUi((s) => s.selectedGroupId);
+  const selectGroup = useUi((s) => s.selectGroup);
+  const groups = useScheduleGroups((s) => s.groups);
+  const tasks = useScheduler((s) => s.tasks);
   const sortedProjects = sortProjectsForDisplay(projects);
   const [filter, setFilter] = useState('');
+  const [managingGroups, setManagingGroups] = useState(false);
   const q = filter.trim().toLowerCase();
   const visibleProjects = q
     ? sortedProjects.filter(
         (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q)
       )
     : sortedProjects;
+
+  // Per-group + ungrouped counts of global schedules, for the rail badges.
+  const globalTasks = tasks.filter((t) => !t.source || t.source === 'global');
+  const knownGroupIds = new Set(groups.map((g) => g.id));
+  const countForGroup = (gid: string) => globalTasks.filter((t) => t.group === gid).length;
+  const ungroupedCount = globalTasks.filter(
+    (t) => !t.group || !knownGroupIds.has(t.group)
+  ).length;
 
   return (
     <section className="list-pane">
@@ -783,17 +800,54 @@ function SchedulerPane() {
             <div className="project-path">All schedules at a glance</div>
           </div>
         </div>
-        <div className="settings-scope-label">Scope</div>
+
+        <div className="settings-scope-label settings-scope-label--action">
+          <span>Groups</span>
+          <button
+            className="list-section-action"
+            onClick={() => setManagingGroups(true)}
+            title="Manage groups"
+            aria-label="Manage groups"
+          >
+            <Settings size={12} />
+          </button>
+        </div>
+        {groups.map((g) => {
+          const active = schedulerTab === 'group' && selectedGroupId === g.id;
+          const Icon = groupIcon(g.icon);
+          const count = countForGroup(g.id);
+          return (
+            <div
+              key={g.id}
+              className={`project-item ${active ? 'active' : ''}`}
+              onClick={() => selectGroup(g.id)}
+              title={g.name}
+            >
+              <Icon
+                size={14}
+                className="settings-scope-icon"
+                style={{ color: g.color ?? GROUP_FALLBACK_COLOR }}
+              />
+              <div className="project-meta">
+                <div className="project-name">{g.name}</div>
+              </div>
+              {count > 0 && <span className="list-count-badge">{count}</span>}
+            </div>
+          );
+        })}
         <div
           className={`project-item ${schedulerTab === 'global' ? 'active' : ''}`}
           onClick={() => setSchedulerTab('global')}
+          title="Global schedules with no group"
         >
-          <Settings2 size={14} className="settings-scope-icon" />
+          <Layers size={14} className="settings-scope-icon" />
           <div className="project-meta">
-            <div className="project-name">Global</div>
-            <div className="project-path">App-wide schedules</div>
+            <div className="project-name">Ungrouped</div>
+            <div className="project-path">App-wide, no group</div>
           </div>
+          {ungroupedCount > 0 && <span className="list-count-badge">{ungroupedCount}</span>}
         </div>
+
         <div className="settings-scope-label">Project</div>
         {sortedProjects.length === 0 ? (
           <div className="list-empty">No projects yet.</div>
@@ -825,6 +879,7 @@ function SchedulerPane() {
           })
         )}
       </div>
+      {managingGroups && <ScheduleGroupsModal onClose={() => setManagingGroups(false)} />}
     </section>
   );
 }

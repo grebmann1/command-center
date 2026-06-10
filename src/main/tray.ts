@@ -25,8 +25,11 @@ export interface TrayDeps {
   showWindow: () => void;
   /** Focus a specific live session in the window. */
   focusSession: (sessionId: string, projectId: string) => void;
-  /** Switch the window to the Scheduler view. */
-  openScheduler: () => void;
+  /**
+   * Switch the window to the Scheduler view. With a task id, jump to that
+   * schedule's scope and reveal it; without one, land on the overview.
+   */
+  openScheduler: (taskId?: string) => void;
   /** App icon path, resized down for the menu bar. May be null. */
   iconPath: string | null;
   logger?: (context: string, err: unknown) => void;
@@ -34,6 +37,14 @@ export interface TrayDeps {
 
 /** Max schedule rows before we collapse the tail into "…and N more". */
 const MAX_ROWS = 20;
+
+/** A schedule's still-alive session, tagged with whether its turn has ended. */
+interface LiveRun {
+  task: ScheduledTask;
+  sessionId: string;
+  /** Agent finished its turn but the pty is still open at the prompt. */
+  finished: boolean;
+}
 
 export class TrayController {
   private tray: Tray | null = null;
@@ -124,9 +135,14 @@ export class TrayController {
     }, 150);
   }
 
-  /** Sessions still alive that this scheduler spawned, one per schedule. */
-  private runningScheduled(): Array<{ task: ScheduledTask; sessionId: string }> {
-    const out: Array<{ task: ScheduledTask; sessionId: string }> = [];
+  /**
+   * Sessions still alive that this scheduler spawned, one per schedule, tagged
+   * with whether the agent has finished its turn. `finished` (the run carries a
+   * `finishedAt`) means the pty is still open at the prompt but the work is
+   * done — surfaced as "done · open" rather than counted as running.
+   */
+  private runningScheduled(): LiveRun[] {
+    const out: LiveRun[] = [];
     for (const task of this.deps.scheduler.list()) {
       const aliveIds = new Set(
         this.deps.ptys
@@ -134,10 +150,10 @@ export class TrayController {
           .filter((s) => s.status === 'running' || s.status === 'starting')
           .map((s) => s.id)
       );
-      const sid = task.status.runs
-        .map((r) => r.sessionId)
-        .find((id): id is string => !!id && aliveIds.has(id));
-      if (sid) out.push({ task, sessionId: sid });
+      const run = task.status.runs.find((r) => !!r.sessionId && aliveIds.has(r.sessionId));
+      if (run?.sessionId) {
+        out.push({ task, sessionId: run.sessionId, finished: !!run.finishedAt });
+      }
     }
     return out;
   }
@@ -146,25 +162,29 @@ export class TrayController {
     if (!this.tray || this.tray.isDestroyed()) return;
     try {
       const tasks = this.deps.scheduler.list();
-      const running = this.runningScheduled();
-      const runningByTask = new Map(running.map((r) => [r.task.id, r.sessionId]));
+      const alive = this.runningScheduled();
+      const aliveByTask = new Map(alive.map((r) => [r.task.id, r]));
+      // "Working" = agent's turn is in progress. A finished-but-open session
+      // (agent done, pty still at the prompt) is alive but not working, so it
+      // drops out of the running count/badge.
+      const workingCount = alive.filter((r) => !r.finished).length;
 
-      // Badge: number of running scheduled sessions, macOS-only (setTitle is a
-      // no-op elsewhere). Empty string clears it.
+      // Badge: number of scheduled sessions actively working, macOS-only
+      // (setTitle is a no-op elsewhere). Empty string clears it.
       if (process.platform === 'darwin') {
-        this.tray.setTitle(running.length > 0 ? ` ${running.length}` : '');
+        this.tray.setTitle(workingCount > 0 ? ` ${workingCount}` : '');
       }
       this.tray.setToolTip(
-        running.length > 0
-          ? `${running.length} scheduled session${running.length > 1 ? 's' : ''} running`
+        workingCount > 0
+          ? `${workingCount} scheduled session${workingCount > 1 ? 's' : ''} running`
           : 'Claude Code Terminal Center'
       );
 
       const items: Electron.MenuItemConstructorOptions[] = [];
       items.push({
         label:
-          running.length > 0
-            ? `${running.length} scheduled session${running.length > 1 ? 's' : ''} running`
+          workingCount > 0
+            ? `${workingCount} scheduled session${workingCount > 1 ? 's' : ''} running`
             : 'No scheduled sessions running',
         enabled: false
       });
@@ -173,14 +193,14 @@ export class TrayController {
       if (tasks.length === 0) {
         items.push({ label: 'No schedules', enabled: false });
       } else {
-        const sorted = this.sortTasks(tasks, runningByTask);
+        const sorted = this.sortTasks(tasks, aliveByTask);
         for (const task of sorted.slice(0, MAX_ROWS)) {
-          const sid = runningByTask.get(task.id);
+          const live = aliveByTask.get(task.id);
           items.push({
-            label: this.taskLabel(task, sid),
+            label: this.taskLabel(task, live),
             // An item with a submenu can't also carry a top-level click handler
             // on macOS, so the former row-click ("open") moves into the submenu.
-            submenu: this.taskSubmenu(task, sid)
+            submenu: this.taskSubmenu(task, live)
           });
         }
         if (sorted.length > MAX_ROWS) {
@@ -212,12 +232,14 @@ export class TrayController {
   /** Running first, then enabled by soonest next run, then paused. */
   private sortTasks(
     tasks: ScheduledTask[],
-    runningByTask: Map<string, string>
+    aliveByTask: Map<string, LiveRun>
   ): ScheduledTask[] {
     const rank = (t: ScheduledTask): number => {
-      if (runningByTask.has(t.id)) return 0;
-      if (t.enabled) return 1;
-      return 2;
+      const live = aliveByTask.get(t.id);
+      if (live && !live.finished) return 0; // actively working
+      if (live) return 1; // done · session open
+      if (t.enabled) return 2;
+      return 3;
     };
     return [...tasks].sort((a, b) => {
       const ra = rank(a);
@@ -230,31 +252,34 @@ export class TrayController {
     });
   }
 
-  private taskLabel(task: ScheduledTask, runningSessionId: string | undefined): string {
+  private taskLabel(task: ScheduledTask, live: LiveRun | undefined): string {
     const project = this.deps.projectName(task.projectId);
-    const status = runningSessionId
-      ? 'running now'
+    const status = live
+      ? live.finished
+        ? 'done · session open'
+        : 'running now'
       : !task.enabled
       ? 'paused'
       : task.status.nextRunAt
       ? `next ${formatNextRun(task.status.nextRunAt)}`
       : 'idle';
-    const dot = runningSessionId ? '● ' : task.enabled ? '' : '○ ';
+    // ● working · ◍ done-but-open · ○ paused · (blank) idle-enabled.
+    const dot = live ? (live.finished ? '◍ ' : '● ') : task.enabled ? '' : '○ ';
     return `${dot}${task.name} · ${project} — ${status}`;
   }
 
   /** Per-schedule actions: open/focus, Run now, and Pause/Enable. */
   private taskSubmenu(
     task: ScheduledTask,
-    runningSessionId: string | undefined
+    live: LiveRun | undefined
   ): Electron.MenuItemConstructorOptions[] {
     const sub: Electron.MenuItemConstructorOptions[] = [];
-    if (runningSessionId) {
+    if (live) {
       sub.push({
-        label: 'Open running session',
+        label: live.finished ? 'Open session (finished)' : 'Open running session',
         click: () => {
           this.deps.showWindow();
-          this.deps.focusSession(runningSessionId, task.projectId);
+          this.deps.focusSession(live.sessionId, task.projectId);
         }
       });
     }
@@ -262,7 +287,7 @@ export class TrayController {
       label: 'Show in Scheduler',
       click: () => {
         this.deps.showWindow();
-        this.deps.openScheduler();
+        this.deps.openScheduler(task.id);
       }
     });
     sub.push({ type: 'separator' });

@@ -117,6 +117,12 @@ class FakePtyManager extends EventEmitter {
   write() {
     /* no-op */
   }
+  /** Ids passed to closeExpected — lets tests assert auto-close behavior. */
+  closeExpectedCalls: string[] = [];
+  closeExpected(id: string) {
+    this.closeExpectedCalls.push(id);
+    return true;
+  }
   /** Mark a previously-spawned session as exited. */
   simulateExit(id: string, code = 0) {
     const session = this.sessions.find((s) => s.id === id);
@@ -334,5 +340,67 @@ describe('SchedulerManager.attachReport', () => {
     const { manager, task } = makeManager({ prompt: 'work' });
     autoFire(manager, task.id);
     expect(() => manager.attachReport('no-such-session', 'orphan')).not.toThrow();
+  });
+});
+
+describe('SchedulerManager.onAgentFinished', () => {
+  const runsOf = (manager: SchedulerManager, id: string) =>
+    manager.list().find((t) => t.id === id)!.status.runs;
+
+  it('stamps finishedAt + duration on the run while the pty stays alive', () => {
+    // Explicitly opt OUT of auto-close — the create default is now `true`, and
+    // this case is specifically the "finished but left open at the prompt" path.
+    const { manager, ptys, task } = makeManager({
+      prompt: 'work',
+      autoCloseOnFinish: false
+    });
+    autoFire(manager, task.id);
+    const sid = ptys.sessions[0].id;
+
+    manager.onAgentFinished(sid);
+
+    const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
+    expect(run.finishedAt).toBeTruthy();
+    expect(run.durationMs).toBeDefined();
+    // The session is NOT killed for a non-auto-close task — it stays open.
+    expect(ptys.closeExpectedCalls).toEqual([]);
+    expect(ptys.sessions[0].status).toBe('running');
+  });
+
+  it('closes the pty (expected) for an auto-close task', () => {
+    const { manager, ptys, task } = makeManager({
+      prompt: 'work',
+      autoCloseOnFinish: true
+    });
+    autoFire(manager, task.id);
+    const sid = ptys.sessions[0].id;
+
+    manager.onAgentFinished(sid);
+
+    const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
+    expect(run.finishedAt).toBeTruthy();
+    expect(ptys.closeExpectedCalls).toEqual([sid]);
+  });
+
+  it('finishedAt survives the exit-time recordRun merge', () => {
+    const { manager, ptys, task } = makeManager({ prompt: 'work' });
+    autoFire(manager, task.id);
+    const sid = ptys.sessions[0].id;
+
+    manager.onAgentFinished(sid); // turn ends, pty still alive
+    ptys.simulateExit(sid, 0); // later the pty actually exits
+
+    const run = runsOf(manager, task.id).find((r) => r.sessionId === sid)!;
+    expect(run.result).toBe('success');
+    expect(run.finishedAt).toBeTruthy(); // not clobbered by the exit merge
+  });
+
+  it('falls back to an expected close when no scheduled run matches', () => {
+    const { manager, ptys, task } = makeManager({ prompt: 'work' });
+    autoFire(manager, task.id);
+
+    manager.onAgentFinished('no-such-session');
+
+    expect(ptys.closeExpectedCalls).toEqual(['no-such-session']);
   });
 });

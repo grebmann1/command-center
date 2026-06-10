@@ -40,6 +40,7 @@ import {
   revealSkillDir
 } from './skills.js';
 import { SkillBundlesStore } from './skill-bundles-store.js';
+import { ScheduleGroupsStore } from './schedule-groups-store.js';
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import { listSshHosts, syncWorkspaceHosts } from './ssh-config.js';
 import { SchedulerManager } from './scheduler.js';
@@ -61,6 +62,8 @@ import type {
   ScheduleCreateInput,
   ScheduleUpdateInput,
   ScheduledTask,
+  ScheduleGroup,
+  ScheduleGroupInput,
   SkillBundleInput,
   SkillBundleApplyMode
 } from '../shared/types.js';
@@ -207,6 +210,7 @@ let tray: TrayController | null = null;
 const templates = new TemplateStore(() => store.listProjects());
 const moduleHost = new MainModuleHost({ log: logMainError });
 const skillBundles = new SkillBundlesStore();
+const scheduleGroups = new ScheduleGroupsStore();
 const skillWatchers: FSWatcher[] = [];
 let activeProjectSkillsWatcher: FSWatcher | null = null;
 let activeProjectSkillsPath: string | null = null;
@@ -771,6 +775,50 @@ function registerIpc() {
     safeSend(IPC.scheduler.onTemplatesChanged, templates.list());
   });
 
+  safeHandle(IPC.scheduler.groupsList, () => scheduleGroups.list(), () => []);
+  ipcMain.handle(
+    IPC.scheduler.groupsCreate,
+    async (_e, input: ScheduleGroupInput): Promise<Result<ScheduleGroup>> => {
+      try {
+        return { ok: true, value: scheduleGroups.create(input) };
+      } catch (err) {
+        return { ok: false, code: 'GROUP_CREATE_FAILED', message: String(err) };
+      }
+    }
+  );
+  ipcMain.handle(
+    IPC.scheduler.groupsUpdate,
+    async (_e, id: string, patch: Partial<ScheduleGroupInput>): Promise<Result<ScheduleGroup>> => {
+      try {
+        const group = scheduleGroups.update(id, patch);
+        if (!group) return { ok: false, code: 'NOT_FOUND', message: `group not found: ${id}` };
+        return { ok: true, value: group };
+      } catch (err) {
+        return { ok: false, code: 'GROUP_UPDATE_FAILED', message: String(err) };
+      }
+    }
+  );
+  ipcMain.handle(
+    IPC.scheduler.groupsDelete,
+    async (_e, id: string): Promise<Result<true>> => {
+      try {
+        const ok = scheduleGroups.delete(id);
+        if (!ok) return { ok: false, code: 'NOT_FOUND', message: `group not found: ${id}` };
+        return { ok: true, value: true };
+      } catch (err) {
+        return { ok: false, code: 'GROUP_DELETE_FAILED', message: String(err) };
+      }
+    }
+  );
+  safeHandle(
+    IPC.scheduler.groupsReorder,
+    (orderedIds: string[]) => scheduleGroups.reorder(orderedIds),
+    () => []
+  );
+  scheduleGroups.on('changed', (groups: ScheduleGroup[]) => {
+    safeSend(IPC.scheduler.groupsOnChanged, groups);
+  });
+
   // App-module multiplexer: one handler set serves every module (plugins/*).
   // `call` dispatches to the module's capability; `storage*` back its KV store.
   safeHandle(
@@ -974,7 +1022,7 @@ app.whenReady().then(() => {
         showMainWindow();
         safeSend('app:focusSession', sessionId, projectId);
       },
-      openScheduler: () => safeSend('app:openScheduler'),
+      openScheduler: (taskId) => safeSend('app:openScheduler', taskId),
       logger: logMainError
     });
     tray.start();
@@ -993,6 +1041,7 @@ app.whenReady().then(() => {
   }
   templates.start();
   skillBundles.start();
+  scheduleGroups.start();
   startSkillsWatchers();
   // Deploy the bundled `cc-center` skill into ~/.claude/skills so it shows up
   // in the skill catalogue and teaches agents how to author schedules/templates
@@ -1011,11 +1060,14 @@ app.whenReady().then(() => {
     projects: {
       get: (id: string) => store.listProjects().find((p) => p.id === id) ?? null
     },
-    // Auto-close: a scheduled session's Stop hook pinged back. Close that
-    // exact pty as an *expected* close so the scheduler logs success, not a
-    // kill-signal error.
+    // A scheduled session's Stop hook pinged back — the agent finished its
+    // turn. The scheduler stamps the run as finished (so the UI stops showing
+    // "running"), and, for auto-close tasks, closes the pty as an *expected*
+    // close so the run logs success rather than a kill-signal error. Non-
+    // scheduled sessions (or any we can't match) fall back to a plain expected
+    // close so nothing regresses.
     onStopHook: (_projectId: string, sessionId: string) => {
-      ptys.closeExpected(sessionId);
+      scheduler.onAgentFinished(sessionId);
     },
     // A scheduled agent filed a run report via schedule_report. Attach it to
     // the matching run by sessionId (projectId is implied by the session).
@@ -1090,6 +1142,7 @@ app.on('before-quit', (event) => {
   tray = null;
   templates.stop();
   skillBundles.stop();
+  scheduleGroups.stop();
   stopSkillsWatchers();
   ptys.killAll();
   if (mcpServer) {

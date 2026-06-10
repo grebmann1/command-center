@@ -1450,6 +1450,14 @@ body.resizing-col {
 
 .settings-btn {
   appearance: none;
+  /* Center an icon + label on the cross axis. Without this the icon sits on
+     the text baseline and rides low (see the "Pause all" button). Harmless for
+     text-only buttons. `gap` spaces a leading icon from its label. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  line-height: 1;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1459,6 +1467,11 @@ body.resizing-col {
   font-family: 'JetBrains Mono', 'SF Mono', monospace;
   padding: 5px 10px;
   transition: background 120ms ease, border-color 120ms ease;
+}
+
+.settings-btn svg {
+  display: block;
+  flex-shrink: 0;
 }
 
 .settings-btn:hover {
@@ -1790,23 +1803,71 @@ body.resizing-col {
   color: var(--text-primary);
 }
 
-/* Count of detached (background) sessions, overlaid on the + button so the
-   user always knows work is running off-strip. */
-.tab-add-bg-count {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  background: var(--accent-blue);
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
+/* Background-session tray: a chip that toggles inline "ghost" tabs for the
+   detached (headless) sessions, so off-strip work is visible and one click
+   away even when no live tabs are open. */
+.tab-bg-chip {
+  flex: 0 0 auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 4px;
+  padding: 3px 8px;
+  height: 22px;
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: 11px;
   line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.tab-bg-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+.tab-bg-chip.is-open {
+  background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--accent-blue) 45%, var(--border));
+  color: var(--text-primary);
+}
+.tab-bg-chip svg {
+  display: block;
+  flex-shrink: 0;
+}
+.tab-bg-chip-count {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.tab-bg-chip-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+/* Ghost tab — a background session shown inline when the tray is expanded.
+   Dimmed/dashed to read as "not in the foreground", but fully clickable
+   (click resumes it into the strip; the X terminates it). */
+.tab.tab-ghost {
+  border-right: none;
+  margin-right: 1px;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--accent-blue) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
+  color: var(--text-muted);
+  opacity: 0.85;
+  align-self: center;
+  height: 24px;
+}
+.tab.tab-ghost:hover {
+  opacity: 1;
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent-blue) 55%, var(--border));
+}
+.tab.tab-ghost .tab-profile-icon {
+  opacity: 0.9;
 }
 
 /* Background-session count chip in the sidebar project badge. */
@@ -1907,6 +1968,9 @@ body.resizing-col {
   inset: 0;
   background: var(--bg-panel);
   z-index: 5;
+  /* The resume list can run past the viewport (up to 8 cards plus the launch
+     buttons); let the overlay scroll instead of clipping the overflow. */
+  overflow-y: auto;
 }
 
 .terminal-host > .term .xterm-viewport {
@@ -1915,12 +1979,17 @@ body.resizing-col {
 
 .empty-workspace {
   display: grid;
-  place-items: center;
-  height: 100%;
+  /* `safe` centering: center when the content fits, but fall back to
+     top-alignment when it overflows so the first rows aren't clipped above the
+     scroll origin (the resume list can be taller than the viewport). */
+  justify-items: center;
+  align-items: safe center;
+  min-height: 100%;
   color: var(--text-muted);
   font-size: 13px;
   text-align: center;
   padding: 24px;
+  box-sizing: border-box;
 }
 
 .empty-workspace h3 {
@@ -4280,16 +4349,10 @@ body.resizing-col {
 }
 
 .scheduler-header .settings-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  /* Centering/gap now come from the base .settings-btn rule; only the larger
+     padding and no-shrink are header-specific. */
   padding: 7px 12px;
   flex-shrink: 0;
-  line-height: 1;
-}
-
-.scheduler-header .settings-btn svg {
-  display: block;
 }
 
 .scheduler-header-actions {
@@ -4365,6 +4428,22 @@ body.resizing-col {
 
 .scheduler-card.is-disabled {
   opacity: 0.62;
+}
+
+/* Pulse when revealed from the menu-bar tray's "Show in Scheduler". */
+.scheduler-card.is-revealed {
+  animation: scheduler-card-reveal 1.6s ease-out;
+}
+
+@keyframes scheduler-card-reveal {
+  0% {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-blue) 35%, transparent);
+  }
+  100% {
+    border-color: var(--border);
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 .scheduler-card-main {
@@ -4829,17 +4908,24 @@ body.resizing-col {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  /* The list owns the column template so every row shares the SAME column
+     widths (rows are subgrids below). Without this each row was its own grid,
+     so the 1fr `when` column and the optional trailing columns resolved to
+     different widths per row — values and the report icon never lined up
+     vertically. dot · when · result · duration · [message] · [report-btn]. */
+  display: grid;
+  grid-template-columns: 14px 1fr auto auto auto auto;
 }
 
 .scheduler-run-row {
   display: grid;
-  /* dot · when · result · duration · [message] · [report-btn]. The two
-     trailing columns are optional; empty `auto` tracks collapse to 0. */
-  grid-template-columns: 14px 1fr auto auto auto auto;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
   gap: 10px;
   align-items: center;
+  /* Constant height so a row with a 22px report button doesn't sit taller than
+     a row without one — keeps text baselines even down the list. */
+  min-height: 34px;
   padding: 6px 0;
   font-size: 12px;
   color: var(--text-muted);
@@ -4858,12 +4944,30 @@ body.resizing-col {
   background: var(--bg-panel);
   color: var(--accent-blue);
   cursor: pointer;
+  justify-self: end;
   transition: background-color 0.1s ease, border-color 0.1s ease;
+}
+
+/* Block-level glyph: an inline SVG carries baseline descender space that pushes
+   the icon optically low inside the button. */
+.scheduler-run-report-btn svg {
+  display: block;
 }
 
 .scheduler-run-report-btn:hover {
   background: var(--bg-elevated);
   border-color: var(--accent-blue);
+}
+
+/* A mouse click leaves the button focused, and the UA's default rectangular
+   outline sits off-center against this small rounded button. Drop it for
+   pointer focus; keep a tidy radius-matched ring for keyboard users. */
+.scheduler-run-report-btn:focus {
+  outline: none;
+}
+.scheduler-run-report-btn:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
 }
 
 /* Run report modal */
@@ -5855,6 +5959,12 @@ body.resizing-col {
   animation: scheduler-pulse 1.6s ease-in-out infinite;
 }
 
+/* Agent finished its turn but the session is still open at the prompt. Solid
+   blue, no pulse — distinct from the green pulsing "running". */
+.scheduler-status-dot--done {
+  background: var(--accent-blue, #2f81f7);
+}
+
 .scheduler-status-dot--idle {
   background: rgba(63, 185, 80, 0.55);
 }
@@ -5878,6 +5988,10 @@ body.resizing-col {
 
 .scheduler-card.is-running {
   border-color: rgba(63, 185, 80, 0.45);
+}
+
+.scheduler-card.is-done {
+  border-color: rgba(47, 129, 247, 0.4);
 }
 
 .scheduler-card-compact-body {
@@ -5924,6 +6038,13 @@ body.resizing-col {
   background: rgba(63, 185, 80, 0.15);
   color: rgb(63, 185, 80);
   border: 1px solid rgba(63, 185, 80, 0.35);
+}
+
+/* "done · session open" — agent finished, pty still at the prompt. */
+.scheduler-pill--done {
+  background: rgba(47, 129, 247, 0.15);
+  color: var(--accent-blue, #2f81f7);
+  border: 1px solid rgba(47, 129, 247, 0.35);
 }
 
 .scheduler-pill--error,
@@ -7113,42 +7234,58 @@ body.resizing-col {
 .zana-kpi-card {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 92px;
-  flex: 0 0 auto;
+  gap: 1px;
+  min-width: 96px;
+  flex: 1 1 0;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-left: 2px solid var(--border-strong);
-  border-radius: 9px;
-  padding: 9px 12px;
+  border-radius: 10px;
+  padding: 10px 13px;
+  position: relative;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.zana-kpi-card:hover {
+  border-color: var(--border-strong);
+}
+/* A subtle top accent rule replaces the old left border — reads cleaner across
+   a row of equal-width cards. Neutral by default; toned per status below. */
+.zana-kpi-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  border-radius: 10px 10px 0 0;
+  background: var(--border-strong);
 }
 .zana-kpi-icon {
   color: var(--text-dim);
   display: inline-flex;
+  margin-bottom: 3px;
 }
-.zana-kpi-card--open {
-  border-left-color: var(--accent-blue);
+.zana-kpi-card--open::before {
+  background: var(--accent-blue);
 }
 .zana-kpi-card--open .zana-kpi-icon {
   color: var(--accent-blue);
 }
-.zana-kpi-card--done {
-  border-left-color: var(--success);
+.zana-kpi-card--done::before {
+  background: var(--success);
 }
 .zana-kpi-card--done .zana-kpi-icon {
   color: var(--success);
 }
-.zana-kpi-card--blocked {
-  border-left-color: var(--danger);
+.zana-kpi-card--blocked::before {
+  background: var(--danger);
 }
 .zana-kpi-card--blocked .zana-kpi-icon {
   color: var(--danger);
 }
 .zana-kpi-value {
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1.1;
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.05;
   color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
 }
 .zana-kpi-label {
   font-size: 10px;
@@ -7187,7 +7324,7 @@ body.resizing-col {
 }
 .zana-breakdown-row {
   display: grid;
-  grid-template-columns: 70px 1fr 22px;
+  grid-template-columns: 72px 1fr 22px;
   align-items: center;
   gap: 8px;
 }
@@ -7197,22 +7334,30 @@ body.resizing-col {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-transform: capitalize;
 }
 .zana-breakdown-bar {
-  height: 6px;
+  height: 5px;
   background: var(--bg-base);
-  border-radius: 4px;
+  border-radius: 999px;
   overflow: hidden;
 }
 .zana-breakdown-fill {
   display: block;
   height: 100%;
-  background: var(--accent-blue);
-  border-radius: 4px;
+  min-width: 3px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-blue) 75%, transparent),
+    var(--accent-blue)
+  );
+  border-radius: 999px;
+  transition: width 200ms ease;
 }
 .zana-breakdown-num {
   font-size: 11px;
-  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
   text-align: right;
 }
 
@@ -8341,4 +8486,187 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   color: var(--text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* ── Schedule groups ──────────────────────────────────────────────────────
+   Groups bucket global (non-project) schedules into Personal / Work / etc.
+   The rail lists them under a "Groups" header; the panel header and each card
+   surface the active group's color + icon. */
+
+/* Sidebar section header with an inline action (the manage-groups gear). */
+.settings-scope-label--action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.list-section-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.list-section-action:hover {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+/* Count badge on a rail row (number of schedules in the group / ungrouped). */
+.list-count-badge {
+  flex: 0 0 auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+.project-item.active .list-count-badge {
+  border-color: var(--border-strong);
+}
+
+/* Panel header when viewing a single group. */
+.scheduler-header-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Per-card group chip, inline after the schedule name. The compact title must
+   become a flex row so the chip sits beside the (ellipsised) name. */
+.scheduler-card-main--compact .scheduler-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scheduler-card-main--compact .scheduler-card-title > span,
+.scheduler-card-title {
+  min-width: 0;
+}
+.scheduler-group-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+/* ── Manage-groups modal ─────────────────────────────────────────────────── */
+.scheduler-groups-modal {
+  width: 440px;
+  max-width: 92vw;
+}
+.scheduler-groups-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.scheduler-groups-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.scheduler-groups-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+}
+.scheduler-groups-row-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scheduler-groups-row-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.scheduler-groups-footer {
+  justify-content: flex-end;
+}
+
+/* Group editor (create / edit) — reuses scheduler-form-field spacing. */
+.scheduler-group-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.scheduler-group-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.scheduler-color-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.scheduler-color-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  box-shadow: 0 0 0 1px var(--border) inset;
+}
+.scheduler-color-swatch.is-active {
+  border-color: var(--text-primary);
+}
+.scheduler-icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.scheduler-icon-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.scheduler-icon-swatch:hover {
+  background: var(--bg-hover);
+}
+.scheduler-icon-swatch.is-active {
+  background: var(--bg-elevated);
 }

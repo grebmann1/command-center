@@ -136,8 +136,19 @@ export class SchedulerManager extends EventEmitter {
       createdAt: now,
       updatedAt: now,
       source: input.scope ?? 'global',
+      // Group only applies to global schedules; project schedules live under
+      // their project tab regardless. Drop it for project scope so the field
+      // never lingers on a task it can't surface.
+      group:
+        (input.scope ?? 'global') === 'global' && input.group?.trim()
+          ? input.group.trim()
+          : undefined,
       notifyInbox: input.notifyInbox ?? false,
-      autoCloseOnFinish: input.autoCloseOnFinish ?? false
+      // Default ON: a scheduled run is background work; close its session once
+      // the agent finishes so sessions don't pile up at the prompt. The form
+      // always sends an explicit value; this default only applies to callers
+      // (e.g. the skill-authored create path) that omit it.
+      autoCloseOnFinish: input.autoCloseOnFinish ?? true
     };
     this.persist(task);
     this.live.set(task.id, this.makeLive(task));
@@ -164,6 +175,11 @@ export class SchedulerManager extends EventEmitter {
     if (patch.retain !== undefined) next.history = { retain: clampRetain(patch.retain) };
     if (patch.notifyInbox !== undefined) next.notifyInbox = patch.notifyInbox;
     if (patch.autoCloseOnFinish !== undefined) next.autoCloseOnFinish = patch.autoCloseOnFinish;
+    // `null` clears the group (→ Ungrouped); a string sets it; undefined leaves
+    // it unchanged. Only meaningful for global schedules.
+    if (patch.group !== undefined) {
+      next.group = patch.group?.trim() ? patch.group.trim() : undefined;
+    }
     next.updatedAt = new Date().toISOString();
     this.persist(next);
     live.task = next;
@@ -626,6 +642,56 @@ export class SchedulerManager extends EventEmitter {
       return;
     }
     this.log('attachReport', `no run found for session ${sessionId} (report dropped)`);
+  }
+
+  /**
+   * The agent finished its turn (Stop hook), reported via the mcp-server
+   * `onStopHook` callback. For an interactive (non-auto-close) scheduled run
+   * the pty stays alive at the prompt and never emits `exit`, so this is the
+   * only signal that the work is done — we stamp `finishedAt` (and a duration
+   * derived from the run's fire time) so the UI can show "done · session open"
+   * instead of "running" forever.
+   *
+   * For an auto-close task we ALSO close the pty as an *expected* close, exactly
+   * as the old `onStopHook` did, so the subsequent `onExit` logs success rather
+   * than a kill-signal error. The merge-style `recordRun` keeps the two updates
+   * commutative (see `attachReport`'s note).
+   *
+   * If no scheduled run matches this session (a non-scheduled session that
+   * somehow carries the hook), fall back to a plain expected close so behavior
+   * never regresses.
+   */
+  onAgentFinished(sessionId: string) {
+    for (const live of this.live.values()) {
+      const runs = live.task.status.runs;
+      const idxFromMap = live.runIndexBySession.get(sessionId);
+      const idx =
+        idxFromMap !== undefined && runs[idxFromMap]?.sessionId === sessionId
+          ? idxFromMap
+          : runs.findIndex((r) => r.sessionId === sessionId);
+      if (idx < 0) continue;
+      const run = runs[idx];
+      // Don't clobber a duration the exit handler already recorded; otherwise
+      // derive elapsed from the fire timestamp.
+      const startMs = Date.parse(run.at);
+      const durationMs =
+        run.durationMs ??
+        (Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : undefined);
+      runs[idx] = {
+        ...run,
+        finishedAt: new Date().toISOString(),
+        ...(durationMs !== undefined ? { durationMs } : {})
+      };
+      this.persist(live.task);
+      this.emit('changed');
+      if (live.task.autoCloseOnFinish) {
+        this.deps?.ptys.closeExpected(sessionId);
+      }
+      return;
+    }
+    // Unmatched: preserve the legacy auto-close behavior for any session that
+    // carried the hook but isn't a tracked scheduled run.
+    this.deps?.ptys.closeExpected(sessionId);
   }
 }
 

@@ -54,6 +54,37 @@ const UNDO_WINDOW_MS = 6000;
 /** Sentinel sprint selections. Real sprint ids are Salesforce a0l… ids. */
 type SprintSel = 'all' | 'current' | string;
 
+/**
+ * Module-scoped cache that survives the panel unmounting. `ModulePanelHost`
+ * only mounts a module's panel while its nav is active, so leaving GUS and
+ * coming back would otherwise wipe all fetched state and force a full reload
+ * every time. We stash the last board here and seed React state from it on
+ * remount, so reopening GUS is instant — and we skip the network refetch
+ * entirely while the cache is still fresh.
+ *
+ * Lives outside the component on purpose: a ref or store would be torn down
+ * with the unmount we're trying to outlive.
+ */
+interface GusCache {
+  /** Selections, so the restored board matches what the user last looked at. */
+  mode: BoardMode;
+  sprintSel: SprintSel;
+  teamSel: string | null;
+  includeClosed: boolean;
+  /** Last successful fetch. */
+  identity: GusIdentity | null;
+  sprints: GusSprint[];
+  teams: GusTeam[];
+  items: GusWorkItem[];
+  /** The view params `items` were fetched under (see `loadKey`). */
+  loadKey: string;
+  /** When `items` were fetched, for the freshness window. */
+  loadedAt: number;
+}
+let cache: GusCache | null = null;
+/** Reuse cached data without a refetch when reopening within this window. */
+const CACHE_FRESH_MS = 60_000;
+
 /** Is `today` within the sprint's [start, end] (inclusive)? */
 function isCurrentSprint(s: GusSprint, today: string): boolean {
   if (!s.startDate || !s.endDate) return false;
@@ -61,21 +92,29 @@ function isCurrentSprint(s: GusSprint, today: string): boolean {
 }
 
 export default function GusPanel({ host }: { host: ModuleHost }) {
-  const [identity, setIdentity] = useState<GusIdentity | null>(null);
-  const [items, setItems] = useState<GusWorkItem[]>([]);
-  const [sprints, setSprints] = useState<GusSprint[]>([]);
-  const [sprintSel, setSprintSel] = useState<SprintSel>('all');
-  const [mode, setMode] = useState<BoardMode>('work');
-  const [teams, setTeams] = useState<GusTeam[]>([]);
-  const [teamSel, setTeamSel] = useState<string | null>(null);
+  // Seed from the cross-unmount cache when present, so reopening GUS restores
+  // the last board (data + selections) immediately instead of flashing empty.
+  const [identity, setIdentity] = useState<GusIdentity | null>(cache?.identity ?? null);
+  const [items, setItems] = useState<GusWorkItem[]>(cache?.items ?? []);
+  const [sprints, setSprints] = useState<GusSprint[]>(cache?.sprints ?? []);
+  const [sprintSel, setSprintSel] = useState<SprintSel>(cache?.sprintSel ?? 'all');
+  const [mode, setMode] = useState<BoardMode>(cache?.mode ?? 'work');
+  const [teams, setTeams] = useState<GusTeam[]>(cache?.teams ?? []);
+  const [teamSel, setTeamSel] = useState<string | null>(cache?.teamSel ?? null);
   // Backlog-only: restrict to one record type (Bug / User Story / …). null = all.
   const [typeSel, setTypeSel] = useState<string | null>(null);
   // Backlog-only: show only items assigned to the current user.
   const [mineOnly, setMineOnly] = useState(false);
-  const [includeClosed, setIncludeClosed] = useState(false);
+  const [includeClosed, setIncludeClosed] = useState(cache?.includeClosed ?? false);
   const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(true);
+  // Don't show the loading state if the cache already gave us a board to show.
+  const [loading, setLoading] = useState(!cache);
   const [error, setError] = useState<string | null>(null);
+  // Gate the first fetch until saved prefs are restored, so the initial load
+  // already carries the user's last mode/sprint/team instead of firing on the
+  // defaults and then refetching when the prefs arrive. Pre-hydrated when the
+  // cache supplied the selections.
+  const [hydrated, setHydrated] = useState(!!cache);
   // The card whose detail modal is open (null = closed).
   const [selected, setSelected] = useState<GusWorkItem | null>(null);
   // Column key currently being dragged over (for drop-target highlight).
@@ -153,8 +192,12 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
     [sprints, today]
   );
 
-  // Restore the last mode + sprint + team before the first fetch.
+  // Restore the last mode + sprint + team, THEN open the gate for the first
+  // fetch. Skipped when the cache already pre-hydrated us (selections are in
+  // state and `hydrated` is already true). The gate ensures the initial load
+  // uses the restored selections rather than firing on defaults first.
   useEffect(() => {
+    if (hydrated) return;
     let live = true;
     Promise.all([
       host.storage.get<string>(STORAGE_MODE_KEY),
@@ -165,10 +208,13 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
       if (savedMode === 'backlog') setMode('backlog');
       if (savedSprint) setSprintSel(savedSprint as SprintSel);
       if (savedTeam) setTeamSel(savedTeam);
+      setHydrated(true);
     });
     return () => {
       live = false;
     };
+    // Run once on mount; `hydrated` guards re-entry rather than driving it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host]);
 
   // Resolve the active selection to a concrete sprint id for the query.
@@ -178,6 +224,16 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
     if (sprintSel === 'current') return currentSprint?.id;
     return sprintSel;
   }, [sprintSel, currentSprint]);
+
+  // The board's items depend only on these params; the key lets us tell when a
+  // refetch is actually needed vs. when the cache already holds the right set.
+  const loadKey = useMemo(
+    () =>
+      mode === 'backlog'
+        ? `backlog|${teamSel ?? ''}|${includeClosed}`
+        : `work|${effectiveSprintId ?? 'all'}|${includeClosed}`,
+    [mode, teamSel, includeClosed, effectiveSprintId]
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -194,6 +250,14 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
       setSprints(sp);
       setTeams(tm);
 
+      let nextItems: GusWorkItem[];
+      let resolvedTeamId = teamSel;
+      // The exact key `nextItems` were fetched under. We resolve sprint/team
+      // selections here against freshly-fetched lists, so this can differ from
+      // the closure's `loadKey` (computed off pre-fetch state) — storing the
+      // resolved key keeps the post-fetch re-render from triggering a second
+      // load. See the sprint comment below.
+      let resolvedKey: string;
       if (mode === 'backlog') {
         // Resolve the team to query: the saved/selected one if it's still in
         // the list, else fall back to the user's busiest team (first by count).
@@ -203,29 +267,74 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
           setError(null);
           return;
         }
+        resolvedTeamId = team.id;
         if (team.id !== teamSel) setTeamSel(team.id);
-        const backlog = await host.call<GusWorkItem[]>('listBacklog', {
+        nextItems = await host.call<GusWorkItem[]>('listBacklog', {
           teamId: team.id,
           includeClosed
         });
-        setItems(backlog);
+        setItems(nextItems);
+        resolvedKey = `backlog|${team.id}|${includeClosed}`;
       } else {
-        const work = await host.call<GusWorkItem[]>('listWork', {
+        // Resolve "current" against the sprints we just fetched, NOT the
+        // closure's `currentSprint` — on the first load that's still null
+        // (sprints hadn't loaded yet), which would send an unscoped query
+        // (all work) and force a second, narrowing fetch once sprints arrive.
+        // Resolving here means the one fetch is already scoped: no flash.
+        const sprintId =
+          sprintSel === 'all'
+            ? undefined
+            : sprintSel === 'current'
+            ? sp.find((s) => isCurrentSprint(s, today))?.id
+            : sprintSel;
+        nextItems = await host.call<GusWorkItem[]>('listWork', {
           includeClosed,
-          sprintId: effectiveSprintId
+          sprintId
         });
-        setItems(work);
+        setItems(nextItems);
+        resolvedKey = `work|${sprintId ?? 'all'}|${includeClosed}`;
       }
+
+      // Stash the fresh board so reopening the panel restores it without a
+      // refetch. The resolved key/timestamp drive the freshness check on the
+      // post-fetch re-render and on remount.
+      cache = {
+        mode,
+        sprintSel,
+        teamSel: resolvedTeamId,
+        includeClosed,
+        identity: who,
+        sprints: sp,
+        teams: tm,
+        items: nextItems,
+        loadKey: resolvedKey,
+        loadedAt: Date.now()
+      };
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [host, mode, teamSel, includeClosed, effectiveSprintId]);
+  }, [host, mode, sprintSel, teamSel, includeClosed, effectiveSprintId, loadKey]);
 
+  // Drive fetches off selection changes, but: (1) wait until saved prefs are
+  // hydrated so the first call uses them, not the defaults; (2) skip the call
+  // when the cache already holds this exact board and is still fresh — the
+  // common case when flipping back to a panel you just left.
   useEffect(() => {
+    if (!hydrated) return;
+    if (cache && cache.loadKey === loadKey && Date.now() - cache.loadedAt < CACHE_FRESH_MS) {
+      return;
+    }
     void load();
-  }, [load]);
+  }, [hydrated, loadKey, load]);
+
+  // Keep the cache's items in step with optimistic local edits (drag/drop
+  // status moves), so restoring from cache after a quick nav-away reflects the
+  // move rather than snapping back to the pre-move board.
+  useEffect(() => {
+    if (cache && cache.loadKey === loadKey) cache.items = items;
+  }, [items, loadKey]);
 
   const selectSprint = (value: SprintSel) => {
     setSprintSel(value);

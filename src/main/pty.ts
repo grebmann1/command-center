@@ -166,13 +166,19 @@ export class PtyManager extends EventEmitter {
       isClaudeProfile(opts.profile) && opts.projectSettings
         ? projectSettingsArgs(opts.projectSettings, opts.profile)
         : [];
-    // Opt-in auto-close: inject a Stop hook via `--settings` (additive — it
-    // merges with, never replaces, the user's own settings files). The hook
-    // pings our local callback server, which kills this exact pty. Only for
-    // claude profiles, and only when we know the callback URL.
-    const autoClose =
-      !!opts.autoCloseOnFinish && isClaudeProfile(opts.profile) && !!this.mcpBaseUrl;
-    const hookArgs = autoClose ? ['--settings', buildStopHookSettings()] : [];
+    // Stop hook: inject a `--settings` hook (additive — merges with, never
+    // replaces, the user's own settings files) that pings our local callback
+    // server when the agent finishes its turn. We want this for EVERY scheduled
+    // run, not only auto-close ones: a non-auto-close scheduled session stays
+    // open at the prompt after finishing, and the hook is how the scheduler
+    // learns the turn ended (so the UI can show "done" instead of "running"
+    // forever). `autoClose` only decides whether the callback *kills* the pty
+    // (handled in index.ts via the task's autoCloseOnFinish flag). Claude
+    // profiles only, and only when we know the callback URL.
+    const claudeWithCallback = isClaudeProfile(opts.profile) && !!this.mcpBaseUrl;
+    const autoClose = !!opts.autoCloseOnFinish && claudeWithCallback;
+    const wantsStopHook = claudeWithCallback && (autoClose || !!opts.scheduled);
+    const hookArgs = wantsStopHook ? ['--settings', buildStopHookSettings()] : [];
     // Pre-approve the inbox push tool so the agent can use it without
     // prompting. We merge into the allowedTools list (rather than emit a
     // second --allowedTools flag) because some claude-cli versions take
@@ -194,7 +200,7 @@ export class PtyManager extends EventEmitter {
     if (isClaudeProfile(opts.profile) && this.mcpBaseUrl) {
       env.CC_MCP_URL = `${this.mcpBaseUrl}/mcp/${opts.projectId}/${sessionId}`;
     }
-    if (autoClose) {
+    if (wantsStopHook) {
       // The Stop hook command reads this — full URL with identity baked in,
       // so the agent never sees (or could forge) the session id in a schema.
       env.CC_HOOK_URL = `${this.mcpBaseUrl}/hook/stop/${opts.projectId}/${sessionId}`;

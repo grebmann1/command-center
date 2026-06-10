@@ -10,7 +10,8 @@ import type {
   McpServerEntry,
   PluginEntry,
   ScheduledTask,
-  ScheduleTemplate
+  ScheduleTemplate,
+  ScheduleGroup
 } from '@shared/types';
 
 /** Built-in nav destinations. App modules (plugins/*) add their own ids. */
@@ -131,9 +132,28 @@ interface UiState {
   /** Which tab is active in the Settings panel. */
   settingsTab: 'global' | 'project';
   setSettingsTab: (tab: 'global' | 'project') => void;
-  /** Which tab is active in the Scheduler panel. */
-  schedulerTab: 'overview' | 'global' | 'project';
-  setSchedulerTab: (tab: 'overview' | 'global' | 'project') => void;
+  /**
+   * Which tab is active in the Scheduler panel.
+   *  - 'overview'  — dashboard
+   *  - 'group'     — a user-defined group (see `selectedGroupId`)
+   *  - 'global'    — Ungrouped global schedules (no/unresolved group)
+   *  - 'project'   — a project's checked-in schedules (see `selectedProjectId`)
+   */
+  schedulerTab: 'overview' | 'group' | 'global' | 'project';
+  setSchedulerTab: (tab: 'overview' | 'group' | 'global' | 'project') => void;
+  /** Which group the 'group' tab is showing. */
+  selectedGroupId: string | null;
+  /** Select a group tab and remember which group. */
+  selectGroup: (groupId: string) => void;
+  /**
+   * A schedule the user asked to reveal (from the menu-bar tray). The panel
+   * scrolls to and briefly highlights it, then clears this. Null when nothing
+   * is pending.
+   */
+  revealScheduleId: string | null;
+  /** Jump the Scheduler to the scope owning `taskId` and reveal that row. */
+  revealSchedule: (taskId: string) => void;
+  clearRevealSchedule: () => void;
   pushToast: (message: string, kind?: 'info' | 'error') => void;
   dismissToast: (id: string) => void;
   markUnread: (sessionId: string) => void;
@@ -200,10 +220,11 @@ function pushErrorToast(message: string) {
   useUi.getState().pushToast(message, 'error');
 }
 
-export const useUi = create<UiState>((set) => ({
+export const useUi = create<UiState>((set, get) => ({
   nav: 'projects',
   overviewOpen: false,
   setOverviewOpen: (overviewOpen) => set({ overviewOpen }),
+  revealScheduleId: null,
   selectedProjectId: null,
   selectedTabId: {},
   paletteOpen: false,
@@ -213,7 +234,8 @@ export const useUi = create<UiState>((set) => ({
   searchOpen: false,
   findOpen: false,
   settingsTab: 'global',
-  schedulerTab: 'global',
+  schedulerTab: 'overview',
+  selectedGroupId: null,
   toasts: [],
   unread: {},
   workspaceMode: {},
@@ -302,6 +324,25 @@ export const useUi = create<UiState>((set) => ({
   setFindOpen: (findOpen) => set({ findOpen }),
   setSettingsTab: (settingsTab) => set({ settingsTab }),
   setSchedulerTab: (schedulerTab) => set({ schedulerTab }),
+  selectGroup: (groupId) => set({ schedulerTab: 'group', selectedGroupId: groupId }),
+  revealSchedule: (taskId) => {
+    const task = useScheduler.getState().tasks.find((t) => t.id === taskId);
+    // setNav('scheduler') forces schedulerTab back to 'overview', so set the
+    // scope tab AFTER it. A project-scoped task also needs its project selected
+    // so the project scope renders the right list.
+    set({ nav: 'scheduler', revealScheduleId: taskId });
+    if (task?.source && task.source !== 'global') {
+      get().selectProject((task.source as { projectId: string }).projectId);
+      set({ schedulerTab: 'project' });
+    } else if (task?.group && useScheduleGroups.getState().groups.some((g) => g.id === task.group)) {
+      // Global + resolvable group → land on that group's tab; otherwise the
+      // task lives in the Ungrouped (global) bucket.
+      set({ schedulerTab: 'group', selectedGroupId: task.group });
+    } else {
+      set({ schedulerTab: 'global' });
+    }
+  },
+  clearRevealSchedule: () => set({ revealScheduleId: null }),
   pushToast: (message, kind = 'info') => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     set((s) => ({ toasts: [...s.toasts, { id, message, kind }] }));
@@ -666,6 +707,18 @@ export const useData = create<DataState>((set, get) => ({
     }
     window.cc.scheduler.onTemplatesChanged((templates) => {
       useScheduleTemplates.setState({ templates });
+    });
+
+    // Schedule groups: one-shot + push. Main seeds Personal/Work on first run
+    // and watches ~/.cc-center/groups.json for hand edits.
+    try {
+      const groups = await window.cc.scheduler.groups.list();
+      useScheduleGroups.setState({ groups, loading: false });
+    } catch {
+      useScheduleGroups.setState({ loading: false });
+    }
+    window.cc.scheduler.groups.onChanged((groups) => {
+      useScheduleGroups.setState({ groups });
     });
 
     // Plugins + MCP catalogues: same one-shot + push pattern. Main fans out
@@ -1390,6 +1443,16 @@ interface ScheduleTemplatesState {
 
 export const useScheduleTemplates = create<ScheduleTemplatesState>(() => ({
   templates: [],
+  loading: true
+}));
+
+interface ScheduleGroupsState {
+  groups: ScheduleGroup[];
+  loading: boolean;
+}
+
+export const useScheduleGroups = create<ScheduleGroupsState>(() => ({
+  groups: [],
   loading: true
 }));
 

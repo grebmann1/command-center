@@ -116,6 +116,12 @@ export const IPC = {
     onChanged: 'scheduler:onChanged',
     listTemplates: 'scheduler:listTemplates',
     onTemplatesChanged: 'scheduler:onTemplatesChanged',
-    revealTemplatesDir: 'scheduler:revealTemplatesDir'
+    revealTemplatesDir: 'scheduler:revealTemplatesDir',
+    groupsList: 'scheduler:groups:list',
+    groupsCreate: 'scheduler:groups:create',
+    groupsUpdate: 'scheduler:groups:update',
+    groupsDelete: 'scheduler:groups:delete',
+    groupsReorder: 'scheduler:groups:reorder',
+    groupsOnChanged: 'scheduler:groups:onChanged'
   }
 } as const;

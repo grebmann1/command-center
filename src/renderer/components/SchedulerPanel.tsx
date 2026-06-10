@@ -42,10 +42,18 @@ import type {
   ScheduledTask,
   ScheduleCreateInput,
   ScheduleRun,
-  ScheduleTemplate
+  ScheduleTemplate,
+  ScheduleGroup
 } from '@shared/types';
 import { parseEvery, formatInterval } from '@shared/parse-every';
-import { useData, useScheduler, useScheduleTemplates, useUi } from '../store';
+import {
+  useData,
+  useScheduler,
+  useScheduleTemplates,
+  useScheduleGroups,
+  useUi
+} from '../store';
+import { groupIcon, GROUP_FALLBACK_COLOR } from './scheduleGroupMeta';
 
 const PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
 const PROFILE_LABEL: Record<LaunchProfileId, string> = {
@@ -120,14 +128,28 @@ export function SchedulerPanel() {
 
   const schedulerTab = useUi((s) => s.schedulerTab);
   const selectedProjectId = useUi((s) => s.selectedProjectId);
+  const selectedGroupId = useUi((s) => s.selectedGroupId);
+  const revealScheduleId = useUi((s) => s.revealScheduleId);
+  const groups = useScheduleGroups((s) => s.groups);
+  const activeGroup = useMemo(
+    () => groups.find((g) => g.id === selectedGroupId) ?? null,
+    [groups, selectedGroupId]
+  );
 
   useEffect(() => {
     setPausedSet(null);
-  }, [schedulerTab, selectedProjectId]);
+  }, [schedulerTab, selectedProjectId, selectedGroupId]);
 
   const scopedTasks = useMemo(() => {
+    const isGlobal = (t: ScheduledTask) => !t.source || t.source === 'global';
+    if (schedulerTab === 'group') {
+      if (!selectedGroupId) return [];
+      return tasks.filter((t) => isGlobal(t) && t.group === selectedGroupId);
+    }
     if (schedulerTab === 'global') {
-      return tasks.filter((t) => !t.source || t.source === 'global');
+      // Ungrouped bucket: global schedules with no group or a stale group id.
+      const known = new Set(groups.map((g) => g.id));
+      return tasks.filter((t) => isGlobal(t) && (!t.group || !known.has(t.group)));
     }
     if (!selectedProjectId) return [];
     return tasks.filter(
@@ -136,7 +158,7 @@ export function SchedulerPanel() {
         t.source !== 'global' &&
         (t.source as { projectId: string }).projectId === selectedProjectId
     );
-  }, [tasks, schedulerTab, selectedProjectId]);
+  }, [tasks, schedulerTab, selectedProjectId, selectedGroupId, groups]);
 
   const filteredTasks = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -183,10 +205,28 @@ export function SchedulerPanel() {
       <div className="settings-inner">
         <div className="scheduler-header">
           <div className="scheduler-header-text">
-            <h2>Scheduler</h2>
+            {schedulerTab === 'group' && activeGroup ? (
+              <h2 className="scheduler-header-group">
+                {(() => {
+                  const Icon = groupIcon(activeGroup.icon);
+                  return (
+                    <Icon
+                      size={18}
+                      style={{ color: activeGroup.color ?? GROUP_FALLBACK_COLOR }}
+                    />
+                  );
+                })()}
+                {activeGroup.name}
+              </h2>
+            ) : (
+              <h2>Scheduler</h2>
+            )}
             <p className="settings-help scheduler-subtitle">
-              Recurring tasks that spawn a terminal in the chosen project on a
-              fixed interval.
+              {schedulerTab === 'group' && activeGroup
+                ? `Global schedules in the “${activeGroup.name}” group.`
+                : schedulerTab === 'global'
+                ? 'Global schedules with no group.'
+                : 'Recurring tasks that spawn a terminal in the chosen project on a fixed interval.'}
             </p>
           </div>
           <div className="scheduler-header-actions">
@@ -309,6 +349,8 @@ export function SchedulerPanel() {
                     projectName={
                       projects.find((p) => p.id === t.projectId)?.name ?? '⟨missing⟩'
                     }
+                    group={t.group ? groups.find((g) => g.id === t.group) ?? null : null}
+                    reveal={revealScheduleId === t.id}
                     onEdit={() => setEditing(t)}
                     onDuplicate={() => handleSeedFromTask(t)}
                     onAskDelete={() => setConfirmDelete(t)}
@@ -443,6 +485,8 @@ function EmptyStateWithFeatured({
 function ScheduleRow({
   task,
   projectName,
+  group,
+  reveal,
   onEdit,
   onDuplicate,
   onAskDelete,
@@ -450,6 +494,8 @@ function ScheduleRow({
 }: {
   task: ScheduledTask;
   projectName: string;
+  group?: ScheduleGroup | null;
+  reveal?: boolean;
   onEdit: () => void;
   onDuplicate: () => void;
   onAskDelete: () => void;
@@ -458,6 +504,21 @@ function ScheduleRow({
   const lastRun = task.status.lastRunAt ? new Date(task.status.lastRunAt) : null;
   const nextRun = task.status.nextRunAt ? new Date(task.status.nextRunAt) : null;
   const [expanded, setExpanded] = useState(false);
+  const cardRef = useRef<HTMLLIElement | null>(null);
+  const [highlighted, setHighlighted] = useState(false);
+
+  // When the menu-bar tray asks to reveal this schedule, scroll it into view,
+  // expand it, and pulse a highlight. The store clears revealScheduleId once we
+  // pick it up so re-renders (the 1Hz tick) don't re-trigger the scroll.
+  useEffect(() => {
+    if (!reveal) return;
+    useUi.getState().clearRevealSchedule();
+    setExpanded(true);
+    setHighlighted(true);
+    cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const t = setTimeout(() => setHighlighted(false), 1600);
+    return () => clearTimeout(t);
+  }, [reveal]);
   const terminals = useData((s) => s.terminals);
   const restoreTerminal = useData((s) => s.restoreTerminal);
   const setNav = useUi((s) => s.setNav);
@@ -489,16 +550,22 @@ function ScheduleRow({
   const runs = task.status.runs ?? [];
   const hasHistory = runs.length > 0;
 
-  // Walk runs newest→oldest to find the most-recent sessionId that's still
+  // Walk runs newest→oldest to find the most-recent run whose session is still
   // alive. Fixes the case where a fire was skipped (no sessionId on the head
-  // record) but the previous run's session is still active and should be
-  // surfaced as "running".
-  const liveSessionId = (() => {
+  // record) but the previous run's session is still active. We keep the whole
+  // run so we can tell "working" (turn in progress) from "done · session open"
+  // (the agent finished — `finishedAt` set — but the pty is still at the prompt).
+  const liveRun = (() => {
     for (const run of runs) {
-      if (run.sessionId && isSessionAlive(run.sessionId)) return run.sessionId;
+      if (run.sessionId && isSessionAlive(run.sessionId)) return run;
     }
     return null;
   })();
+  const liveSessionId = liveRun?.sessionId ?? null;
+  // The agent is still working only while the live run has no `finishedAt`.
+  const isWorking = !!liveRun && !liveRun.finishedAt;
+  // Alive but the turn ended — open at the prompt, resumable.
+  const isFinishedOpen = !!liveRun && !!liveRun.finishedAt;
   const promoteAndOpen = (sessionId: string) => {
     // Scheduled fires spawn headless, so the session is filtered out of the
     // visible tab strip. restoreTerminal un-hides it (no-op if already visible)
@@ -532,15 +599,27 @@ function ScheduleRow({
     void promoteAndOpen(liveSessionId);
   };
 
-  const statusKind = liveSessionId ? 'running' : task.enabled ? 'idle' : 'off';
-  const statusLabel = liveSessionId ? 'running' : task.enabled ? 'idle' : 'off';
+  const statusKind = isWorking
+    ? 'running'
+    : isFinishedOpen
+    ? 'done'
+    : task.enabled
+    ? 'idle'
+    : 'off';
+  const statusLabel = isWorking
+    ? 'running'
+    : isFinishedOpen
+    ? 'done'
+    : task.enabled
+    ? 'idle'
+    : 'off';
 
   // Stop the row's expand-toggle from firing when the user clicks
   // an inner control. Each handler still runs normally.
   const stop = (e: ReactMouseEvent) => e.stopPropagation();
 
   return (
-    <li className={`scheduler-card ${task.enabled ? '' : 'is-disabled'} ${expanded ? 'is-expanded' : ''} ${liveSessionId ? 'is-running' : ''}`}>
+    <li ref={cardRef} className={`scheduler-card ${task.enabled ? '' : 'is-disabled'} ${expanded ? 'is-expanded' : ''} ${isWorking ? 'is-running' : ''} ${isFinishedOpen ? 'is-done' : ''} ${highlighted ? 'is-revealed' : ''}`}>
       <div
         className="scheduler-card-main scheduler-card-main--compact"
         role="button"
@@ -565,15 +644,40 @@ function ScheduleRow({
           <span aria-hidden />
         </label>
         <div className="scheduler-card-compact-body">
-          <span className="scheduler-card-title">{task.name}</span>
+          <span className="scheduler-card-title">
+            {task.name}
+            {group && (
+              <span
+                className="scheduler-group-chip"
+                style={{
+                  color: group.color ?? GROUP_FALLBACK_COLOR,
+                  borderColor: group.color ?? GROUP_FALLBACK_COLOR
+                }}
+                title={`Group: ${group.name}`}
+              >
+                {(() => {
+                  const Icon = groupIcon(group.icon);
+                  return <Icon size={11} />;
+                })()}
+                {group.name}
+              </span>
+            )}
+          </span>
           <span className="scheduler-card-compact-meta">
             {projectName} · {PROFILE_LABEL[task.profile]} · every {task.schedule.every}
           </span>
         </div>
         <div className="scheduler-card-compact-when">
-          {liveSessionId ? (
-            <span className="scheduler-pill scheduler-pill--running" title="Terminal session is live">
+          {isWorking ? (
+            <span className="scheduler-pill scheduler-pill--running" title="Agent is working — turn in progress">
               running
+            </span>
+          ) : isFinishedOpen ? (
+            <span
+              className="scheduler-pill scheduler-pill--done"
+              title="Agent finished its turn — session still open at the prompt"
+            >
+              done
             </span>
           ) : task.enabled && nextRun ? (
             <span className="scheduler-card-compact-next" title="Next fire">
@@ -589,16 +693,16 @@ function ScheduleRow({
               <button
                 className="scheduler-icon-btn"
                 onClick={openLive}
-                title="Open running terminal"
-                aria-label="Open running terminal"
+                title={isFinishedOpen ? 'Open session (finished)' : 'Open running terminal'}
+                aria-label={isFinishedOpen ? 'Open session (finished)' : 'Open running terminal'}
               >
                 <ExternalLink size={14} />
               </button>
               <button
                 className="scheduler-icon-btn scheduler-icon-btn--danger"
                 onClick={stopLive}
-                title="Stop running terminal"
-                aria-label="Stop running terminal"
+                title={isFinishedOpen ? 'Close session' : 'Stop running terminal'}
+                aria-label={isFinishedOpen ? 'Close session' : 'Stop running terminal'}
               >
                 <Square size={14} />
               </button>
@@ -774,6 +878,8 @@ function ScheduleModal({
   const projects = useData((s) => s.projects);
   const schedulerTab = useUi((s) => s.schedulerTab);
   const selectedProjectId = useUi((s) => s.selectedProjectId);
+  const selectedGroupId = useUi((s) => s.selectedGroupId);
+  const groups = useScheduleGroups((s) => s.groups);
   const seededTask = seed?.kind === 'duplicate' ? seed.source : null;
   const seededTemplate = seed?.kind === 'template' ? seed.template : null;
 
@@ -810,8 +916,11 @@ function ScheduleModal({
   const [notifyInbox, setNotifyInbox] = useState<boolean>(
     task?.notifyInbox ?? seededTask?.notifyInbox ?? false
   );
+  // Default ON for new schedules: a scheduled run is background work, so closing
+  // the session once the agent finishes keeps the tab strip clean. Existing
+  // schedules keep whatever they saved; duplicates inherit the source's choice.
   const [autoCloseOnFinish, setAutoCloseOnFinish] = useState<boolean>(
-    task?.autoCloseOnFinish ?? seededTask?.autoCloseOnFinish ?? false
+    task?.autoCloseOnFinish ?? seededTask?.autoCloseOnFinish ?? true
   );
   const [scope, setScope] = useState<'global' | 'project'>(() => {
     if (task?.source && task.source !== 'global') return 'project';
@@ -821,6 +930,14 @@ function ScheduleModal({
     }
     return 'global';
   });
+  // Group (global scope only). New schedules created from inside a group tab
+  // pre-select that group; otherwise inherit from the task / duplicate source.
+  const [group, setGroup] = useState<string>(
+    task?.group
+      ?? seededTask?.group
+      ?? (task === null && !seededTask && schedulerTab === 'group' ? selectedGroupId ?? '' : '')
+      ?? ''
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -877,7 +994,9 @@ function ScheduleModal({
           extraArgs: seededTemplate?.defaults.extraArgs ?? seededTask?.extraArgs,
           scope: scope === 'project' ? { projectId } : 'global',
           notifyInbox,
-          autoCloseOnFinish
+          autoCloseOnFinish,
+          // Group only applies to global scope; main drops it for project scope.
+          group: scope === 'global' && group ? group : undefined
         };
         const result = await window.cc.scheduler.create(input);
         if (!result.ok) {
@@ -886,6 +1005,7 @@ function ScheduleModal({
           return;
         }
       } else {
+        const isGlobalTask = !task!.source || task!.source === 'global';
         const result = await window.cc.scheduler.update(task!.id, {
           name: name.trim(),
           description: description.trim(),
@@ -894,7 +1014,9 @@ function ScheduleModal({
           every,
           prompt,
           notifyInbox,
-          autoCloseOnFinish
+          autoCloseOnFinish,
+          // Only global schedules carry a group. `null` clears → Ungrouped.
+          ...(isGlobalTask ? { group: group || null } : {})
         });
         if (!result.ok) {
           setError(result.message);
@@ -1045,6 +1167,32 @@ function ScheduleModal({
                   Move the JSON file by hand to change scope.
                 </span>
               </div>
+            </div>
+          )}
+          {scope === 'global' && (
+            <div className="scheduler-form-field">
+              <label htmlFor="sched-group">
+                Group <span className="scheduler-form-optional">(optional)</span>
+              </label>
+              <select
+                id="sched-group"
+                value={group}
+                onChange={(e) => setGroup(e.target.value)}
+              >
+                <option value="">Ungrouped</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+                {/* A stale group id (its group was deleted) still shows so the
+                    user sees what's set; picking another value reassigns it. */}
+                {group && !groups.some((g) => g.id === group) && (
+                  <option value={group}>{group} (deleted)</option>
+                )}
+              </select>
+              <p className="modal-hint">
+                Sort this schedule into a Personal / Work bucket. Manage groups
+                from the scheduler sidebar.
+              </p>
             </div>
           )}
           <div className="scheduler-form-field">
@@ -1408,7 +1556,7 @@ function SchedulerOverview({
 }) {
   const terminalsByProject = useData((s) => s.terminals);
 
-  const { enabled, disabled, running, runs24, success24, errors24, skipped24 } = useMemo(() => {
+  const { enabled, disabled, working, finishedOpen, runs24, success24, errors24, skipped24 } = useMemo(() => {
     const en = tasks.filter((t) => t.enabled);
     const live = new Set<string>();
     for (const [pid, list] of Object.entries(terminalsByProject)) {
@@ -1420,18 +1568,18 @@ function SchedulerOverview({
     }
     // Walk the run history newest→oldest so a task whose latest record is a
     // 'skipped' (no sessionId) but whose previous run is still alive still
-    // shows up. Emit one row per live task with its live session id.
-    const run: Array<{ task: ScheduledTask; sessionId: string }> = [];
+    // shows up. Emit one row per live task, split by whether the agent is still
+    // working (no `finishedAt`) or finished its turn but left the session open.
+    const work: Array<{ task: ScheduledTask; sessionId: string }> = [];
+    const done: Array<{ task: ScheduledTask; sessionId: string }> = [];
     for (const t of tasks) {
       const runs = t.status?.runs ?? [];
-      let sid: string | null = null;
       for (const r of runs) {
         if (r.sessionId && live.has(`${t.projectId}:${r.sessionId}`)) {
-          sid = r.sessionId;
+          (r.finishedAt ? done : work).push({ task: t, sessionId: r.sessionId });
           break;
         }
       }
-      if (sid) run.push({ task: t, sessionId: sid });
     }
     const dayAgo = Date.now() - 24 * 3600 * 1000;
     let r24 = 0, ok = 0, err = 0, skip = 0;
@@ -1448,7 +1596,8 @@ function SchedulerOverview({
     return {
       enabled: en,
       disabled: tasks.length - en.length,
-      running: run,
+      working: work,
+      finishedOpen: done,
       runs24: r24,
       success24: ok,
       errors24: err,
@@ -1506,7 +1655,18 @@ function SchedulerOverview({
     <div className="scheduler-overview">
       <section className="overview-kpis">
         <KpiCard label="Schedules" value={tasks.length} sub={`${enabled.length} on · ${disabled} off`} />
-        <KpiCard label="Running now" value={running.length} sub={running.length === 0 ? 'No live sessions' : 'Live terminal sessions'} accent={running.length > 0 ? 'live' : undefined} />
+        <KpiCard
+          label="Running now"
+          value={working.length}
+          sub={
+            working.length === 0
+              ? finishedOpen.length > 0
+                ? `${finishedOpen.length} done · open`
+                : 'No live sessions'
+              : 'Agents working'
+          }
+          accent={working.length > 0 ? 'live' : undefined}
+        />
         <KpiCard
           label="Next fire"
           value={nextFire ? formatCountdown(nextFire) : '—'}
@@ -1520,15 +1680,15 @@ function SchedulerOverview({
         />
       </section>
 
-      {running.length > 0 && (
+      {working.length > 0 && (
         <section className="overview-card">
           <header className="overview-card-header">
             <Activity size={14} />
             <h3>Running now</h3>
-            <span className="overview-card-badge">{running.length}</span>
+            <span className="overview-card-badge">{working.length}</span>
           </header>
           <ul className="overview-list">
-            {running.map(({ task, sessionId }) => {
+            {working.map(({ task, sessionId }) => {
               const project = projects.find((p) => p.id === task.projectId);
               return (
                 <li key={task.id} className="overview-item">
@@ -1553,6 +1713,49 @@ function SchedulerOverview({
                     onClick={() => onOpenTerminal(task, sessionId)}
                     title="Open running terminal"
                     aria-label="Open running terminal"
+                  >
+                    <ExternalLink size={14} />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+
+      {finishedOpen.length > 0 && (
+        <section className="overview-card">
+          <header className="overview-card-header">
+            <CheckCircle2 size={14} />
+            <h3>Finished · session open</h3>
+            <span className="overview-card-badge">{finishedOpen.length}</span>
+          </header>
+          <ul className="overview-list">
+            {finishedOpen.map(({ task, sessionId }) => {
+              const project = projects.find((p) => p.id === task.projectId);
+              return (
+                <li key={task.id} className="overview-item">
+                  <span
+                    className="scheduler-status-dot scheduler-status-dot--done"
+                    aria-hidden="true"
+                  />
+                  <button
+                    type="button"
+                    className="overview-item-main"
+                    onClick={() => onOpenTerminal(task, sessionId)}
+                    title="Agent finished — open the session to review or continue"
+                  >
+                    <div className="overview-item-name">{task.name}</div>
+                    <div className="overview-item-meta">
+                      {project?.name ?? '⟨missing⟩'} · {PROFILE_LABEL[task.profile]} · every {formatInterval(parseEvery(task.schedule.every) ?? 0)}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => onOpenTerminal(task, sessionId)}
+                    title="Open session"
+                    aria-label="Open session"
                   >
                     <ExternalLink size={14} />
                   </button>

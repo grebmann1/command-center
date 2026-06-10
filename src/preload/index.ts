@@ -173,7 +173,19 @@ const api: CcApi = {
       ipcRenderer.on(IPC.scheduler.onTemplatesChanged, handler);
       return () => ipcRenderer.off(IPC.scheduler.onTemplatesChanged, handler);
     },
-    revealTemplatesDir: () => ipcRenderer.invoke(IPC.scheduler.revealTemplatesDir)
+    revealTemplatesDir: () => ipcRenderer.invoke(IPC.scheduler.revealTemplatesDir),
+    groups: {
+      list: () => ipcRenderer.invoke(IPC.scheduler.groupsList),
+      create: (input) => ipcRenderer.invoke(IPC.scheduler.groupsCreate, input),
+      update: (id, patch) => ipcRenderer.invoke(IPC.scheduler.groupsUpdate, id, patch),
+      delete: (id) => ipcRenderer.invoke(IPC.scheduler.groupsDelete, id),
+      reorder: (orderedIds) => ipcRenderer.invoke(IPC.scheduler.groupsReorder, orderedIds),
+      onChanged: (cb) => {
+        const handler = (_e: unknown, groups: Parameters<typeof cb>[0]) => cb(groups);
+        ipcRenderer.on(IPC.scheduler.groupsOnChanged, handler);
+        return () => ipcRenderer.off(IPC.scheduler.groupsOnChanged, handler);
+      }
+    }
   },
   modules: {
     call: (moduleId, capability, args) =>
@@ -191,8 +203,7 @@ const api: CcApi = {
         'app:closeTab',
         'app:toggleWorkspaceMode',
         'app:openPalette',
-        'app:openShortcuts',
-        'app:openScheduler'
+        'app:openShortcuts'
       ];
       const handlers = events.map((name) => {
         const h = () => cb(name);
@@ -209,6 +220,11 @@ const api: CcApi = {
         cb(sessionId, projectId);
       ipcRenderer.on('app:focusSession', handler);
       return () => ipcRenderer.off('app:focusSession', handler);
+    },
+    onOpenScheduler: (cb: (taskId?: string) => void) => {
+      const handler = (_e: unknown, taskId?: string) => cb(taskId);
+      ipcRenderer.on('app:openScheduler', handler);
+      return () => ipcRenderer.off('app:openScheduler', handler);
     }
   }
 };

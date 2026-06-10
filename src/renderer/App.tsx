@@ -132,9 +132,6 @@ export function App() {
         case 'app:openShortcuts':
           ui.setShortcutsOpen(!ui.shortcutsOpen);
           return;
-        case 'app:openScheduler':
-          ui.setNav('scheduler');
-          return;
         case 'app:toggleWorkspaceMode':
           if (projectId) ui.toggleWorkspaceMode(projectId);
           return;
@@ -193,11 +190,20 @@ export function App() {
       // already-visible sessions too.
       void useData.getState().restoreTerminal(sessionId, projectId);
     });
+    // Tray "Open Scheduler" / per-schedule "Show in Scheduler". With a task id
+    // we jump to that schedule's scope and reveal the row; without one we land
+    // on the overview (matching the plain menu item).
+    const offOpenScheduler = window.cc.app.onOpenScheduler((taskId) => {
+      const ui = useUi.getState();
+      if (taskId) ui.revealSchedule(taskId);
+      else ui.setNav('scheduler');
+    });
     return () => {
       offShortcuts();
       offData();
       offMenu();
       offFocusSession();
+      offOpenScheduler();
       window.removeEventListener('focus', onFocus);
     };
   }, [init]);

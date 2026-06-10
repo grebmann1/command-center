@@ -65,7 +65,11 @@ export function validateScheduleFile(raw: unknown): ScheduledTask | { error: str
       : undefined,
     prompt: typeof r.prompt === 'string' ? r.prompt : undefined,
     notifyInbox: typeof r.notifyInbox === 'boolean' ? r.notifyInbox : false,
-    autoCloseOnFinish: typeof r.autoCloseOnFinish === 'boolean' ? r.autoCloseOnFinish : false,
+    // Default ON when omitted (e.g. hand-authored JSON): scheduled sessions are
+    // background work and should close when the agent finishes. A schedule that
+    // explicitly saved `false` keeps that choice.
+    autoCloseOnFinish: typeof r.autoCloseOnFinish === 'boolean' ? r.autoCloseOnFinish : true,
+    group: typeof r.group === 'string' && r.group.trim() ? r.group : undefined,
     schedule: { every: schedule.every },
     overlap: 'skip',
     history:

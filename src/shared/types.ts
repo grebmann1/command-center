@@ -299,6 +299,13 @@ export interface ScheduleRun {
   sessionId?: string;
   /** Time from spawn to pty exit (only set once the session ends). */
   durationMs?: number;
+  /**
+   * ISO-8601 time the agent's turn ended (Stop hook), independent of pty exit.
+   * Set for interactive scheduled runs that finish their turn but stay open at
+   * the prompt — lets the UI show "done · session open" rather than "running"
+   * forever. Absent until the agent stops (claude profiles).
+   */
+  finishedAt?: string;
   /** Free-text reason — populated for `error` and `skipped`. */
   message?: string;
   /**
@@ -373,6 +380,12 @@ export interface ScheduledTask {
    * interactive CLI never exits on its own. Default false.
    */
   autoCloseOnFinish?: boolean;
+  /**
+   * Group id ({@link ScheduleGroup}) for organising global schedules in the
+   * rail (e.g. "Personal" / "Work"). Absent or unresolvable = Ungrouped.
+   * Ignored for project-scoped schedules.
+   */
+  group?: string;
 }
 
 export interface ScheduleCreateInput {
@@ -389,6 +402,35 @@ export interface ScheduleCreateInput {
   retain?: number;
   notifyInbox?: boolean;
   autoCloseOnFinish?: boolean;
+  /** Group id (see {@link ScheduleGroup}). Only meaningful for global scope. */
+  group?: string;
+}
+
+/**
+ * A user-defined bucket for grouping global (non-project) schedules — e.g.
+ * "Personal" vs "Work". Persisted as a single hand-editable file at
+ * `~/.cc-center/groups.json`. Groups are an orthogonal axis to scope: a global
+ * `ScheduledTask` references one by `group` id; project-scoped schedules ignore
+ * grouping (they live under their project). A schedule whose `group` doesn't
+ * resolve to a known group is treated as Ungrouped — deleting a group never
+ * loses schedules, it just drops them back into the Ungrouped bucket.
+ */
+export interface ScheduleGroup {
+  /** URL-safe slug, unique. Pattern: ^[a-z0-9][a-z0-9_-]{0,32}$. */
+  id: string;
+  name: string;
+  /** Hex color for the dot/pill. */
+  color?: string;
+  /** Lucide icon name; renderer falls back to a generic icon if unknown. */
+  icon?: string;
+  /** Ascending display order in the rail. */
+  sortIndex?: number;
+}
+
+export interface ScheduleGroupInput {
+  name: string;
+  color?: string;
+  icon?: string;
 }
 
 /**
@@ -432,6 +474,8 @@ export interface ScheduleUpdateInput {
   retain?: number;
   notifyInbox?: boolean;
   autoCloseOnFinish?: boolean;
+  /** Group id, or null to clear (move to Ungrouped). Omit to leave unchanged. */
+  group?: string | null;
 }
 
 export type SkillSource = 'user' | 'plugin' | 'project';
@@ -624,6 +668,11 @@ export interface CcApi {
     homedir(): Promise<string>;
     /** Fired when an OS notification click asks the UI to focus a session. */
     onFocusSession(cb: (sessionId: string, projectId: string) => void): () => void;
+    /**
+     * Fired when the menu-bar tray asks the UI to open the Scheduler. A task id
+     * means "reveal this schedule in its scope"; absent means the overview.
+     */
+    onOpenScheduler(cb: (taskId?: string) => void): () => void;
   };
   skills: {
     list(projectPath?: string): Promise<SkillEntry[]>;
@@ -688,6 +737,15 @@ export interface CcApi {
     listTemplates(): Promise<ScheduleTemplate[]>;
     onTemplatesChanged(cb: (templates: ScheduleTemplate[]) => void): () => void;
     revealTemplatesDir(): Promise<{ ok: boolean; path: string; message?: string }>;
+    groups: {
+      list(): Promise<ScheduleGroup[]>;
+      create(input: ScheduleGroupInput): Promise<Result<ScheduleGroup>>;
+      update(id: string, patch: Partial<ScheduleGroupInput>): Promise<Result<ScheduleGroup>>;
+      /** Removes the group; schedules referencing it fall back to Ungrouped. */
+      delete(id: string): Promise<Result<true>>;
+      reorder(orderedIds: string[]): Promise<ScheduleGroup[]>;
+      onChanged(cb: (groups: ScheduleGroup[]) => void): () => void;
+    };
   };
   /**
    * Generic bridge for app modules (plugins/*). `call` invokes a module's
