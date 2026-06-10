@@ -56,6 +56,13 @@ jobs:
           node-version: 22
           cache: npm
 
+      # electron-builder rebuilds node-pty via node-gyp, which still imports
+      # Python's distutils. The runner default (Python 3.12+) removed distutils
+      # from the stdlib, so pin 3.11 where it still ships.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Install dependencies
         run: npm ci
 
