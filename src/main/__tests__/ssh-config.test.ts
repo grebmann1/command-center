@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listSshHosts } from '../ssh-config.js';
+import { listSshHosts, classifySfworkFailure } from '../ssh-config.js';
 
 describe('listSshHosts', () => {
   let dir: string;
@@ -113,5 +113,34 @@ describe('listSshHosts', () => {
     const hosts = await listSshHosts(a);
     const aliases = hosts.map((h) => h.alias).sort();
     expect(aliases).toEqual(['onlya', 'onlyb']);
+  });
+});
+
+describe('classifySfworkFailure', () => {
+  it('reports a missing CLI when spawn fails with ENOENT', () => {
+    const msg = classifySfworkFailure({ code: 'ENOENT' } as never, '');
+    expect(msg).toMatch(/not found on PATH/i);
+  });
+
+  it('reports a timeout when the process was killed', () => {
+    const msg = classifySfworkFailure({ killed: true } as never, '');
+    expect(msg).toMatch(/timed out/i);
+  });
+
+  it('detects a re-auth prompt in the output', () => {
+    const out = '*** INFO: Please (re)login with your SSO credentials.';
+    const msg = classifySfworkFailure({ code: 1 } as never, out);
+    expect(msg).toMatch(/re-authenticate/i);
+  });
+
+  it('falls back to a generic message for unknown failures', () => {
+    const msg = classifySfworkFailure({ code: 1 } as never, 'some other error');
+    expect(msg).toMatch(/could not refresh/i);
+  });
+
+  it('prioritizes ENOENT over output sniffing', () => {
+    // A missing binary may still emit login-ish noise; the spawn error wins.
+    const msg = classifySfworkFailure({ code: 'ENOENT' } as never, 'please login');
+    expect(msg).toMatch(/not found on PATH/i);
   });
 });

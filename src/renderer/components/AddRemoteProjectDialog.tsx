@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Search, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshCw, Search, X } from 'lucide-react';
 import type { SshHostEntry } from '@shared/types';
 
 interface AddRemoteProjectDialogProps {
@@ -20,15 +20,23 @@ interface AddRemoteProjectDialogProps {
 export function AddRemoteProjectDialog({ onClose, onSubmit }: AddRemoteProjectDialogProps) {
   const [hosts, setHosts] = useState<SshHostEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Non-fatal note when a sfwork refresh couldn't update the config but the
+  // existing hosts are still shown (e.g. expired SSO). Distinct from `error`.
+  const [warning, setWarning] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [picked, setPicked] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [user, setUser] = useState('');
   const [remotePath, setRemotePath] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading] = useState(false);
+  // Bumped on each reload; lets an in-flight load ignore its result if a newer
+  // load (or unmount) supersedes it.
+  const loadSeq = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
+  // `sync=true` regenerates the sfwork-managed config (slow, shells out to the
+  // CLI) before parsing; the on-mount load just re-reads the existing file.
+  const loadHosts = useCallback((sync: boolean) => {
     // Guard against a stale preload (when a dev session was running before
     // the ssh binding existed). Surfacing a friendly message beats crashing.
     if (!window.cc?.ssh?.listHosts) {
@@ -36,21 +44,40 @@ export function AddRemoteProjectDialog({ onClose, onSubmit }: AddRemoteProjectDi
       setHosts([]);
       return;
     }
-    window.cc.ssh
-      .listHosts()
-      .then((list) => {
-        if (cancelled) return;
-        setHosts(list);
+    const seq = ++loadSeq.current;
+    setLoading(true);
+    setError(null);
+    setWarning(null);
+    // syncHosts returns { hosts, warning? }; listHosts returns a bare array.
+    // Normalize both to the same shape.
+    const op =
+      sync && window.cc.ssh.syncHosts
+        ? window.cc.ssh.syncHosts()
+        : window.cc.ssh.listHosts().then((hosts) => ({ hosts, warning: undefined }));
+    op
+      .then(({ hosts, warning }) => {
+        if (seq !== loadSeq.current) return;
+        setHosts(hosts);
+        setWarning(warning ?? null);
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (seq !== loadSeq.current) return;
         setError(err instanceof Error ? err.message : 'Failed to load ssh config');
         setHosts([]);
+      })
+      .finally(() => {
+        if (seq !== loadSeq.current) return;
+        setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    loadHosts(false);
+    return () => {
+      // Invalidate any in-flight load on unmount.
+      loadSeq.current++;
+    };
+  }, [loadHosts]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -120,9 +147,22 @@ export function AddRemoteProjectDialog({ onClose, onSubmit }: AddRemoteProjectDi
             />
           </div>
 
-          <div className="modal-hint">
-            Showing hosts from <code>~/.ssh/config</code> with{' '}
-            <code>User sfwork</code> — Salesforce dev workspaces.
+          <div className="remote-host-hint-row">
+            <div className="modal-hint">
+              Showing hosts from <code>~/.ssh/config</code> with{' '}
+              <code>User sfwork</code> — Salesforce dev workspaces.
+            </div>
+            <button
+              type="button"
+              className="remote-host-refresh"
+              onClick={() => loadHosts(true)}
+              disabled={loading}
+              title="Run `sfwork list` to pull newly-provisioned workspaces, then reload"
+              aria-label="Refresh workspace hosts"
+            >
+              <RefreshCw size={12} className={loading ? 'spinning' : undefined} />
+              <span>{loading ? 'Refreshing…' : 'Refresh'}</span>
+            </button>
           </div>
 
           <div className="remote-host-list">
@@ -149,6 +189,7 @@ export function AddRemoteProjectDialog({ onClose, onSubmit }: AddRemoteProjectDi
           </div>
 
           {error && <div className="modal-error">{error}</div>}
+          {!error && warning && <div className="modal-warning">{warning}</div>}
 
           <div className="remote-form">
             <label className="remote-form-row">

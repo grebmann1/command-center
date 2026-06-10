@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { ChevronRight, ChevronDown, Folder, FileText, RefreshCw, GitCompare, GitBranch, ListTree, Save, Undo2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, FileText, RefreshCw, GitCompare, GitBranch, ListTree, Save, Undo2, Eye, Pencil } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import Editor, { DiffEditor, loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
@@ -66,6 +68,9 @@ export function ExplorerView({ project }: Props) {
   // null, the editor mirrors fileResult.content exactly.
   const [editedContent, setEditedContent] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Markdown files open as a rendered preview by default; the user can flip to
+  // the Monaco editor to make edits. Resets per file (see effect below).
+  const [previewMode, setPreviewMode] = useState(false);
   const treeMode = useUi((s) => s.explorerTreeMode[project.id] ?? 'files');
   const setTreeModeStore = useUi((s) => s.setExplorerTreeMode);
   const toggleTreeModeStore = useUi((s) => s.toggleExplorerTreeMode);
@@ -247,6 +252,13 @@ export function ExplorerView({ project }: Props) {
       cancelled = true;
     };
   }, [explorerFile, revealFile]);
+
+  // Markdown opens rendered by default; everything else opens in the editor.
+  // Re-evaluated on each file switch so leaving a .md in editor mode doesn't
+  // carry that choice over to the next markdown file.
+  useEffect(() => {
+    setPreviewMode(!!explorerFile && isMarkdownPath(explorerFile));
+  }, [explorerFile]);
 
   // Re-read the open file when the window regains focus. Claude tabs often
   // edit the file behind your back; without this the viewer stays stale until
@@ -435,6 +447,11 @@ export function ExplorerView({ project }: Props) {
   const fileGitCode = explorerFile && gitFiles ? gitFiles[explorerFile] : undefined;
   const diffAvailable = !!fileGitCode;
 
+  // Markdown gets a rendered-preview toggle. Hidden in diff mode (the diff is
+  // inherently a text comparison) and meaningless for non-markdown files.
+  const isMarkdown = !!explorerFile && isMarkdownPath(explorerFile);
+  const showPreview = isMarkdown && previewMode && !diffMode;
+
   // Flat list of dirty files in the project, sorted by status code then path.
   // Filtered to descendants of project.path so multi-project repos don't bleed
   // changes from sibling projects sharing a toplevel.
@@ -588,6 +605,17 @@ export function ExplorerView({ project }: Props) {
                     <Save size={13} />
                   </button>
                 )}
+                {isMarkdown && !diffMode && (
+                  <button
+                    type="button"
+                    className={`opener-btn ${previewMode ? 'active' : ''}`}
+                    title={previewMode ? 'Edit markdown' : 'Preview markdown'}
+                    aria-pressed={previewMode}
+                    onClick={() => setPreviewMode((v) => !v)}
+                  >
+                    {previewMode ? <Pencil size={13} /> : <Eye size={13} />}
+                  </button>
+                )}
                 {diffAvailable && (
                   <button
                     type="button"
@@ -607,7 +635,25 @@ export function ExplorerView({ project }: Props) {
               </span>
             </div>
             <div className="explorer-viewer-monaco">
-              {diffMode ? (
+              {showPreview ? (
+                <div className="explorer-md-preview">
+                  <div className="inbox-md">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        a: (props) => <a {...props} target="_blank" rel="noreferrer" />,
+                        table: (props) => (
+                          <div className="inbox-md-table-wrap">
+                            <table {...props} />
+                          </div>
+                        )
+                      }}
+                    >
+                      {editedContent ?? fileResult.content ?? ''}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              ) : diffMode ? (
                 headLoading || !headResult ? (
                   <div className="explorer-viewer-empty">Loading HEAD…</div>
                 ) : !headResult.ok ? (
@@ -928,6 +974,11 @@ function formatBytes(n: number) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function isMarkdownPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return lower.endsWith('.md') || lower.endsWith('.mdx') || lower.endsWith('.markdown');
 }
 
 function languageFromPath(path: string): string | undefined {

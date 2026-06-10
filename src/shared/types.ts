@@ -48,6 +48,16 @@ export interface SshHostEntry {
   user?: string;
 }
 
+/** Result of a `sfwork list`-backed host refresh. */
+export interface SshSyncResult {
+  /** Hosts parsed from ~/.ssh/config after the sync attempt. */
+  hosts: SshHostEntry[];
+  /** Non-fatal warning when `sfwork list` couldn't refresh the config
+   *  (CLI missing, not logged in, timeout). The hosts are still whatever was
+   *  on disk, so the picker stays usable. */
+  warning?: string;
+}
+
 /** Pointer to a project file. Rendered live at view time, never snapshotted. */
 export interface InboxDoc {
   /** Path relative to the project root. */
@@ -352,6 +362,13 @@ export interface ScheduledTask {
    * (last 20 log lines, duration, result). Default false.
    */
   notifyInbox?: boolean;
+  /**
+   * When true (claude-family profiles only), a Stop hook is injected into the
+   * spawned session so the terminal auto-closes once Claude finishes its
+   * response. Without it, a scheduled `claude` tab idles open forever — the
+   * interactive CLI never exits on its own. Default false.
+   */
+  autoCloseOnFinish?: boolean;
 }
 
 export interface ScheduleCreateInput {
@@ -367,6 +384,7 @@ export interface ScheduleCreateInput {
   scope?: 'global' | { projectId: string };
   retain?: number;
   notifyInbox?: boolean;
+  autoCloseOnFinish?: boolean;
 }
 
 /**
@@ -409,6 +427,7 @@ export interface ScheduleUpdateInput {
   every?: string;
   retain?: number;
   notifyInbox?: boolean;
+  autoCloseOnFinish?: boolean;
 }
 
 export type SkillSource = 'user' | 'plugin' | 'project';
@@ -541,11 +560,22 @@ export interface CcApi {
   };
   ssh: {
     listHosts(): Promise<SshHostEntry[]>;
+    /** Regenerate the sfwork-managed ssh config (`sfwork list`), then re-parse.
+     *  Returns hosts plus an optional non-fatal warning if the sync failed. */
+    syncHosts(): Promise<SshSyncResult>;
   };
   terminals: {
     list(projectId: string): Promise<TerminalSession[]>;
     create(req: CreateTerminalRequest): Promise<Result<TerminalSession>>;
     write(sessionId: string, data: string): Promise<void>;
+    /**
+     * Send a line of user input to a live session, as if typed at the prompt
+     * (the text plus a trailing carriage return). Used by the inbox reply box
+     * to answer a question an agent pushed via inbox_push, without leaving the
+     * inbox. Thin intent-named wrapper over `write` so the carriage-return
+     * convention lives in one place.
+     */
+    reply(sessionId: string, text: string): Promise<void>;
     resize(sessionId: string, cols: number, rows: number): Promise<void>;
     close(sessionId: string): Promise<void>;
     /**

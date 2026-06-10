@@ -25,6 +25,7 @@ export function CommandPalette({ onClose }: Props) {
   const restartTerminal = useData((s) => s.restartTerminal);
   const closeTerminal = useData((s) => s.closeTerminal);
   const reopenLastClosed = useData((s) => s.reopenLastClosed);
+  const restoreLastDetached = useData((s) => s.restoreLastDetached);
   const setPinned = useData((s) => s.setPinned);
   const scheduledTasks = useScheduler((s) => s.tasks);
   const selectProject = useUi((s) => s.selectProject);
@@ -336,13 +337,18 @@ export function CommandPalette({ onClose }: Props) {
       actions.push({
         key: 'action:reopen-last-closed',
         icon: <Undo2 size={14} />,
-        label: `Reopen last closed tab in ${selectedProject.name}`,
+        label: `Reopen / resume last removed tab in ${selectedProject.name}`,
         hint: '⌘⇧T',
         run: () => {
           const pid = selectedProject.id;
           onClose();
-          reopenLastClosed(pid).then((s) => {
-            if (s) selectTab(pid, s.id);
+          // Mirror ⌘⇧T: resume newest background session first, else reopen
+          // the last closed tab.
+          restoreLastDetached(pid).then((restored) => {
+            if (restored) return;
+            reopenLastClosed(pid).then((s) => {
+              if (s) selectTab(pid, s.id);
+            }).catch(() => {});
           }).catch(() => {});
         }
       });

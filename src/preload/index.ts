@@ -25,7 +25,8 @@ const api: CcApi = {
     addRemote: (input) => ipcRenderer.invoke(IPC.projects.addRemote, input)
   },
   ssh: {
-    listHosts: () => ipcRenderer.invoke(IPC.ssh.listHosts)
+    listHosts: () => ipcRenderer.invoke(IPC.ssh.listHosts),
+    syncHosts: () => ipcRenderer.invoke(IPC.ssh.syncHosts)
   },
   terminals: {
     list: (projectId) => ipcRenderer.invoke(IPC.terminals.list, projectId),
@@ -191,7 +192,8 @@ const api: CcApi = {
         'app:closeTab',
         'app:toggleWorkspaceMode',
         'app:openPalette',
-        'app:openShortcuts'
+        'app:openShortcuts',
+        'app:openScheduler'
       ];
       const handlers = events.map((name) => {
         const h = () => cb(name);

@@ -66,6 +66,12 @@ const INBOX_USAGE_GUIDANCE = [
   'or anything you could just answer in the chat. Push only when leaving',
   'the conversation or when the user is likely away from this tab.',
   '',
+  'If you are asking a QUESTION and need an answer to continue, push it via',
+  '`comments` and then WAIT for input on this same session rather than',
+  'exiting — the user can reply directly from the inbox, and their answer',
+  'arrives here as if typed at your prompt. Do not end your turn assuming',
+  'the question was rhetorical.',
+  '',
   '`docs` are paths relative to this project root, rendered live (no',
   'snapshot). `comments` is short markdown — your voice to the user. At',
   'least one of `docs` or `comments` must be present.'
@@ -75,11 +81,23 @@ export class PtyManager extends EventEmitter {
   private live = new Map<string, Live>();
   /** Base URL of the local MCP server, set after the http listener boots. */
   private mcpBaseUrl: string | null = null;
+  /**
+   * Session ids the launcher itself asked to close (e.g. a scheduler
+   * auto-close Stop hook). On exit we report code 0 for these so the run is
+   * logged as a clean "success" rather than the non-zero code `proc.kill()`
+   * actually yields. See `closeExpected`.
+   */
+  private expectedClose = new Set<string>();
 
   list(projectId: string): TerminalSession[] {
     return [...this.live.values()]
       .filter((l) => l.session.projectId === projectId)
       .map((l) => l.session);
+  }
+
+  /** Count of live ptys still running (used for the quit-confirmation prompt). */
+  liveCount(): number {
+    return this.live.size;
   }
 
   /**
@@ -101,11 +119,32 @@ export class PtyManager extends EventEmitter {
     extraArgs?: string[];
     title?: string;
     remote?: ProjectRemote;
+    /**
+     * Inject a Stop hook so the session auto-closes when Claude finishes its
+     * response. Used by scheduler fires that opt into `autoCloseOnFinish`.
+     * Ignored for non-claude profiles (shell has no Stop event) and when the
+     * local callback server URL isn't known yet.
+     */
+    autoCloseOnFinish?: boolean;
+    /**
+     * Spawn the session already detached from the tab strip. The pty runs
+     * normally; `visibleTerminals()` in the renderer filters it out until the
+     * user promotes it (e.g. the inbox "Open in session" deep-link). Used by
+     * scheduler fires so background runs don't pile up visible tabs — yet stay
+     * alive and replyable from the inbox.
+     */
+    headless?: boolean;
   }): TerminalSession {
     if (opts.remote) {
       return this.createRemote({ ...opts, remote: opts.remote });
     }
     const { command, args } = resolveLaunch(opts.profile, opts.config);
+    // Mint the session id up front so we can bake it into the per-session
+    // MCP + hook URLs the agent/CLI connect back on. This lets `inbox_push`
+    // stamp the originating terminal onto each entry and lets a Stop hook
+    // name the exact tab to close — without it, callbacks can only target
+    // the project, not the specific session.
+    const sessionId = randomUUID();
     // For claude-family profiles, point the CLI at the launcher-owned
     // .mcp.json so the agent picks up the cc-inbox server. The URL in
     // that file is `${CC_MCP_URL}`, which Claude evaluates against the
@@ -126,6 +165,13 @@ export class PtyManager extends EventEmitter {
       isClaudeProfile(opts.profile) && opts.projectSettings
         ? projectSettingsArgs(opts.projectSettings, opts.profile)
         : [];
+    // Opt-in auto-close: inject a Stop hook via `--settings` (additive — it
+    // merges with, never replaces, the user's own settings files). The hook
+    // pings our local callback server, which kills this exact pty. Only for
+    // claude profiles, and only when we know the callback URL.
+    const autoClose =
+      !!opts.autoCloseOnFinish && isClaudeProfile(opts.profile) && !!this.mcpBaseUrl;
+    const hookArgs = autoClose ? ['--settings', buildStopHookSettings()] : [];
     // Pre-approve the inbox push tool so the agent can use it without
     // prompting. We merge into the allowedTools list (rather than emit a
     // second --allowedTools flag) because some claude-cli versions take
@@ -135,20 +181,20 @@ export class PtyManager extends EventEmitter {
       ? ['mcp__cc-inbox__inbox_push']
       : [];
     const fullArgs = mergeAllowedTools(
-      [...args, ...claudeMcpArgs, ...psArgs, ...(opts.extraArgs ?? [])],
+      [...args, ...claudeMcpArgs, ...psArgs, ...hookArgs, ...(opts.extraArgs ?? [])],
       inboxAllow
     );
-    // Mint the session id up front so we can bake it into the per-session
-    // MCP URL the agent connects back on. This lets `inbox_push` stamp
-    // the originating terminal onto each entry — without it, the inbox UI
-    // can only focus the project, not the specific tab the agent runs in.
-    const sessionId = randomUUID();
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       TERM: 'xterm-256color'
     };
     if (isClaudeProfile(opts.profile) && this.mcpBaseUrl) {
       env.CC_MCP_URL = `${this.mcpBaseUrl}/mcp/${opts.projectId}/${sessionId}`;
+    }
+    if (autoClose) {
+      // The Stop hook command reads this — full URL with identity baked in,
+      // so the agent never sees (or could forge) the session id in a schema.
+      env.CC_HOOK_URL = `${this.mcpBaseUrl}/hook/stop/${opts.projectId}/${sessionId}`;
     }
     const proc = pty.spawn(command, fullArgs, {
       name: 'xterm-256color',
@@ -167,7 +213,8 @@ export class PtyManager extends EventEmitter {
       pid: proc.pid,
       status: 'running',
       createdAt: Date.now(),
-      extraArgs: opts.extraArgs
+      extraArgs: opts.extraArgs,
+      headless: opts.headless || undefined
     };
 
     this.live.set(session.id, { session, proc });
@@ -180,12 +227,16 @@ export class PtyManager extends EventEmitter {
       this.emit('data', session.id, data);
     });
     proc.onExit(({ exitCode }) => {
+      // A launcher-initiated close (auto-close Stop hook) reports as a clean
+      // exit so the scheduler logs the run as success, not a kill-signal error.
+      const expected = this.expectedClose.delete(session.id);
+      const reportedCode = expected ? 0 : exitCode;
       const live = this.live.get(session.id);
       if (live) {
         live.session.status = 'exited';
-        live.session.exitCode = exitCode;
+        live.session.exitCode = reportedCode;
       }
-      this.emit('exit', session.id, exitCode);
+      this.emit('exit', session.id, reportedCode);
       this.live.delete(session.id);
     });
 
@@ -213,6 +264,7 @@ export class PtyManager extends EventEmitter {
     extraArgs?: string[];
     title?: string;
     remote: ProjectRemote;
+    headless?: boolean;
   }): TerminalSession {
     const { remote } = opts;
     // Defense in depth: addRemoteProject already rejects leading-dash values,
@@ -244,7 +296,8 @@ export class PtyManager extends EventEmitter {
       pid: proc.pid,
       status: 'running',
       createdAt: Date.now(),
-      extraArgs: opts.extraArgs
+      extraArgs: opts.extraArgs,
+      headless: opts.headless || undefined
     };
 
     this.live.set(session.id, { session, proc });
@@ -275,6 +328,21 @@ export class PtyManager extends EventEmitter {
     this.live.get(id)?.proc.write(data);
   }
 
+  /**
+   * Send a line of input to a session — the text plus a carriage return, as
+   * if the user typed it and hit Enter. Backs `terminals.reply`, used by the
+   * inbox to answer a question an agent pushed via `inbox_push` without
+   * leaving the inbox. Returns false when no live pty matches (e.g. the
+   * session exited), so callers can surface a "session ended" message.
+   */
+  reply(id: string, text: string): boolean {
+    const live = this.live.get(id);
+    if (!live) return false;
+    this.clearAttention(id);
+    live.proc.write(text + '\r');
+    return true;
+  }
+
   resize(id: string, cols: number, rows: number) {
     const l = this.live.get(id);
     if (!l) return;
@@ -293,6 +361,24 @@ export class PtyManager extends EventEmitter {
     } catch {
       /* ignore */
     }
+  }
+
+  /**
+   * Close a session the launcher itself decided to end (the auto-close Stop
+   * hook fired). Marks the exit as expected so `onExit` reports code 0 — a
+   * scheduled run that finished cleanly shouldn't log as an error just
+   * because `proc.kill()` delivers a signal. Returns false if already gone.
+   */
+  closeExpected(id: string): boolean {
+    const l = this.live.get(id);
+    if (!l) return false;
+    this.expectedClose.add(id);
+    try {
+      l.proc.kill();
+    } catch {
+      /* already dead — the onExit (if any) will still clear the flag */
+    }
+    return true;
   }
 
   killAll() {
@@ -369,9 +455,9 @@ export class PtyManager extends EventEmitter {
 
   /**
    * Toggle the headless flag on a live session. Headless tabs stay visible
-   * to `list()` but the renderer hides them from the tab strip — useful
-   * when the user X's a tab they don't want killed (the pty keeps running
-   * in the background). Returns the updated session, or null if missing.
+   * to `list()` but the renderer hides them from the tab strip — used when
+   * the user detaches a tab to the background ("Send to background"; the pty
+   * keeps running). Returns the updated session, or null if missing.
    */
   setHeadless(id: string, headless: boolean): TerminalSession | null {
     const live = this.live.get(id);
@@ -524,6 +610,42 @@ function buildRemoteCmd(opts: {
   const psArgs = opts.projectSettings ? projectSettingsArgs(opts.projectSettings, opts.profile) : [];
   const argv = ['claude', ...baseArgs, ...psArgs, ...(opts.extraArgs ?? [])];
   return `${cdPrefix}exec ${shellQuoteArgv(argv)}`;
+}
+
+/**
+ * Build the inline `--settings` JSON that registers a Stop hook for an
+ * auto-closing scheduled session. The hook command:
+ *   - reads the Stop event JSON on stdin,
+ *   - bails if `stop_hook_active` is true (Claude re-fires Stop after a
+ *     blocking hook; we never block, but guarding is cheap insurance against
+ *     a re-entrant fire racing the kill),
+ *   - POSTs to `$CC_HOOK_URL` (injected per-session into the spawn env),
+ *   - always exits 0 so it stays fire-and-forget and never blocks the agent.
+ *
+ * `--settings` MERGES with the user's settings files, so this adds the hook
+ * without disturbing their config. The command relies only on `sh` + `curl`,
+ * both present on macOS; if curl is missing the `|| true` keeps it silent.
+ */
+function buildStopHookSettings(): string {
+  // Single-quoted for the eventual argv element; node-pty passes argv without
+  // a shell, so no shell-escaping of this whole string is needed — but the
+  // command itself runs under `sh -c`, hence the inner quoting care.
+  const command =
+    'CC_IN=$(cat); ' +
+    'case "$CC_IN" in *\'"stop_hook_active":true\'*) exit 0;; esac; ' +
+    'if [ -n "$CC_HOOK_URL" ]; then ' +
+    'curl -s -m 5 -X POST "$CC_HOOK_URL" >/dev/null 2>&1 || true; ' +
+    'fi; exit 0';
+  return JSON.stringify({
+    hooks: {
+      Stop: [
+        {
+          matcher: '',
+          hooks: [{ type: 'command', command }]
+        }
+      ]
+    }
+  });
 }
 
 function titleFor(profile: LaunchProfileId): string {

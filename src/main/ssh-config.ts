@@ -1,7 +1,8 @@
+import { execFile, type ExecFileException } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, dirname, isAbsolute, basename } from 'node:path';
 import { homedir } from 'node:os';
-import type { SshHostEntry } from '../shared/types.js';
+import type { SshHostEntry, SshSyncResult } from '../shared/types.js';
 
 /**
  * Parse `~/.ssh/config` (recursively following `Include` directives) and
@@ -28,6 +29,89 @@ export async function listSshHosts(configPath?: string): Promise<SshHostEntry[]>
   const out: SshHostEntry[] = [];
   await parseFile(root, seen, out);
   return out.filter((h) => h.user === WORKSPACE_USER);
+}
+
+/**
+ * Regenerate the sfwork-managed ssh config by shelling out to `sfwork list`,
+ * then re-parse and return the host list. The picker is otherwise a read-only
+ * view of `~/.ssh/config`; the `User sfwork` blocks it shows live in an
+ * `Include`d file that only `sfwork` writes. Without this, "Refresh" can only
+ * re-read a stale file and a freshly-provisioned workspace never appears.
+ *
+ * `sfwork list` regenerates the include file as a side effect; we ignore its
+ * stdout. A failure (CLI missing, not logged in, timeout) is non-fatal — we
+ * fall back to parsing whatever config exists so Refresh degrades to a plain
+ * reload, and surface a `warning` the picker can show.
+ */
+export async function syncWorkspaceHosts(): Promise<SshSyncResult> {
+  const warning = await runSfworkList();
+  const hosts = await listSshHosts();
+  return warning ? { hosts, warning } : { hosts };
+}
+
+const SFWORK_TIMEOUT_MS = 60_000;
+
+/** Run `sfwork list`; resolve to a user-facing warning string on failure, or
+ *  `null` on success. Never rejects. */
+function runSfworkList(): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      'sfwork',
+      ['list'],
+      {
+        timeout: SFWORK_TIMEOUT_MS,
+        maxBuffer: 4 * 1024 * 1024,
+        env: {
+          ...process.env,
+          // `sfwork` resolves via the user's shell PATH (e.g. /usr/local/bin);
+          // GUI-launched Electron may not inherit it, so search common dirs.
+          PATH: augmentPath(process.env.PATH),
+          // `sfwork` is a honu-wrapped Python CLI. Two of its per-run behaviors
+          // crash ("Python quit unexpectedly") when spawned headless from a GUI
+          // Electron process, so disable both:
+          //   - auto-update re-execs the binary mid-run via os.execve
+          //     (HONU_UPDATE_FREQ=0 disables the update check entirely);
+          //   - the monitor wrapper spawns a subprocess tree + touches the
+          //     user's zsh-completion lock files (MONITOR_OFF=direct runs the
+          //     command inline instead).
+          HONU_UPDATE_FREQ: '0',
+          MONITOR_OFF: 'direct'
+        }
+      },
+      (err, stdout, stderr) => {
+        if (!err) {
+          resolve(null);
+          return;
+        }
+        resolve(classifySfworkFailure(err, `${stdout ?? ''}\n${stderr ?? ''}`));
+      }
+    );
+  });
+}
+
+/** Map a `sfwork list` failure to a short, actionable warning. The hosts shown
+ *  are still whatever was on disk, so every message frames it as "couldn't
+ *  update" rather than "broken". Exported for tests. */
+export function classifySfworkFailure(err: ExecFileException, output: string): string {
+  if (err.code === 'ENOENT') {
+    return '`sfwork` CLI not found on PATH — showing hosts already in ~/.ssh/config.';
+  }
+  // execFile sets `killed` when the timeout fires.
+  if (err.killed) {
+    return '`sfwork list` timed out — showing hosts already in ~/.ssh/config.';
+  }
+  if (/re.?login|\blogin\b|SSO|okta|not authorized|unauthenticated/i.test(output)) {
+    return 'sfwork needs you to re-authenticate — run `sfwork list` in a terminal, then Refresh.';
+  }
+  return 'Could not refresh from sfwork — showing hosts already in ~/.ssh/config.';
+}
+
+/** Prepend common CLI install dirs so a GUI launch can still find `sfwork`. */
+function augmentPath(current: string | undefined): string {
+  const extra = ['/usr/local/bin', '/opt/homebrew/bin', join(homedir(), '.local', 'bin')];
+  const parts = (current ?? '').split(':').filter(Boolean);
+  for (const dir of extra) if (!parts.includes(dir)) parts.push(dir);
+  return parts.join(':');
 }
 
 async function parseFile(path: string, seen: Set<string>, out: SshHostEntry[]): Promise<void> {

@@ -10,7 +10,8 @@ export const IPC = {
     addRemote: 'projects:addRemote'
   },
   ssh: {
-    listHosts: 'ssh:listHosts'
+    listHosts: 'ssh:listHosts',
+    syncHosts: 'ssh:syncHosts'
   },
   terminals: {
     list: 'terminals:list',

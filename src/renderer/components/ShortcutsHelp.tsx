@@ -41,8 +41,9 @@ const SECTIONS: Section[] = [
       { keys: ['⌘', 'T'], label: 'New tab (uses project’s default profile)' },
       { keys: ['⌘', '⇧', 'D'], label: 'Duplicate active tab (same profile)' },
       { keys: ['⌘', '⇧', 'R'], label: 'Restart active tab (kill + respawn)' },
-      { keys: ['⌘', '⇧', 'T'], label: 'Reopen last closed tab' },
-      { keys: ['⌘', 'W'], label: 'Close active tab' },
+      { keys: ['⌘', '⇧', 'T'], label: 'Reopen / resume last removed tab' },
+      { keys: ['⌘', 'W'], label: 'Close active tab (ends the process)' },
+      { keys: ['⌘', '⇧', 'W'], label: 'Send active tab to background (keeps running)' },
       { keys: ['⌘', '1'], label: 'Switch to tab 1 (… up to ⌘9)' },
       { keys: ['⌘', ']'], label: 'Next tab' },
       { keys: ['⌘', '['], label: 'Previous tab' }
@@ -69,12 +70,13 @@ const SECTIONS: Section[] = [
   {
     title: 'Tab actions (right-click)',
     rows: [
-      { keys: ['Middle-click'], label: 'Close tab' },
+      { keys: ['Middle-click'], label: 'Close tab (ends the process)' },
       { keys: ['Rename'], label: 'Or double-click tab title' },
       { keys: ['Duplicate'], label: 'Spawn another tab with same profile' },
+      { keys: ['Send to background'], label: 'Detach: hide tab, keep process running' },
       { keys: ['Close others'], label: 'Close every other tab' },
       { keys: ['Close to right'], label: 'Close all tabs after this one' },
-      { keys: ['Close exited'], label: 'Clean up dead tabs' }
+      { keys: ['Dismiss exited'], label: 'Clean up dead tabs' }
     ]
   }
 ];

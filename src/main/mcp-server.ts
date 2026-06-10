@@ -38,6 +38,13 @@ export interface McpServerOptions {
   projects: ProjectLookup;
   /** Logger used at startup; defaults to console. */
   log?: (msg: string) => void;
+  /**
+   * Called when a spawned session's Stop hook pings back (auto-close on
+   * finish). The url path carries identity: `/hook/stop/:projectId/:sessionId`.
+   * Implementations close the matching terminal. Best-effort — the route
+   * always 200s so the hook stays fire-and-forget.
+   */
+  onStopHook?: (projectId: string, sessionId: string) => void;
 }
 
 export interface McpServerHandle {
@@ -88,6 +95,29 @@ export function matchMcpRoute(
   };
 }
 
+/**
+ * Match `/hook/stop/:projectId/:sessionId` — the auto-close Stop-hook
+ * callback. Both ids are required (we always close a specific session).
+ * Exported for unit tests.
+ */
+export function matchStopHookRoute(
+  rawUrl: string | undefined
+): { projectId: string; sessionId: string } | null {
+  if (!rawUrl) return null;
+  let pathname: string;
+  try {
+    pathname = new URL(rawUrl, 'http://127.0.0.1').pathname;
+  } catch {
+    return null;
+  }
+  const m = /^\/hook\/stop\/([^/]+)\/([^/]+)$/.exec(pathname);
+  if (!m) return null;
+  return {
+    projectId: decodeURIComponent(m[1]),
+    sessionId: decodeURIComponent(m[2])
+  };
+}
+
 export async function startMcpServer(opts: McpServerOptions): Promise<McpServerHandle> {
   const log = opts.log ?? ((m) => console.log(m));
 
@@ -128,6 +158,22 @@ async function handleRequest(
   opts: McpServerOptions,
   log: (msg: string) => void
 ) {
+  // Stop-hook callback (auto-close). Fire-and-forget: drain the body, invoke
+  // the handler, and always 200 so the agent's hook never blocks on us.
+  const stopRoute = matchStopHookRoute(req.url);
+  if (stopRoute) {
+    req.resume(); // drain any POST body so the socket can close cleanly
+    try {
+      opts.onStopHook?.(stopRoute.projectId, stopRoute.sessionId);
+    } catch (err) {
+      log(`[mcp] stop-hook handler failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    res.statusCode = 200;
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.end('ok');
+    return;
+  }
+
   const route = matchMcpRoute(req.url);
   if (!route) {
     res.statusCode = 404;

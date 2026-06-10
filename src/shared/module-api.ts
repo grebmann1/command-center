@@ -56,6 +56,12 @@ export interface ModuleHost {
 
   /** Surface a transient toast in the app shell. */
   toast(message: string, kind?: 'info' | 'error'): void;
+
+  /**
+   * The project currently selected in the app shell, or null when none / on a
+   * core view. Lets a module scope its data to the active project's directory.
+   */
+  getActiveProject(): { id: string; name: string; path: string } | null;
 }
 
 /**

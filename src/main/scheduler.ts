@@ -116,7 +116,8 @@ export class SchedulerManager extends EventEmitter {
       createdAt: now,
       updatedAt: now,
       source: input.scope ?? 'global',
-      notifyInbox: input.notifyInbox ?? false
+      notifyInbox: input.notifyInbox ?? false,
+      autoCloseOnFinish: input.autoCloseOnFinish ?? false
     };
     this.persist(task);
     this.live.set(task.id, this.makeLive(task));
@@ -142,6 +143,7 @@ export class SchedulerManager extends EventEmitter {
     }
     if (patch.retain !== undefined) next.history = { retain: clampRetain(patch.retain) };
     if (patch.notifyInbox !== undefined) next.notifyInbox = patch.notifyInbox;
+    if (patch.autoCloseOnFinish !== undefined) next.autoCloseOnFinish = patch.autoCloseOnFinish;
     next.updatedAt = new Date().toISOString();
     this.persist(next);
     live.task = next;
@@ -322,7 +324,13 @@ export class SchedulerManager extends EventEmitter {
         projectSettings: this.deps.store.getProjectSettings(project.id),
         extraArgs,
         title: `Scheduled: ${live.task.name}`,
-        remote: project.remote
+        remote: project.remote,
+        autoCloseOnFinish: live.task.autoCloseOnFinish,
+        // Scheduled fires run headless — they're background work, not a tab the
+        // user opened. The pty stays alive and replyable; if the agent pushes a
+        // question to the inbox, the "Open in session" deep-link promotes it to
+        // a visible tab on demand. Keeps the tab strip clean for fleets of runs.
+        headless: true
       });
     } catch (err) {
       this.log(`fire ${id} pty.create`, err);

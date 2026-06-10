@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowRight, ExternalLink, MessageSquare, Trash2 } from 'lucide-react';
+import { ArrowRight, CornerDownLeft, ExternalLink, MessageSquare, Send, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   deleteInboxEntry,
+  replyToInboxEntry,
   useData,
   useInbox,
+  useInboxAnswered,
   useInboxRead,
   useInboxSelection,
   useUi
@@ -227,7 +229,95 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
         )}
       </div>
 
+      {aliveSession && <ReplyBox entry={entry} sessionTitle={aliveSession.title} />}
+
       <div className="inbox-detail-meta-id">project: {entry.projectId}</div>
+    </div>
+  );
+}
+
+/**
+ * Reply-back box — the write-half of the inbox question loop. Shown only when
+ * the originating session is still alive (resolved by the caller). Sends the
+ * typed answer to that pty's stdin via `replyToInboxEntry`, so an agent that
+ * pushed a question via `inbox_push` and blocked for input gets the answer
+ * without the user leaving the inbox.
+ *
+ * ⌘/Ctrl+Enter submits (Enter alone inserts a newline — replies can be
+ * multi-line). Once sent, the entry is marked answered and the box collapses
+ * to a confirmation line; the user can reply again via the "reply again" link
+ * if the agent asks a follow-up on the same session.
+ */
+function ReplyBox({ entry, sessionTitle }: { entry: InboxEntry; sessionTitle: string }) {
+  const answered = useInboxAnswered((s) => !!s.answeredIds[entry.id]);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [reopened, setReopened] = useState(false);
+
+  // sessionId is guaranteed by the caller (only rendered when aliveSession),
+  // but narrow it for type-safety.
+  const sessionId = entry.sessionId;
+  if (!sessionId) return null;
+
+  const collapsed = answered && !reopened;
+
+  const submit = async () => {
+    if (sending || !text.trim()) return;
+    setSending(true);
+    const ok = await replyToInboxEntry(entry.id, sessionId, text);
+    setSending(false);
+    if (ok) {
+      setText('');
+      setReopened(false);
+    }
+  };
+
+  if (collapsed) {
+    return (
+      <div className="inbox-reply answered">
+        <span className="inbox-reply-answered-label">
+          <CornerDownLeft size={13} strokeWidth={1.75} />
+          Replied to <span className="strong">{sessionTitle}</span>
+        </span>
+        <button
+          type="button"
+          className="inbox-reply-again"
+          onClick={() => setReopened(true)}
+        >
+          Reply again
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="inbox-reply">
+      <textarea
+        className="inbox-reply-input"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            e.preventDefault();
+            void submit();
+          }
+        }}
+        rows={2}
+        placeholder={`Reply to ${sessionTitle}…`}
+        aria-label="Reply to the originating terminal session"
+      />
+      <div className="inbox-reply-actions">
+        <span className="inbox-reply-hint">⌘↵ to send</span>
+        <button
+          type="button"
+          className="inbox-reply-send"
+          onClick={() => void submit()}
+          disabled={sending || !text.trim()}
+        >
+          <Send size={13} strokeWidth={1.75} />
+          {sending ? 'Sending…' : 'Send'}
+        </button>
+      </div>
     </div>
   );
 }

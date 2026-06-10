@@ -6,5 +6,6 @@
 
 import type { MainModule } from '../../shared/module-main.js';
 import { gusMainModule } from '../../../plugins/gus/main/gus-main.js';
+import { zanaMainModule } from '../../../plugins/zana/main/zana-main.js';
 
-export const MAIN_MODULES: MainModule[] = [gusMainModule];
+export const MAIN_MODULES: MainModule[] = [gusMainModule, zanaMainModule];

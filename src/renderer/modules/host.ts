@@ -5,7 +5,7 @@
  */
 
 import type { ModuleHost } from '@shared/module-api';
-import { useUi } from '../store';
+import { useData, useUi } from '../store';
 
 export function createModuleHost(moduleId: string): ModuleHost {
   return {
@@ -27,6 +27,12 @@ export function createModuleHost(moduleId: string): ModuleHost {
     },
     toast: (message: string, kind?: 'info' | 'error') => {
       useUi.getState().pushToast(message, kind);
+    },
+    getActiveProject: () => {
+      const id = useUi.getState().selectedProjectId;
+      if (!id) return null;
+      const p = useData.getState().projects.find((p) => p.id === id);
+      return p ? { id: p.id, name: p.name, path: p.path } : null;
     }
   };
 }

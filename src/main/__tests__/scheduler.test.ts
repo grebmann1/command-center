@@ -161,7 +161,7 @@ function makeManager(extraTaskFields?: Record<string, unknown>): {
   return { manager, ptys, task };
 }
 
-describe('SchedulerManager.fire — visible spawn', () => {
+describe('SchedulerManager.fire — headless spawn', () => {
   it('appends the prompt as a positional argv element for claude', () => {
     const { manager, ptys, task } = makeManager({ prompt: 'say hello' });
     manager.runNow(task.id);
@@ -207,11 +207,15 @@ describe('SchedulerManager.fire — visible spawn', () => {
     expect(ptys.createCalls[0].extraArgs).toEqual(['hi']);
   });
 
-  it('spawns visibly — no headless/logPath flags pass to pty.create', () => {
+  it('spawns headless — background run stays out of the tab strip', () => {
+    // Scheduled fires are background work, surfaced via the inbox rather than
+    // a tab the user opened. The pty still runs (and stays replyable); the
+    // inbox "Open in session" deep-link promotes it to a visible tab on
+    // demand. logPath remains unused — runs are tracked via run history.
     const { manager, ptys, task } = makeManager({ prompt: 'hi' });
     manager.runNow(task.id);
     const call = ptys.createCalls[0];
-    expect(call.headless).toBeUndefined();
+    expect(call.headless).toBe(true);
     expect(call.logPath).toBeUndefined();
   });
 

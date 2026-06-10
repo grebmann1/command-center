@@ -1349,6 +1349,30 @@ export const useInboxRead = create<InboxReadState>()(
   )
 );
 
+interface InboxAnsweredState {
+  /**
+   * Entries the user has replied to via the inbox reply box. Object-shaped
+   * (not Set) so Zustand `persist` can JSON-serialise it. Mirrors
+   * `useInboxRead` — read and answered are independent axes (an entry can be
+   * read but unanswered, or answered which implies read).
+   */
+  answeredIds: Record<string, true>;
+  markAnswered: (id: string) => void;
+}
+
+export const useInboxAnswered = create<InboxAnsweredState>()(
+  persist(
+    (set) => ({
+      answeredIds: {},
+      markAnswered: (id) =>
+        set((s) =>
+          s.answeredIds[id] ? s : { answeredIds: { ...s.answeredIds, [id]: true } }
+        )
+    }),
+    { name: 'cc.inbox-answered.v1', version: 1 }
+  )
+);
+
 interface SchedulerLiveState {
   tasks: ScheduledTask[];
   loading: boolean;
@@ -1447,5 +1471,38 @@ export async function deleteInboxEntry(id: string): Promise<void> {
     await window.cc.inbox.delete(id);
   } catch (err) {
     pushErrorToast(errorMessage(err, 'Failed to delete inbox entry'));
+  }
+}
+
+/**
+ * Reply to an inbox entry's originating terminal — the write-back half of the
+ * inbox question/answer loop. The agent pushes a question via `inbox_push`
+ * (stamped with its sessionId); this sends the user's answer straight to that
+ * pty's stdin, so the conversation continues without leaving the inbox.
+ *
+ * If the session is headless (e.g. a background scheduled run), we DON'T
+ * promote it to a visible tab — replying in place is the whole point. The
+ * "Open in session" button remains the explicit promotion path. We mark the
+ * entry answered (localStorage, mirrors read-state) and toast confirmation.
+ *
+ * Returns true on success. A dead session (pty already exited) is reported as
+ * an error toast and returns false — the caller's UI already shows a tombstone
+ * in that case, so this is the belt-and-braces path for a race.
+ */
+export async function replyToInboxEntry(
+  entryId: string,
+  sessionId: string,
+  text: string
+): Promise<boolean> {
+  const body = text.trim();
+  if (!body) return false;
+  try {
+    await window.cc.terminals.reply(sessionId, body);
+    useInboxAnswered.getState().markAnswered(entryId);
+    useUi.getState().pushToast('Reply sent', 'info');
+    return true;
+  } catch (err) {
+    pushErrorToast(errorMessage(err, 'Failed to send reply'));
+    return false;
   }
 }

@@ -132,6 +132,9 @@ export function App() {
         case 'app:openShortcuts':
           ui.setShortcutsOpen(!ui.shortcutsOpen);
           return;
+        case 'app:openScheduler':
+          ui.setNav('scheduler');
+          return;
         case 'app:toggleWorkspaceMode':
           if (projectId) ui.toggleWorkspaceMode(projectId);
           return;
@@ -150,8 +153,13 @@ export function App() {
           return;
         case 'app:reopenTab':
           if (projectId) {
-            data.reopenLastClosed(projectId).then((s) => {
-              if (s) ui.selectTab(projectId, s.id);
+            // Mirror ⌘⇧T: resume the newest detached session first, else
+            // reopen the last closed tab.
+            data.restoreLastDetached(projectId).then((restored) => {
+              if (restored) return;
+              data.reopenLastClosed(projectId).then((s) => {
+                if (s) ui.selectTab(projectId, s.id);
+              });
             });
           }
           return;
@@ -161,8 +169,16 @@ export function App() {
           if (!activeId) return;
           const tab = (data.terminals[projectId] ?? []).find((t) => t.id === activeId);
           if (tab?.pinned) return;
-          // ⌘W hides; the pty keeps running. Use right-click → Kill to drop it.
-          data.hideTerminal(activeId, projectId);
+          // ⌘W closes (terminates) the active tab, matching peer tools. Confirm
+          // for a live session; ⌘⇧T reopens. Detach is ⌘⇧W.
+          if (
+            tab &&
+            tab.status !== 'exited' &&
+            !window.confirm(`Close “${tab.title}”? The process will be terminated.`)
+          ) {
+            return;
+          }
+          data.closeTerminal(activeId, projectId);
           return;
         }
       }

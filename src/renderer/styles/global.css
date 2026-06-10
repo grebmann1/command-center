@@ -726,6 +726,12 @@ body.resizing-col {
   color: var(--accent-red, #f85149);
 }
 
+.modal-warning {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--accent-gold, #d4a017);
+}
+
 .modal-hint {
   font-size: 11px;
   color: var(--text-dim);
@@ -3536,6 +3542,100 @@ body.resizing-col {
 .inbox-detail-open .strong {
   color: var(--text-primary);
   font-weight: 500;
+}
+
+/* Reply-back box — write-half of the inbox question loop. Sits under the
+   "Open in session" button, shown only when the originating session is alive. */
+.inbox-reply {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox-reply-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 56px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  transition: border-color 0.1s ease;
+}
+
+.inbox-reply-input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+
+.inbox-reply-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.inbox-reply-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.inbox-reply-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 7px;
+  border: 1px solid var(--accent-blue);
+  background: var(--accent-blue);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  transition: opacity 0.1s ease;
+}
+
+.inbox-reply-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.inbox-reply-send:not(:disabled):hover {
+  opacity: 0.9;
+}
+
+/* Collapsed "Replied to …" confirmation state. */
+.inbox-reply.answered {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+.inbox-reply-answered-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.inbox-reply-answered-label .strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.inbox-reply-again {
+  font-size: 12px;
+  color: var(--accent-blue);
+}
+
+.inbox-reply-again:hover {
+  text-decoration: underline;
 }
 
 .inbox-detail-meta-id {

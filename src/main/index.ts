@@ -41,8 +41,9 @@ import {
 } from './skills.js';
 import { SkillBundlesStore } from './skill-bundles-store.js';
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
-import { listSshHosts } from './ssh-config.js';
+import { listSshHosts, syncWorkspaceHosts } from './ssh-config.js';
 import { SchedulerManager } from './scheduler.js';
+import { TrayController } from './tray.js';
 import { TemplateStore } from './template-store.js';
 import { MainModuleHost } from './modules/registry.js';
 import { MAIN_MODULES } from './modules/index.js';
@@ -202,6 +203,7 @@ let win: BrowserWindow | null = null;
 const ptys = new PtyManager();
 const inboxStore: IInboxStore = createInboxStore();
 const scheduler = new SchedulerManager();
+let tray: TrayController | null = null;
 const templates = new TemplateStore(() => store.listProjects());
 const moduleHost = new MainModuleHost({ log: logMainError });
 const skillBundles = new SkillBundlesStore();
@@ -237,6 +239,17 @@ function safeSend(channel: string, ...args: unknown[]) {
   } catch (err) {
     logMainError(`send ${channel}`, err);
   }
+}
+
+/** Bring the main window forward, recreating it if it was closed (macOS). */
+function showMainWindow() {
+  if (!win || win.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
 }
 
 function safeHandle<TArgs extends unknown[], TResult>(
@@ -409,6 +422,7 @@ function registerIpc() {
     }
   );
   safeHandle(IPC.ssh.listHosts, () => listSshHosts(), () => []);
+  safeHandle(IPC.ssh.syncHosts, () => syncWorkspaceHosts(), () => ({ hosts: [] }));
   safeHandle(
     IPC.projects.remove,
     (id: string) => {
@@ -488,6 +502,13 @@ function registerIpc() {
   safeHandle(
     IPC.terminals.write,
     (id: string, data: string) => ptys.write(id, data),
+    () => undefined
+  );
+  safeHandle(
+    IPC.terminals.reply,
+    (id: string, text: string) => {
+      ptys.reply(id, text);
+    },
     () => undefined
   );
   safeHandle(
@@ -968,6 +989,27 @@ app.whenReady().then(() => {
   registerIpc();
   scheduler.setDeps({ ptys, store, inbox: inboxStore, logger: logMainError });
   scheduler.loadAll(store.listProjects());
+  // macOS menu-bar presence for the scheduler: live schedule list, a
+  // running-count badge, and show/quit controls. Reads the same scheduler +
+  // pty state the window does. Non-fatal if it fails to start.
+  try {
+    tray = new TrayController({
+      scheduler,
+      ptys,
+      projectName: (id) => store.listProjects().find((p) => p.id === id)?.name ?? 'project',
+      iconPath,
+      showWindow: showMainWindow,
+      focusSession: (sessionId, projectId) => {
+        showMainWindow();
+        safeSend('app:focusSession', sessionId, projectId);
+      },
+      openScheduler: () => safeSend('app:openScheduler'),
+      logger: logMainError
+    });
+    tray.start();
+  } catch (err) {
+    logMainError('tray.start', err);
+  }
   // Wake-from-sleep can leave many schedules well past their armed delay;
   // a re-load triggers our `arm()` drift fix so each one re-arms fresh
   // rather than firing in a stampede the moment the laptop wakes up.
@@ -991,6 +1033,12 @@ app.whenReady().then(() => {
     inboxStore,
     projects: {
       get: (id: string) => store.listProjects().find((p) => p.id === id) ?? null
+    },
+    // Auto-close: a scheduled session's Stop hook pinged back. Close that
+    // exact pty as an *expected* close so the scheduler logs success, not a
+    // kill-signal error.
+    onStopHook: (_projectId: string, sessionId: string) => {
+      ptys.closeExpected(sessionId);
     }
   })
     .then(async (handle) => {
@@ -1014,12 +1062,49 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  ptys.killAll();
+  // On macOS the app stays alive after the last window closes (standard
+  // behavior), so we must NOT kill the ptys here — background sessions are
+  // meant to keep running. Teardown happens in `before-quit`. On other
+  // platforms closing the last window quits, which routes through
+  // before-quit and its confirmation below.
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+// Set once the user has confirmed (or there was nothing to confirm) so the
+// teardown path runs exactly once and re-entrant before-quit events don't
+// re-prompt.
+let quitConfirmed = false;
+
+app.on('before-quit', (event) => {
+  // Guard the user's running work: if any ptys are still alive, make quitting
+  // a deliberate choice instead of silently killing in-flight agents and
+  // background sessions (the previous behavior). Sessions aren't persisted, so
+  // quitting really does end them.
+  if (!quitConfirmed) {
+    const live = ptys.liveCount();
+    if (live > 0) {
+      const opts = {
+        type: 'warning' as const,
+        buttons: ['Quit', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        message: `Quit and end ${live} running session${live > 1 ? 's' : ''}?`,
+        detail:
+          'Terminals (including background ones) are not saved between launches. Quitting will terminate them.'
+      };
+      const choice = win
+        ? dialog.showMessageBoxSync(win, opts)
+        : dialog.showMessageBoxSync(opts);
+      if (choice === 1) {
+        event.preventDefault();
+        return;
+      }
+    }
+    quitConfirmed = true;
+  }
   scheduler.stopAll();
+  tray?.stop();
+  tray = null;
   templates.stop();
   skillBundles.stop();
   stopSkillsWatchers();

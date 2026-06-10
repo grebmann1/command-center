@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon } from 'lucide-react';
+import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, EyeOff } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
 import {
   useData,
@@ -8,6 +8,7 @@ import {
   useInboxRead,
   sortProjectsForDisplay,
   visibleTerminals,
+  backgroundTerminals,
   applyListPaneWidth,
   LIST_PANE_MIN,
   LIST_PANE_MAX
@@ -461,14 +462,16 @@ function ProjectsList() {
               </div>
               {(() => {
                 const list = visibleTerminals(terminals[p.id]);
+                const background = backgroundTerminals(terminals[p.id]);
                 const running = list.filter((t) => t.status !== 'exited').length;
                 const exited = list.filter((t) => t.status === 'exited').length;
                 const crashed = list.filter(
                   (t) => t.status === 'exited' && (t.exitCode ?? 0) !== 0
                 ).length;
-                if (list.length === 0) return null;
+                if (list.length === 0 && background.length === 0) return null;
                 const expanded = !!projectExpanded[p.id];
                 const titleParts = [`${running} running`, `${exited} exited`];
+                if (background.length > 0) titleParts.push(`${background.length} background`);
                 if (crashed > 0) titleParts.push(`${crashed} crashed`);
                 return (
                   <button
@@ -485,6 +488,15 @@ function ProjectsList() {
                   >
                     {running}
                     {exited > 0 && <span className="project-badge-exited">·{exited}</span>}
+                    {background.length > 0 && (
+                      <span
+                        className="project-badge-bg"
+                        title={`${background.length} running in the background`}
+                      >
+                        <EyeOff size={9} strokeWidth={2.5} />
+                        {background.length}
+                      </span>
+                    )}
                     {crashed > 0 && (
                       <span className="project-badge-crashed" aria-hidden="true" />
                     )}
@@ -537,10 +549,21 @@ function ProjectsList() {
                       <button
                         type="button"
                         className="project-terminal-close"
-                        aria-label={`Close ${t.title}`}
-                        title="Close"
+                        aria-label={exited ? `Dismiss ${t.title}` : `Close ${t.title}`}
+                        title={exited ? 'Dismiss' : 'Close (ends the process)'}
                         onClick={(e) => {
                           e.stopPropagation();
+                          // Match the tab strip's X: confirm before killing a
+                          // live process so a stray click can't terminate a
+                          // running agent. Exited tabs dismiss without a prompt.
+                          if (
+                            !exited &&
+                            !window.confirm(
+                              `Close “${t.title}”? The process will be terminated.`
+                            )
+                          ) {
+                            return;
+                          }
                           closeTerminal(t.id, p.id);
                         }}
                       >

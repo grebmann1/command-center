@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { TerminalSquare, FolderTree, GitBranch, Columns2, Rows2, LayoutGrid, Square, Globe } from 'lucide-react';
 import type { SplitLayout, WorkspaceMode } from '../store';
-import { useData, useUi, visibleTerminals } from '../store';
+import { useData, useUi, visibleTerminals, backgroundTerminals } from '../store';
 import { TabBar } from './TabBar';
 import { TerminalSurface } from './TerminalSurface';
 import { ClaudeSessionsList } from './ClaudeSessionsList';
@@ -52,9 +52,7 @@ export function Workspace() {
   const project = projects.find((p) => p.id === selectedProjectId) ?? null;
   const gitStatus = useData((s) => (project ? s.gitStatus[project.id] : null)) ?? null;
   const tabs = project ? visibleTerminals(terminals[project.id]) : [];
-  const hiddenTabs = project
-    ? (terminals[project.id] ?? []).filter((t) => t.headless)
-    : [];
+  const backgroundTabs = project ? backgroundTerminals(terminals[project.id]) : [];
   const activeTabId = project ? selectedTabId[project.id] : undefined;
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
   const mode: WorkspaceMode = project
@@ -192,10 +190,11 @@ export function Workspace() {
             tabs={tabs}
             activeTabId={activeTab?.id}
             onSelect={(id) => project && selectTab(project.id, id)}
-            onClose={(id) => project && hideTerminal(id, project.id)}
-            onKill={(id) => project && closeTerminal(id, project.id)}
-            hiddenTabs={hiddenTabs}
-            onRestoreHidden={(id) => project && restoreTerminal(id, project.id)}
+            onClose={(id) => project && closeTerminal(id, project.id)}
+            onDetach={(id) => project && hideTerminal(id, project.id)}
+            backgroundTabs={backgroundTabs}
+            onResumeBackground={(id) => project && restoreTerminal(id, project.id)}
+            onKillBackground={(id) => project && closeTerminal(id, project.id)}
             onNew={handleNewTab}
             onReorder={(from, to) => project && reorderTerminal(project.id, from, to)}
             onRename={(id, title) => project && renameTerminal(project.id, id, title)}

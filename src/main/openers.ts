@@ -63,5 +63,14 @@ export async function openIn(target: OpenTarget, path: string): Promise<OpenResu
       }
       return spawnDetached('open', ['-a', pickMacTerminalApp(), path]);
     }
+    case 'browser': {
+      // `path` is a URL here. Only allow http(s) so a module can't coerce
+      // the shell into opening file:// or app-scheme links.
+      if (!/^https?:\/\//i.test(path)) {
+        return { ok: false, message: 'Only http(s) URLs can be opened in the browser.' };
+      }
+      await shell.openExternal(path);
+      return { ok: true };
+    }
   }
 }

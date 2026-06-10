@@ -190,22 +190,49 @@ export function installShortcuts(): () => void {
       }).catch(() => {});
       return;
     }
-    // cmd+shift+t — reopen last closed tab in this project
+    // cmd+shift+t — bring back the last removed tab. Prefer resuming the most
+    // recently detached (background) session — that restores the live pty with
+    // its scrollback — and fall back to reopening the last closed tab (a fresh
+    // pty) when nothing is detached. This matches the browser/editor muscle
+    // memory that ⌘⇧T undoes your last tab removal.
     if ((e.key === 'T' || (e.key === 't' && e.shiftKey)) && e.shiftKey) {
       if (!projectId) return;
       e.preventDefault();
-      data.reopenLastClosed(projectId).then((s) => {
-        if (s) ui.selectTab(projectId, s.id);
+      data.restoreLastDetached(projectId).then((restored) => {
+        if (restored) return; // a background session was resumed
+        data.reopenLastClosed(projectId).then((s) => {
+          if (s) ui.selectTab(projectId, s.id);
+        }).catch(() => {});
       }).catch(() => {});
       return;
     }
-    // cmd+w — hide current tab (pty keeps running; right-click → Kill to drop).
-    if (e.key === 'w') {
+    // cmd+shift+w — send current tab to the background (detach; pty keeps
+    // running). Paired with ⌘W (close); resume from the + menu's Background
+    // section or with ⌘⇧T.
+    if ((e.key === 'W' || (e.key === 'w' && e.shiftKey)) && e.shiftKey) {
+      if (!projectId || !activeTabId) return;
+      e.preventDefault();
+      const active = tabs.find((t) => t.id === activeTabId);
+      if (active?.pinned || active?.status === 'exited') return;
+      data.hideTerminal(activeTabId, projectId).catch(() => {});
+      return;
+    }
+    // cmd+w — close current tab (terminates the process), like every peer
+    // terminal/editor. Confirm for live sessions so a stray chord can't kill a
+    // running agent; exited tabs dismiss without a prompt. ⌘⇧T reopens.
+    if (e.key === 'w' && !e.shiftKey) {
       if (!projectId || !activeTabId) return;
       e.preventDefault();
       const active = tabs.find((t) => t.id === activeTabId);
       if (active?.pinned) return;
-      data.hideTerminal(activeTabId, projectId).catch(() => {});
+      if (
+        active &&
+        active.status !== 'exited' &&
+        !window.confirm(`Close “${active.title}”? The process will be terminated.`)
+      ) {
+        return;
+      }
+      data.closeTerminal(activeTabId, projectId).catch(() => {});
       return;
     }
     // cmd+1..9 (or cmd+shift+1..9) — switch tab / project.

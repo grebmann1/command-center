@@ -241,6 +241,13 @@ export function SchedulerPanel() {
                 useUi.getState().setSchedulerTab('global');
               }
             }}
+            onOpenTerminal={(t, sessionId) => {
+              // Switch to the project's tab strip and select the live session
+              // — same path as a Scheduler row's "Open" button.
+              useUi.getState().setNav('projects');
+              useUi.getState().selectProject(t.projectId);
+              useUi.getState().selectTab(t.projectId, sessionId);
+            }}
             onEdit={(t) => setEditing(t)}
           />
         ) : scopedTasks.length === 0 ? (
@@ -781,6 +788,9 @@ function ScheduleModal({
   const [notifyInbox, setNotifyInbox] = useState<boolean>(
     task?.notifyInbox ?? seededTask?.notifyInbox ?? false
   );
+  const [autoCloseOnFinish, setAutoCloseOnFinish] = useState<boolean>(
+    task?.autoCloseOnFinish ?? seededTask?.autoCloseOnFinish ?? false
+  );
   const [scope, setScope] = useState<'global' | 'project'>(() => {
     if (task?.source && task.source !== 'global') return 'project';
     if (seededTask?.source && seededTask.source !== 'global') return 'project';
@@ -844,7 +854,8 @@ function ScheduleModal({
           prompt: prompt.trim() || undefined,
           extraArgs: seededTemplate?.defaults.extraArgs ?? seededTask?.extraArgs,
           scope: scope === 'project' ? { projectId } : 'global',
-          notifyInbox
+          notifyInbox,
+          autoCloseOnFinish
         };
         const result = await window.cc.scheduler.create(input);
         if (!result.ok) {
@@ -860,7 +871,8 @@ function ScheduleModal({
           profile,
           every,
           prompt,
-          notifyInbox
+          notifyInbox,
+          autoCloseOnFinish
         });
         if (!result.ok) {
           setError(result.message);
@@ -1058,6 +1070,30 @@ function ScheduleModal({
                 Notify on completion
                 <span className="scheduler-form-optional">
                   {' '}— append an inbox entry summarising each run.
+                </span>
+              </span>
+            </label>
+          </div>
+          <div className="scheduler-form-field">
+            <label
+              className="scheduler-checkbox-row"
+              title={
+                profile === 'shell'
+                  ? 'Only available for claude profiles — a shell has no “finished” signal.'
+                  : undefined
+              }
+            >
+              <input
+                type="checkbox"
+                checked={autoCloseOnFinish && profile !== 'shell'}
+                disabled={profile === 'shell'}
+                onChange={(e) => setAutoCloseOnFinish(e.target.checked)}
+              />
+              <span>
+                Auto-close when finished
+                <span className="scheduler-form-optional">
+                  {' '}— close the terminal once Claude finishes responding
+                  (via a Stop hook). Otherwise the tab stays open.
                 </span>
               </span>
             </label>
@@ -1262,12 +1298,14 @@ function SchedulerOverview({
   projects,
   tick,
   onJump,
+  onOpenTerminal,
   onEdit
 }: {
   tasks: ScheduledTask[];
   projects: Project[];
   tick: number;
   onJump: (t: ScheduledTask) => void;
+  onOpenTerminal: (t: ScheduledTask, sessionId: string) => void;
   onEdit: (t: ScheduledTask) => void;
 }) {
   const terminalsByProject = useData((s) => s.terminals);
@@ -1282,11 +1320,21 @@ function SchedulerOverview({
         }
       }
     }
-    const run = tasks.filter((t) => {
-      const sid = t.status?.lastRunSessionId;
-      if (!sid) return false;
-      return live.has(`${t.projectId}:${sid}`);
-    });
+    // Walk the run history newest→oldest so a task whose latest record is a
+    // 'skipped' (no sessionId) but whose previous run is still alive still
+    // shows up. Emit one row per live task with its live session id.
+    const run: Array<{ task: ScheduledTask; sessionId: string }> = [];
+    for (const t of tasks) {
+      const runs = t.status?.runs ?? [];
+      let sid: string | null = null;
+      for (const r of runs) {
+        if (r.sessionId && live.has(`${t.projectId}:${r.sessionId}`)) {
+          sid = r.sessionId;
+          break;
+        }
+      }
+      if (sid) run.push({ task: t, sessionId: sid });
+    }
     const dayAgo = Date.now() - 24 * 3600 * 1000;
     let r24 = 0, ok = 0, err = 0, skip = 0;
     for (const t of tasks) {
@@ -1373,6 +1421,49 @@ function SchedulerOverview({
           accent={errors24 > 0 ? 'error' : undefined}
         />
       </section>
+
+      {running.length > 0 && (
+        <section className="overview-card">
+          <header className="overview-card-header">
+            <Activity size={14} />
+            <h3>Running now</h3>
+            <span className="overview-card-badge">{running.length}</span>
+          </header>
+          <ul className="overview-list">
+            {running.map(({ task, sessionId }) => {
+              const project = projects.find((p) => p.id === task.projectId);
+              return (
+                <li key={task.id} className="overview-item">
+                  <span
+                    className="scheduler-status-dot scheduler-status-dot--running"
+                    aria-hidden="true"
+                  />
+                  <button
+                    type="button"
+                    className="overview-item-main"
+                    onClick={() => onOpenTerminal(task, sessionId)}
+                    title="Jump into the running terminal"
+                  >
+                    <div className="overview-item-name">{task.name}</div>
+                    <div className="overview-item-meta">
+                      {project?.name ?? '⟨missing⟩'} · {PROFILE_LABEL[task.profile]} · every {formatInterval(parseEvery(task.schedule.every) ?? 0)}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => onOpenTerminal(task, sessionId)}
+                    title="Open running terminal"
+                    aria-label="Open running terminal"
+                  >
+                    <ExternalLink size={14} />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <div className="overview-columns">
         <section className="overview-card">
