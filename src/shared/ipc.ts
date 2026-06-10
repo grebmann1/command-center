@@ -16,6 +16,7 @@ export const IPC = {
     list: 'terminals:list',
     create: 'terminals:create',
     write: 'terminals:write',
+    reply: 'terminals:reply',
     resize: 'terminals:resize',
     close: 'terminals:close',
     setHeadless: 'terminals:setHeadless',
@@ -93,6 +94,17 @@ export const IPC = {
   },
   app: {
     homedir: 'app:homedir'
+  },
+  /**
+   * Generic multiplexer for app modules (plugins/*). One channel pair for
+   * all modules: `call` dispatches `{ moduleId, capability, args }` to the
+   * module's main-side capability map; `storage*` back `ModuleHost.storage`.
+   * Modules add nothing else to this file.
+   */
+  modules: {
+    call: 'modules:call',
+    storageGet: 'modules:storageGet',
+    storageSet: 'modules:storageSet'
   },
   scheduler: {
     list: 'scheduler:list',

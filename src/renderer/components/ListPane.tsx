@@ -13,6 +13,7 @@ import {
   LIST_PANE_MAX
 } from '../store';
 import type { OpenTarget } from '@shared/types';
+import { MODULE_IDS } from '../modules';
 import { InboxSidebar } from './InboxSidebar';
 import { AddRemoteProjectDialog } from './AddRemoteProjectDialog';
 import { profileIcon } from '../util/profileIcon';
@@ -40,6 +41,9 @@ export function ListPane() {
   if (nav === 'settings') return <SettingsPane />;
   if (nav === 'scheduler') return <SchedulerPane />;
   if (nav === 'inbox') return <InboxPane />;
+  // App modules (plugins/*) own the whole content area and bring their own
+  // filter rail — they don't want the Projects list column.
+  if (MODULE_IDS.includes(nav)) return null;
   return <ProjectsList />;
 }
 

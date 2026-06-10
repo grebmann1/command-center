@@ -15,6 +15,8 @@ import { ResumePicker } from './components/ResumePicker';
 import { SearchPanel } from './components/SearchPanel';
 import { ShortcutsHelp } from './components/ShortcutsHelp';
 import { Toaster } from './components/Toaster';
+import { ModulePanelHost } from './modules/ModulePanelHost';
+import { APP_MODULES } from './modules';
 import {
   scheduleGitRefresh,
   useData,
@@ -64,6 +66,11 @@ export function App() {
     }
     if (nav === 'mcp') {
       document.title = `${inboxBadge}MCP · ${base}`;
+      return;
+    }
+    const activeModule = APP_MODULES.find((m) => m.id === nav);
+    if (activeModule) {
+      document.title = `${inboxBadge}${activeModule.titleLabel ?? activeModule.title} · ${base}`;
       return;
     }
     const project = projects.find((p) => p.id === selectedProjectId);
@@ -190,6 +197,7 @@ export function App() {
       {nav === 'skills' && <SkillsPanel />}
       {nav === 'mcp' && <McpPanel />}
       {nav === 'settings' && <SettingsPanel />}
+      <ModulePanelHost />
       <CommandPaletteHost />
       <QuickOpenHost />
       <ResumePickerHost />

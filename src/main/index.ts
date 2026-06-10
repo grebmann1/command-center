@@ -44,6 +44,8 @@ import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import { listSshHosts } from './ssh-config.js';
 import { SchedulerManager } from './scheduler.js';
 import { TemplateStore } from './template-store.js';
+import { MainModuleHost } from './modules/registry.js';
+import { MAIN_MODULES } from './modules/index.js';
 import { homedir } from 'node:os';
 import type {
   CreateTerminalRequest,
@@ -201,6 +203,7 @@ const ptys = new PtyManager();
 const inboxStore: IInboxStore = createInboxStore();
 const scheduler = new SchedulerManager();
 const templates = new TemplateStore(() => store.listProjects());
+const moduleHost = new MainModuleHost({ log: logMainError });
 const skillBundles = new SkillBundlesStore();
 const skillWatchers: FSWatcher[] = [];
 let activeProjectSkillsWatcher: FSWatcher | null = null;
@@ -778,6 +781,31 @@ function registerIpc() {
   templates.on('changed', () => {
     safeSend(IPC.scheduler.onTemplatesChanged, templates.list());
   });
+
+  // App-module multiplexer: one handler set serves every module (plugins/*).
+  // `call` dispatches to the module's capability; `storage*` back its KV store.
+  safeHandle(
+    IPC.modules.call,
+    (moduleId: string, capability: string, args: unknown[]) =>
+      moduleHost.dispatch(moduleId, capability, Array.isArray(args) ? args : []),
+    (err) => {
+      // Re-throw so the renderer's invoke() rejects with the real message,
+      // which the module panel renders in its error state.
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  );
+  safeHandle(
+    IPC.modules.storageGet,
+    (moduleId: string, key: string) => moduleHost.storageGet(moduleId, key),
+    () => undefined
+  );
+  safeHandle(
+    IPC.modules.storageSet,
+    (moduleId: string, key: string, value: unknown) => {
+      moduleHost.storageSet(moduleId, key, value);
+    },
+    () => undefined
+  );
 }
 
 function buildAppMenu() {
@@ -953,6 +981,9 @@ app.whenReady().then(() => {
   templates.start();
   skillBundles.start();
   startSkillsWatchers();
+  // Boot app modules (plugins/*). Each module's setup() runs once; failures
+  // are isolated per-module so a broken module never blocks app start.
+  moduleHost.setupAll(MAIN_MODULES).catch((err) => logMainError('moduleHost.setupAll', err));
   // Boot the local MCP server, then plumb its URL into PtyManager so any
   // claude-family terminal spawns get `CC_MCP_URL` injected. Errors here
   // are logged but non-fatal — the app still works without inbox push.

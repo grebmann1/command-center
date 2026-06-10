@@ -225,7 +225,7 @@ export interface SearchResult {
   truncated: boolean;
 }
 
-export type OpenTarget = 'cursor' | 'code' | 'finder' | 'terminal';
+export type OpenTarget = 'cursor' | 'code' | 'finder' | 'terminal' | 'browser';
 
 export interface OpenResult {
   ok: boolean;
@@ -656,6 +656,16 @@ export interface CcApi {
     listTemplates(): Promise<ScheduleTemplate[]>;
     onTemplatesChanged(cb: (templates: ScheduleTemplate[]) => void): () => void;
     revealTemplatesDir(): Promise<{ ok: boolean; path: string; message?: string }>;
+  };
+  /**
+   * Generic bridge for app modules (plugins/*). `call` invokes a module's
+   * main-side capability; `storage*` back the per-module KV store. Backs
+   * `ModuleHost` in the renderer — modules never touch this directly.
+   */
+  modules: {
+    call(moduleId: string, capability: string, args: unknown[]): Promise<unknown>;
+    storageGet(moduleId: string, key: string): Promise<unknown>;
+    storageSet(moduleId: string, key: string, value: unknown): Promise<void>;
   };
 }
 

@@ -31,6 +31,7 @@ const api: CcApi = {
     list: (projectId) => ipcRenderer.invoke(IPC.terminals.list, projectId),
     create: (req: CreateTerminalRequest) => ipcRenderer.invoke(IPC.terminals.create, req),
     write: (id, data) => ipcRenderer.invoke(IPC.terminals.write, id, data),
+    reply: (id, text) => ipcRenderer.invoke(IPC.terminals.reply, id, text),
     resize: (id, cols, rows) => ipcRenderer.invoke(IPC.terminals.resize, id, cols, rows),
     close: (id) => ipcRenderer.invoke(IPC.terminals.close, id),
     setHeadless: (id, headless) =>
@@ -173,6 +174,13 @@ const api: CcApi = {
       return () => ipcRenderer.off(IPC.scheduler.onTemplatesChanged, handler);
     },
     revealTemplatesDir: () => ipcRenderer.invoke(IPC.scheduler.revealTemplatesDir)
+  },
+  modules: {
+    call: (moduleId, capability, args) =>
+      ipcRenderer.invoke(IPC.modules.call, moduleId, capability, args),
+    storageGet: (moduleId, key) => ipcRenderer.invoke(IPC.modules.storageGet, moduleId, key),
+    storageSet: (moduleId, key, value) =>
+      ipcRenderer.invoke(IPC.modules.storageSet, moduleId, key, value)
   },
   app: {
     onMenuEvent: (cb: (event: string) => void) => {
