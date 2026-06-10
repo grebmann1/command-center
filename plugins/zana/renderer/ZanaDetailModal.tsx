@@ -19,27 +19,51 @@ import {
   Tag,
   Ban,
   FileText,
+  History,
+  ArrowRight,
+  ChevronDown,
+  CheckCircle2,
+  XCircle,
+  Cpu,
   Ticket as TicketIcon
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ModuleHost } from '../../../src/shared/module-api';
-import type { ZanaArtifact, ZanaSprint, ZanaTicket } from '../shared/types';
+import type {
+  ZanaArtifact,
+  ZanaAuditEntry,
+  ZanaProfile,
+  ZanaProfileDetail,
+  ZanaSprint,
+  ZanaTicket,
+  ZanaTicketDetail
+} from '../shared/types';
 import { unwrapBareFence } from '../../../src/renderer/util/markdown';
+import { AssignMenu, profileLabel, type AssignChoice, type ProfileMap } from './ZanaAssign';
 
 /** Either kind of record the modal can show, tagged by `kind`. */
 export type ZanaSelection =
   | { kind: 'ticket'; ticket: ZanaTicket }
-  | { kind: 'artifact'; artifact: ZanaArtifact };
+  | { kind: 'artifact'; artifact: ZanaArtifact }
+  | { kind: 'profile'; profile: ZanaProfile };
 
 interface Props {
   host: ModuleHost;
   selection: ZanaSelection;
   /** Resolved sprints, so a ticket can show its sprint name not just the id. */
   sprints: ZanaSprint[];
-  /** Source coords for fetching an artifact's full content. */
+  /** All snapshot tickets, so blocker ids can resolve to ticket titles. */
+  tickets: ZanaTicket[];
+  /** Workspace profiles for the assignment picker + profile chip. */
+  profiles: ZanaProfile[];
+  /** Profile id → profile lookup, for resolving the assignee's profile. */
+  profileMap: ProfileMap;
+  /** Source coords for fetching an artifact's full content / ticket detail. */
   projectPath?: string;
   useGlobal: boolean;
+  /** Apply an assignment choice (optimistic patch + deferred write live in the panel). */
+  onAssign: (choice: AssignChoice) => void;
   onClose: () => void;
 }
 
@@ -93,8 +117,12 @@ export function ZanaDetailModal({
   host,
   selection,
   sprints,
+  tickets,
+  profiles,
+  profileMap,
   projectPath,
   useGlobal,
+  onAssign,
   onClose
 }: Props) {
   useEffect(() => {
@@ -111,17 +139,41 @@ export function ZanaDetailModal({
         className="gus-modal zana-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={selection.kind === 'ticket' ? selection.ticket.title : selection.artifact.title}
+        aria-label={
+          selection.kind === 'ticket'
+            ? selection.ticket.title
+            : selection.kind === 'artifact'
+              ? selection.artifact.title
+              : selection.profile.displayName
+        }
         onMouseDown={(e) => e.stopPropagation()}
       >
         {selection.kind === 'ticket' ? (
-          <TicketDetail ticket={selection.ticket} sprints={sprints} onClose={onClose} />
-        ) : (
+          <TicketDetail
+            host={host}
+            ticket={selection.ticket}
+            sprints={sprints}
+            tickets={tickets}
+            profiles={profiles}
+            profileMap={profileMap}
+            projectPath={projectPath}
+            useGlobal={useGlobal}
+            onAssign={onAssign}
+            onClose={onClose}
+          />
+        ) : selection.kind === 'artifact' ? (
           <ArtifactDetail
             host={host}
             artifact={selection.artifact}
             projectPath={projectPath}
             useGlobal={useGlobal}
+            onClose={onClose}
+          />
+        ) : (
+          <ProfileDetail
+            host={host}
+            profile={selection.profile}
+            tickets={tickets}
             onClose={onClose}
           />
         )}
@@ -132,30 +184,199 @@ export function ZanaDetailModal({
 
 // ── Ticket ───────────────────────────────────────────────────────────────
 
+/** Coerce an unknown detail value to a short, displayable string. */
+function detailValue(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+/**
+ * Human rendering of an audit entry's `details`, with nice special-cases for
+ * the common actions and a generic key/value pill fallback for everything else.
+ */
+function AuditDetail({ entry }: { entry: ZanaAuditEntry }) {
+  const d = entry.details ?? {};
+  const action = entry.action;
+
+  if (action === 'status_changed' && ('from' in d || 'to' in d)) {
+    return (
+      <div className="zana-timeline-detail">
+        {d.from != null && <span className="zana-status-from">{detailValue(d.from)}</span>}
+        <ArrowRight size={11} className="zana-status-arrow" aria-hidden />
+        <span className="zana-status-to">{detailValue(d.to)}</span>
+      </div>
+    );
+  }
+
+  if (action === 'claimed' && 'agentName' in d) {
+    return (
+      <div className="zana-timeline-detail">
+        claimed by <strong>{detailValue(d.agentName)}</strong>
+      </div>
+    );
+  }
+
+  if (action === 'assigned') {
+    // Backend appends details:{ profileId, assigneeName, from }.
+    const who = d.assigneeName != null ? detailValue(d.assigneeName) : detailValue(d.profileId);
+    return (
+      <div className="zana-timeline-detail">
+        assigned to <strong>{who || 'someone'}</strong>
+        {d.from != null && detailValue(d.from) && (
+          <span className="zana-detail-pill">
+            <span className="zana-detail-key">from</span>
+            {detailValue(d.from)}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  if (action === 'unassigned') {
+    return (
+      <div className="zana-timeline-detail">
+        unassigned
+        {d.from != null && detailValue(d.from) && (
+          <span className="zana-detail-pill">
+            <span className="zana-detail-key">was</span>
+            {detailValue(d.from)}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  if (action === 'created') {
+    return (
+      <div className="zana-timeline-detail">
+        created
+        {d.priority != null && (
+          <span className={`zana-prio zana-prio--${detailValue(d.priority).toLowerCase()}`}>
+            {detailValue(d.priority)}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  const keys = Object.keys(d);
+  if (keys.length === 0) return null;
+  return (
+    <div className="zana-timeline-detail">
+      {keys.map((k) => (
+        <span key={k} className="zana-detail-pill">
+          <span className="zana-detail-key">{k}</span>
+          {detailValue(d[k])}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function TicketDetail({
+  host,
   ticket,
   sprints,
+  tickets,
+  profiles,
+  profileMap,
+  projectPath,
+  useGlobal,
+  onAssign,
   onClose
 }: {
+  host: ModuleHost;
   ticket: ZanaTicket;
   sprints: ZanaSprint[];
+  tickets: ZanaTicket[];
+  profiles: ZanaProfile[];
+  profileMap: ProfileMap;
+  projectPath?: string;
+  useGlobal: boolean;
+  onAssign: (choice: AssignChoice) => void;
   onClose: () => void;
 }) {
-  const sprint = ticket.sprintId ? sprints.find((s) => s.id === ticket.sprintId) : undefined;
-  const sprintLabel = sprint?.name ?? (ticket.sprintId ? shortId(ticket.sprintId) : undefined);
+  // Start from the lean snapshot ticket so the modal renders immediately, then
+  // enrich with the full on-disk detail (audit log + heavier fields). Soft-fails
+  // to the lean ticket on error.
+  const [detail, setDetail] = useState<ZanaTicketDetail>({ ...ticket, audit: [] });
+  const [loading, setLoading] = useState(true);
+  // Whether the in-modal assign dropdown is open.
+  const [assignOpen, setAssignOpen] = useState(false);
+  // Local optimistic assignee fields so the modal reflects an in-modal assign
+  // immediately (the parent patches snapshot state, but our `ticket` prop is a
+  // captured snapshot that doesn't update live).
+  const [localAssignee, setLocalAssignee] = useState<
+    Pick<ZanaTicket, 'assigneeName' | 'assigneeProfileId'> | null
+  >(null);
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    host
+      .call<ZanaTicketDetail | null>('getTicket', { projectPath, useGlobal, id: ticket.id })
+      .then((full) => {
+        if (live && full) setDetail({ ...ticket, ...full, audit: full.audit ?? [] });
+      })
+      .catch(() => {
+        /* keep the lean snapshot ticket */
+      })
+      .finally(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [host, ticket, projectPath, useGlobal]);
+
+  const sprint = detail.sprintId ? sprints.find((s) => s.id === detail.sprintId) : undefined;
+  const sprintLabel = sprint?.name ?? (detail.sprintId ? shortId(detail.sprintId) : undefined);
+
+  // Effective assignee = the local optimistic override (if an in-modal assign
+  // happened) else the fetched/snapshot value.
+  const assigneeName = localAssignee ? localAssignee.assigneeName : detail.assigneeName;
+  const assigneeProfileId = localAssignee
+    ? localAssignee.assigneeProfileId
+    : detail.assigneeProfileId;
+  const prof = profileLabel(assigneeProfileId, profileMap);
 
   const facts: Array<[string, string | undefined | null]> = [
-    ['Status', ticket.status],
-    ['Priority', ticket.priority],
-    ['Type', ticket.type],
-    ['Assignee', ticket.assigneeName],
+    ['Status', detail.status],
+    ['Priority', detail.priority],
+    ['Type', detail.type],
+    ['Assignee', assigneeName],
+    ['Created by', detail.createdBy],
     ['Sprint', sprintLabel],
-    ['Created', fmtDateTime(ticket.createdAt) || undefined],
-    ['Updated', fmtDateTime(ticket.updatedAt) || undefined],
-    ['Closed', fmtDateTime(ticket.closedAt) || undefined]
+    ['Review phase', detail.reviewPhase],
+    ['Rework count', detail.reworkCount && detail.reworkCount > 0 ? String(detail.reworkCount) : undefined],
+    ['Created', fmtDateTime(detail.createdAt) || undefined],
+    ['Updated', fmtDateTime(detail.updatedAt) || undefined],
+    ['Closed', fmtDateTime(detail.closedAt) || undefined]
   ];
   const shownFacts = facts.filter(([, v]) => v);
-  const comments = ticket.comments ?? [];
+
+  const handleAssign = (choice: AssignChoice) => {
+    setAssignOpen(false);
+    // Mirror the parent's optimistic patch locally for instant modal feedback.
+    if (choice.kind === 'clear') {
+      setLocalAssignee({ assigneeName: undefined, assigneeProfileId: undefined });
+    } else if (choice.kind === 'profile') {
+      setLocalAssignee({ assigneeName: choice.displayName, assigneeProfileId: choice.profileId });
+    } else {
+      setLocalAssignee({ assigneeName: choice.assigneeName, assigneeProfileId: undefined });
+    }
+    onAssign(choice);
+  };
+  const comments = detail.comments ?? [];
+  // Activity log newest-first (snapshot stores it chronologically).
+  const audit = [...detail.audit].reverse();
+  const ticketTitleById = (id: string) => tickets.find((t) => t.id === id)?.title;
 
   return (
     <>
@@ -163,15 +384,15 @@ function TicketDetail({
         <div className="gus-modal-title">
           <span className="gus-card-type">
             <TicketIcon size={14} aria-hidden />
-            <span>{shortId(ticket.id)}</span>
+            <span>{shortId(detail.id)}</span>
           </span>
-          {ticket.priority && (
-            <span className={`zana-prio zana-prio--${ticket.priority.toLowerCase()}`}>
-              {ticket.priority}
+          {detail.priority && (
+            <span className={`zana-prio zana-prio--${detail.priority.toLowerCase()}`}>
+              {detail.priority}
             </span>
           )}
-          {ticket.blockedBy.length > 0 && (
-            <span className="zana-blocked-tag" title={`Blocked by ${ticket.blockedBy.length}`}>
+          {detail.blockedBy.length > 0 && (
+            <span className="zana-blocked-tag" title={`Blocked by ${detail.blockedBy.length}`}>
               <Ban size={11} aria-hidden /> Blocked
             </span>
           )}
@@ -184,20 +405,68 @@ function TicketDetail({
       </header>
 
       <div className="gus-modal-body">
-        <h3 className="gus-modal-subject">{ticket.title}</h3>
+        <h3 className="gus-modal-subject">{detail.title}</h3>
 
         <dl className="gus-facts">
           {shownFacts.map(([k, v]) => (
             <div key={k} className="gus-fact">
               <dt>{k}</dt>
-              <dd>{v}</dd>
+              <dd>
+                {v}
+                {k === 'Assignee' && prof && (
+                  <span className="zana-profile-chip" title={`Profile: ${prof.displayName}`}>
+                    <span aria-hidden>{prof.icon}</span> {prof.displayName}
+                  </span>
+                )}
+              </dd>
             </div>
           ))}
         </dl>
 
-        {ticket.labels.length > 0 && (
+        {/* Assignment control — prominent dropdown to (re)assign or clear. */}
+        <div className="zana-assign-row">
+          <span className="zana-assign-row-label">
+            {assigneeName ? (
+              <>
+                Assigned to <strong>{assigneeName}</strong>
+                {prof && (
+                  <span className="zana-profile-chip" title={`Profile: ${prof.displayName}`}>
+                    <span aria-hidden>{prof.icon}</span> {prof.displayName}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="zana-card-unassigned">Unassigned</span>
+            )}
+          </span>
+          <span className="zana-assign-row-control">
+            <button
+              type="button"
+              className="zana-assign-dropdown-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setAssignOpen((o) => !o);
+              }}
+              aria-haspopup="menu"
+              aria-expanded={assignOpen}
+            >
+              {assigneeName ? 'Reassign' : 'Assign'}
+              <ChevronDown size={12} aria-hidden />
+            </button>
+            {assignOpen && (
+              <AssignMenu
+                profiles={profiles}
+                onPick={handleAssign}
+                onClose={() => setAssignOpen(false)}
+                align="right"
+              />
+            )}
+          </span>
+        </div>
+
+        {detail.labels.length > 0 && (
           <div className="zana-modal-labels">
-            {ticket.labels.map((l) => (
+            {detail.labels.map((l) => (
               <span key={l} className="zana-label-chip">
                 <Tag size={10} aria-hidden /> {l}
               </span>
@@ -205,34 +474,38 @@ function TicketDetail({
           </div>
         )}
 
-        {ticket.blockedBy.length > 0 && (
+        {detail.blockedBy.length > 0 && (
           <div className="zana-modal-section">
             <div className="gus-modal-section-label">
               <Ban size={12} aria-hidden /> Blocked by
             </div>
             <div className="zana-modal-blocked-ids">
-              {ticket.blockedBy.map((id) => (
-                <span key={id} className="gus-chip">
-                  {shortId(id)}
-                </span>
-              ))}
+              {detail.blockedBy.map((id) => {
+                const title = ticketTitleById(id);
+                return (
+                  <span key={id} className="gus-chip zana-blocker-chip" title={id}>
+                    {title ?? shortId(id)}
+                    {title && <span className="zana-blocker-id">{shortId(id)}</span>}
+                  </span>
+                );
+              })}
             </div>
           </div>
         )}
 
         <div className="zana-modal-section">
           <div className="gus-modal-section-label">Description</div>
-          {ticket.description ? (
-            <Markdown text={ticket.description} />
+          {detail.description ? (
+            <Markdown text={detail.description} />
           ) : (
             <div className="gus-modal-empty">No description.</div>
           )}
         </div>
 
-        {ticket.resultSummary && (
+        {detail.resultSummary && (
           <div className="zana-modal-section">
             <div className="gus-modal-section-label">Result summary</div>
-            <Markdown text={ticket.resultSummary} />
+            <Markdown text={detail.resultSummary} />
           </div>
         )}
 
@@ -260,6 +533,39 @@ function TicketDetail({
                 </li>
               ))}
             </ul>
+          )}
+        </div>
+
+        <div className="zana-modal-section">
+          <div className="gus-modal-section-label">
+            <History size={12} aria-hidden /> Activity
+            {audit.length > 0 && <span className="gus-chatter-count">{audit.length}</span>}
+            {loading && (
+              <Loader2 size={12} className="gus-spin zana-timeline-spinner" aria-label="Loading activity" />
+            )}
+          </div>
+          {audit.length === 0 ? (
+            <div className="gus-modal-empty">
+              {loading ? 'Loading activity…' : 'No activity recorded.'}
+            </div>
+          ) : (
+            <ol className="zana-timeline">
+              {audit.map((entry, i) => (
+                <li key={entry.id ?? i} className="zana-timeline-item">
+                  <span className="zana-timeline-dot" aria-hidden />
+                  <div className="zana-timeline-main">
+                    <div className="zana-timeline-head">
+                      <span className="zana-timeline-action">{entry.action || 'event'}</span>
+                      {entry.actor && <span className="zana-timeline-actor">{entry.actor}</span>}
+                      {entry.timestamp && (
+                        <span className="zana-timeline-time">{fmtDateTime(entry.timestamp)}</span>
+                      )}
+                    </div>
+                    <AuditDetail entry={entry} />
+                  </div>
+                </li>
+              ))}
+            </ol>
           )}
         </div>
       </div>
@@ -362,9 +668,169 @@ function ArtifactDetail({
               <Loader2 size={14} className="gus-spin" /> Loading content…
             </div>
           ) : content ? (
-            <Markdown text={content} />
+            <div className="zana-doc-reader">
+              <Markdown text={content} />
+            </div>
           ) : (
             <div className="gus-modal-empty">No content.</div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── Profile ──────────────────────────────────────────────────────────────
+
+/**
+ * Detail for one agent profile. Starts from the lean list profile (icon, name,
+ * origin, category, model, tool lists) so it renders instantly, then lazy-loads
+ * the full `ZanaProfileDetail` (system prompt, permission mode, effort level)
+ * via `getProfile`. Soft-fails to the lean profile on error. Also surfaces how
+ * many of the loaded tickets are assigned to this profile — tying the profile
+ * back to the board. Read-only.
+ */
+function ProfileDetail({
+  host,
+  profile,
+  tickets,
+  onClose
+}: {
+  host: ModuleHost;
+  profile: ZanaProfile;
+  tickets: ZanaTicket[];
+  onClose: () => void;
+}) {
+  const [detail, setDetail] = useState<ZanaProfileDetail>({ ...profile });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    setDetail({ ...profile });
+    host
+      .call<ZanaProfileDetail | null>('getProfile', { id: profile.id })
+      .then((full) => {
+        if (live && full) setDetail({ ...profile, ...full });
+      })
+      .catch(() => {
+        /* keep the lean list profile */
+      })
+      .finally(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [host, profile]);
+
+  const assignedCount = tickets.filter((t) => t.assigneeProfileId === profile.id).length;
+  const allowed = detail.allowedTools ?? [];
+  const disallowed = detail.disallowedTools ?? [];
+
+  const facts: Array<[string, string | undefined]> = [
+    ['Origin', detail.origin === 'workspace' ? 'Workspace' : 'Built-in'],
+    ['Category', detail.category],
+    ['Model', detail.model],
+    ['Permission mode', detail.permissionMode],
+    ['Effort', detail.effortLevel],
+    ['Tickets assigned', assignedCount > 0 ? String(assignedCount) : undefined]
+  ];
+  const shownFacts = facts.filter(([, v]) => v);
+
+  return (
+    <>
+      <header className="gus-modal-header">
+        <div className="gus-modal-title">
+          <span className="zana-profile-modal-icon" aria-hidden>
+            {detail.icon ?? '🤖'}
+          </span>
+          <span
+            className={`zana-profile-origin zana-profile-origin--${detail.origin}`}
+            title={detail.origin === 'workspace' ? 'Workspace profile' : 'Zana built-in profile'}
+          >
+            {detail.origin === 'workspace' ? 'Workspace' : 'Built-in'}
+          </span>
+          {detail.model && (
+            <span className="zana-type-badge zana-profile-model">
+              <Cpu size={11} aria-hidden /> {detail.model}
+            </span>
+          )}
+        </div>
+        <div className="gus-modal-header-actions">
+          <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+            <X size={14} />
+          </button>
+        </div>
+      </header>
+
+      <div className="gus-modal-body">
+        <h3 className="gus-modal-subject">{detail.displayName}</h3>
+
+        {detail.description && <p className="zana-profile-desc">{detail.description}</p>}
+
+        {shownFacts.length > 0 && (
+          <dl className="gus-facts">
+            {shownFacts.map(([k, v]) => (
+              <div key={k} className="gus-fact">
+                <dt>{k}</dt>
+                <dd>{v}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+
+        {(allowed.length > 0 || disallowed.length > 0) && (
+          <div className="zana-modal-section">
+            <div className="gus-modal-section-label">Tools</div>
+            {allowed.length > 0 && (
+              <div className="zana-profile-tools">
+                <span className="zana-profile-tools-label">
+                  <CheckCircle2 size={12} aria-hidden /> Allowed
+                </span>
+                <div className="zana-profile-tool-chips">
+                  {allowed.map((t) => (
+                    <span key={t} className="zana-label-chip zana-tool-chip zana-tool-chip--allow">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {disallowed.length > 0 && (
+              <div className="zana-profile-tools">
+                <span className="zana-profile-tools-label">
+                  <XCircle size={12} aria-hidden /> Denied
+                </span>
+                <div className="zana-profile-tool-chips">
+                  {disallowed.map((t) => (
+                    <span key={t} className="zana-label-chip zana-tool-chip zana-tool-chip--deny">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="zana-modal-section">
+          <div className="gus-modal-section-label">
+            System prompt
+            {loading && (
+              <Loader2
+                size={12}
+                className="gus-spin zana-timeline-spinner"
+                aria-label="Loading system prompt"
+              />
+            )}
+          </div>
+          {detail.systemPrompt ? (
+            <pre className="zana-profile-prompt">{detail.systemPrompt}</pre>
+          ) : (
+            <div className="gus-modal-empty">
+              {loading ? 'Loading system prompt…' : 'No system prompt.'}
+            </div>
           )}
         </div>
       </div>

@@ -62,6 +62,12 @@ export interface ModuleHost {
    * core view. Lets a module scope its data to the active project's directory.
    */
   getActiveProject(): { id: string; name: string; path: string } | null;
+
+  /**
+   * All projects open in the app shell (id, name, absolute path). Lets a
+   * module offer a project picker without reaching into core stores.
+   */
+  listProjects(): Array<{ id: string; name: string; path: string }>;
 }
 
 /**

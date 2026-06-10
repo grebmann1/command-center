@@ -260,6 +260,16 @@ input {
   padding: 12px 10px 6px;
 }
 
+/* On the collapsed rail there's no room for the heading text — swap it for a
+ * thin divider that keeps the extensions visually separated from core nav. */
+.sidebar.collapsed .nav-section-label {
+  height: 0;
+  padding: 0;
+  margin: 8px 8px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+}
+
 .nav-item {
   display: flex;
   align-items: center;
@@ -6923,4 +6933,1285 @@ body.resizing-col {
   flex-shrink: 0;
   font-size: 11px;
   color: var(--text-dim);
+}
+
+/* === Zana module ========================================================= */
+/* Read-only KPI dashboard: a KPI strip + a tab bar (Tickets/Sprints/Docs).
+   Reuses the GUS panel/header/board/card/modal classes and the same design
+   tokens; the zana-* classes below add the dashboard-specific pieces and a
+   few visual overrides. The panel root reuses .gus-panel (grid-column 2/-1). */
+
+.zana-panel {
+  /* overrides gus-panel's row layout assumptions — content scrolls itself. */
+  overflow: hidden;
+}
+
+.zana-header .zana-source-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── Shell: source rail (left) + main column (KPI + tabs + content). ─────── */
+.zana-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.zana-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Primary source rail reuses gus-rail tokens; spans the left full-height. */
+.zana-source-rail {
+  width: 210px;
+  flex: 0 0 210px;
+}
+
+/* ── KPI strip ──────────────────────────────────────────────────────────── */
+.zana-kpi-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.zana-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 92px;
+  flex: 0 0 auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 9px;
+  padding: 9px 12px;
+}
+.zana-kpi-icon {
+  color: var(--text-dim);
+  display: inline-flex;
+}
+.zana-kpi-card--open {
+  border-left-color: var(--accent-blue);
+}
+.zana-kpi-card--open .zana-kpi-icon {
+  color: var(--accent-blue);
+}
+.zana-kpi-card--done {
+  border-left-color: var(--success);
+}
+.zana-kpi-card--done .zana-kpi-icon {
+  color: var(--success);
+}
+.zana-kpi-card--blocked {
+  border-left-color: var(--danger);
+}
+.zana-kpi-card--blocked .zana-kpi-icon {
+  color: var(--danger);
+}
+.zana-kpi-value {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+.zana-kpi-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+
+/* Status / priority breakdowns sit at the end of the strip. */
+.zana-kpi-breakdowns {
+  display: flex;
+  gap: 18px;
+  flex: 1 1 320px;
+  min-width: 240px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 14px;
+}
+.zana-breakdown {
+  flex: 1;
+  min-width: 0;
+}
+.zana-breakdown-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.zana-breakdown-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.zana-breakdown-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 22px;
+  align-items: center;
+  gap: 8px;
+}
+.zana-breakdown-key {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zana-breakdown-bar {
+  height: 6px;
+  background: var(--bg-base);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.zana-breakdown-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent-blue);
+  border-radius: 4px;
+}
+.zana-breakdown-num {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: right;
+}
+
+/* ── Tabs ──────────────────────────────────────────────────────────────── */
+.zana-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.zana-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.zana-tab:hover {
+  color: var(--text-primary);
+}
+.zana-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-blue);
+}
+.zana-sprint-filter-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  margin-bottom: 6px;
+  background: color-mix(in srgb, var(--accent-blue) 14%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.zana-sprint-filter-clear:hover {
+  border-color: var(--accent-blue);
+}
+
+/* ── Content area ──────────────────────────────────────────────────────── */
+.zana-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.zana-tickets-body {
+  /* reuse gus-body's rail+content grid for the tickets tab. */
+  flex: 1;
+  min-height: 0;
+}
+.zana-rail-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  padding: 0 6px;
+}
+
+/* First-run welcome — shown when no open project has a `.zana/`. Centered
+   explainer so an unfamiliar user understands the empty section. */
+.zana-welcome {
+  max-width: 520px;
+  margin: 48px auto;
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.zana-welcome-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent-blue) 14%, transparent);
+  color: var(--accent-blue);
+  margin-bottom: 4px;
+}
+.zana-welcome-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+.zana-welcome-lead {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.zana-welcome-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.zana-welcome-how {
+  width: 100%;
+  margin-top: 10px;
+  padding: 14px 16px;
+  text-align: left;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.zana-welcome-how-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.zana-welcome-how ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.zana-welcome-how li {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.zana-welcome-how code,
+.zana-welcome-lead code {
+  font-family: monospace;
+  font-size: 11.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.zana-welcome-refresh {
+  margin-top: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.zana-welcome-refresh:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent-blue);
+}
+.zana-welcome-refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Read-only cards never show the grab cursor. */
+.zana-card {
+  cursor: pointer;
+}
+.zana-card.is-closed {
+  opacity: 0.72;
+}
+.zana-card.is-closed .gus-card-subject {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-dim);
+}
+
+/* Title-led card layout: prominent 2-line title, then a meta footer. */
+.zana-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 11px;
+}
+.zana-card-top {
+  align-items: flex-start;
+  gap: 8px;
+}
+.zana-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  /* Allow up to two lines, then ellipsis — never clipped to one. */
+  -webkit-line-clamp: 2;
+}
+.zana-card-meta {
+  row-gap: 5px;
+}
+/* Assignee: small avatar + name. */
+.zana-card-assignee {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+.zana-card-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent, #6aa3ff);
+  color: #fff;
+  font-size: 8.5px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.zana-card-assignee-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Demoted short id — dim, monospace, pushed to the far right of the footer. */
+.zana-card-id {
+  margin-left: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.zana-card-avatar--empty {
+  background: var(--bg-base);
+  color: var(--text-dim);
+  border: 1px dashed var(--border-strong);
+}
+.zana-card-unassigned {
+  color: var(--text-dim);
+  font-style: italic;
+}
+/* The resolved profile label next to an assignee (cards). */
+.zana-card-profile-chip {
+  font-size: 9.5px;
+  color: var(--text-dim);
+  background: var(--bg-base);
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* === Zana: auto-refresh toggle ============================================ */
+.zana-autorefresh-btn.is-active {
+  color: var(--accent-blue);
+}
+.zana-autorefresh-btn.is-active svg {
+  animation: zana-autorefresh-pulse 2.4s ease-in-out infinite;
+}
+.zana-autorefresh-btn.is-idle {
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+@keyframes zana-autorefresh-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* === Zana: assignment popover ============================================= */
+/* The assignee trigger on a card is a clickable button (opens AssignMenu). */
+.zana-card-assignee-wrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+button.zana-assign-trigger {
+  background: none;
+  border: none;
+  padding: 1px 4px 1px 2px;
+  margin: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  font: inherit;
+}
+button.zana-assign-trigger:hover {
+  background: var(--bg-base);
+}
+.zana-assign-caret {
+  color: var(--text-dim);
+  opacity: 0;
+  flex-shrink: 0;
+  transition: opacity 0.12s ease;
+}
+button.zana-assign-trigger:hover .zana-assign-caret,
+button.zana-assign-trigger.is-unassigned .zana-assign-caret {
+  opacity: 0.8;
+}
+
+.zana-assign-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  z-index: 50;
+  min-width: 210px;
+  max-width: 260px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.zana-assign-menu--left {
+  left: 0;
+}
+.zana-assign-menu--right {
+  right: 0;
+}
+.zana-assign-menu-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 2px 6px 4px;
+}
+.zana-assign-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.zana-assign-menu-empty {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  padding: 6px;
+}
+.zana-assign-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 7px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-primary);
+}
+.zana-assign-item:hover {
+  background: var(--bg-base);
+}
+.zana-assign-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.zana-assign-item--clear .zana-assign-item-icon {
+  color: var(--text-dim);
+}
+.zana-assign-item-name {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zana-assign-item-cat {
+  margin-left: auto;
+  font-size: 9.5px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.zana-assign-item--clear {
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border-subtle, var(--border-strong));
+  border-radius: 6px 6px 0 0;
+}
+.zana-assign-freetext {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border-subtle, var(--border-strong));
+}
+.zana-assign-freetext input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.zana-assign-freetext input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+.zana-assign-freetext button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+.zana-assign-freetext button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* === Zana: detail-modal assignment row + profile chip ===================== */
+.zana-assign-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+.zana-assign-row-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+.zana-assign-row-label strong {
+  color: var(--text-primary);
+}
+.zana-assign-row-control {
+  position: relative;
+  flex-shrink: 0;
+}
+.zana-assign-dropdown-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.zana-assign-dropdown-btn:hover {
+  filter: brightness(1.08);
+}
+/* The resolved profile chip in the modal (facts row + assign row). */
+.zana-profile-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 0 6px;
+}
+
+/* Priority chips (Zana priorities are free strings: low/medium/high/urgent…). */
+.zana-prio {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  text-transform: capitalize;
+}
+.zana-prio--urgent,
+.zana-prio--critical,
+.zana-prio--p0,
+.zana-prio--p1,
+.zana-prio--high {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+.zana-prio--medium,
+.zana-prio--p2 {
+  color: var(--accent-gold);
+  background: color-mix(in srgb, var(--accent-gold) 16%, transparent);
+}
+
+.zana-label-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zana-label-chip svg {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+.zana-type-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 14%, transparent);
+  border-radius: 4px;
+  padding: 1px 7px;
+  flex-shrink: 0;
+}
+.zana-blocked-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  border-radius: 4px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+/* ── Sprints list ──────────────────────────────────────────────────────── */
+.zana-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+.zana-sprint-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 9px;
+  padding: 11px 14px;
+  cursor: pointer;
+}
+.zana-sprint-row:hover {
+  border-color: var(--border-strong);
+  border-left-color: var(--accent-blue);
+  background: var(--bg-hover);
+}
+.zana-sprint-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.zana-sprint-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zana-sprint-counts {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+.zana-sprint-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.zana-sprint-count svg {
+  color: var(--accent-blue);
+}
+
+/* ── Docs library (single-column reading list) ─────────────────────────── */
+/* Docs are DOCUMENTS, not kanban cards: a full-width, generous reading list
+   with a doc icon, a prominent wrapping title, a plain-text excerpt and a
+   metadata row. Scrolls within the content area. */
+.zana-doc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  align-content: start;
+  /* A comfortable reading measure; the list stays left-aligned, not stretched. */
+  max-width: 860px;
+  width: 100%;
+}
+.zana-doc-item {
+  display: flex;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-blue);
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+.zana-doc-item:hover {
+  border-color: var(--border-strong);
+  border-left-color: var(--accent-blue);
+  background: var(--bg-hover);
+}
+.zana-doc-item:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+.zana-doc-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+}
+.zana-doc-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.zana-doc-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.zana-doc-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+  /* Documents get a real, wrapping title rather than a single ellipsised line. */
+  overflow-wrap: anywhere;
+}
+.zana-doc-type {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+  letter-spacing: 0.3px;
+  color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 14%, transparent);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+.zana-doc-excerpt {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  /* Clamp to ~3 lines so each entry stays scannable. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.zana-doc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.zana-doc-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.zana-doc-meta-item svg {
+  color: var(--text-dim);
+}
+.zana-doc-linked {
+  color: var(--text-muted);
+}
+.zana-doc-linked svg {
+  color: var(--accent-blue);
+}
+.zana-doc-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 1px;
+}
+
+/* ── Detail modal ──────────────────────────────────────────────────────── */
+.zana-modal .zana-modal-section {
+  margin-top: 18px;
+}
+.zana-modal .zana-modal-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 4px;
+}
+.zana-modal-blocked-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* Blocker chips resolve to ticket titles, with a dim short-id suffix. */
+.zana-blocker-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+}
+.zana-blocker-id {
+  font-size: 10px;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Activity timeline ─────────────────────────────────────────────────── */
+.zana-timeline-spinner {
+  margin-left: 6px;
+  opacity: 0.7;
+}
+.zana-timeline {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  position: relative;
+}
+/* The vertical connector line running through the dots. */
+.zana-timeline::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--border, rgba(255, 255, 255, 0.12));
+}
+.zana-timeline-item {
+  position: relative;
+  padding: 0 0 14px 20px;
+}
+.zana-timeline-item:last-child {
+  padding-bottom: 0;
+}
+.zana-timeline-dot {
+  position: absolute;
+  left: 0;
+  top: 5px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent, #6aa3ff);
+  box-shadow: 0 0 0 3px var(--panel-bg, rgba(0, 0, 0, 0.25));
+}
+.zana-timeline-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.zana-timeline-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.zana-timeline-action {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.zana-timeline-actor {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.zana-timeline-time {
+  font-size: 11px;
+  opacity: 0.55;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.zana-timeline-detail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  opacity: 0.9;
+}
+.zana-status-from {
+  opacity: 0.7;
+}
+.zana-status-arrow {
+  opacity: 0.6;
+}
+.zana-status-to {
+  font-weight: 600;
+}
+/* Generic key/value pill for arbitrary detail objects. */
+.zana-detail-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--chip-bg, rgba(255, 255, 255, 0.06));
+  font-size: 11px;
+}
+.zana-detail-key {
+  opacity: 0.55;
+}
+/* The markdown body reuses .inbox-md typography; constrain table overflow. */
+.zana-md {
+  font-size: 13px;
+}
+.zana-md-table-wrap {
+  overflow-x: auto;
+}
+
+/* ── Doc reader (artifact detail) ──────────────────────────────────────── */
+/* A comfortable reading wrapper for a full doc's markdown body: a constrained
+   measure, looser line-height, and more generous vertical rhythm between
+   headings/blocks than the compact ticket markdown. The modal body already
+   scrolls, so long docs scroll within it. */
+.zana-doc-reader {
+  max-width: 70ch;
+}
+.zana-doc-reader .zana-md {
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.zana-doc-reader .zana-md h1,
+.zana-doc-reader .zana-md h2,
+.zana-doc-reader .zana-md h3,
+.zana-doc-reader .zana-md h4 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  line-height: 1.3;
+}
+.zana-doc-reader .zana-md h1:first-child,
+.zana-doc-reader .zana-md h2:first-child,
+.zana-doc-reader .zana-md h3:first-child {
+  margin-top: 0;
+}
+.zana-doc-reader .zana-md p,
+.zana-doc-reader .zana-md ul,
+.zana-doc-reader .zana-md ol {
+  margin-top: 0.65em;
+  margin-bottom: 0.65em;
+}
+.zana-doc-reader .zana-md li {
+  margin: 0.3em 0;
+}
+.zana-doc-reader .zana-md pre {
+  margin: 0.9em 0;
+}
+.zana-doc-reader .zana-md blockquote {
+  margin: 0.9em 0;
+}
+.zana-doc-reader .zana-md-table-wrap {
+  margin: 0.9em 0;
+}
+
+/* ── Profiles gallery ──────────────────────────────────────────────────── */
+.zana-profiles-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.zana-profiles-summary {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.zana-profiles-summary strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.zana-profiles-summary-ws {
+  color: var(--accent-gold);
+  font-weight: 600;
+}
+.zana-profile-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.zana-profile-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.zana-profile-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.zana-profile-group-count {
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 0 7px;
+  line-height: 16px;
+}
+.zana-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+.zana-profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 13px 14px;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+.zana-profile-card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+.zana-profile-card:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+.zana-profile-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.zana-profile-card-icon {
+  flex-shrink: 0;
+  font-size: 22px;
+  line-height: 1;
+}
+.zana-profile-card-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.zana-profile-card-name {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.zana-profile-cat {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: capitalize;
+}
+/* Origin badge: built-in is muted/neutral; workspace is highlighted (gold). */
+.zana-profile-origin {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-radius: 4px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.zana-profile-origin--builtin {
+  color: var(--text-muted);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+}
+.zana-profile-origin--workspace {
+  color: var(--accent-gold);
+  background: color-mix(in srgb, var(--accent-gold) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-gold) 40%, transparent);
+}
+.zana-profile-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.zana-profile-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+}
+
+/* ── Profile detail (modal) ────────────────────────────────────────────── */
+.zana-profile-modal-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.zana-profile-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.zana-profile-desc {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.zana-profile-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+.zana-profile-tools-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.zana-profile-tool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.zana-tool-chip {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+}
+.zana-tool-chip--allow {
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+  color: var(--success);
+}
+.zana-tool-chip--deny {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  color: var(--danger);
+}
+.zana-profile-prompt {
+  margin: 8px 0 0;
+  max-height: 360px;
+  overflow: auto;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

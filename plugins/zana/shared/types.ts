@@ -29,6 +29,10 @@ export interface ZanaTicket {
   priority?: string;
   /** Display name of the assignee, when set. */
   assigneeName?: string;
+  /** Raw assignee id (an actor/agent id), when set. Mirrored from `ticket.json`. */
+  assigneeId?: string;
+  /** Id of the profile this ticket is assigned to, when set. Mirrored from `ticket.json`. */
+  assigneeProfileId?: string;
   /** Id of the sprint this ticket belongs to, when set. */
   sprintId?: string;
   /** Free-form labels. Always an array (defaults to `[]`). */
@@ -45,6 +49,23 @@ export interface ZanaTicket {
   resultSummary?: string;
   /** Inline comments, when present. */
   comments?: ZanaComment[];
+}
+
+/** One entry in a ticket's audit/activity log. */
+export interface ZanaAuditEntry {
+  id?: string;
+  action: string;            // 'created' | 'claimed' | 'status_changed' | …
+  actor?: string;
+  details?: Record<string, unknown>;
+  timestamp?: string;
+}
+
+/** Full ticket detail (snapshot ticket + the heavier on-demand fields). */
+export interface ZanaTicketDetail extends ZanaTicket {
+  createdBy?: string;
+  reworkCount?: number;
+  reviewPhase?: string;
+  audit: ZanaAuditEntry[];   // chronological as stored
 }
 
 /**
@@ -85,6 +106,40 @@ export interface ZanaArtifact {
   createdAt?: string;
 }
 
+/**
+ * A Zana agent profile. Profiles come from two places, distinguished by
+ * `origin`:
+ *   - 'workspace' — a user file under `~/.zana/profiles/<id>.json`
+ *   - 'builtin'   — shipped inside the installed `@zana-ai/core` package
+ * Drives the assignment picker and the Profiles view. The list payload omits
+ * the (potentially large) `systemPrompt`; use {@link ZanaProfileDetail} for it.
+ */
+export interface ZanaProfile {
+  id: string;
+  displayName: string;
+  description?: string;
+  icon?: string;       // emoji
+  category?: string;
+  /** Where the profile is defined: a workspace file or a Zana built-in. */
+  origin: 'workspace' | 'builtin';
+  /** Model the profile runs on, e.g. `sonnet`/`opus`, when declared. */
+  model?: string;
+  /** Tool names the profile is explicitly allowed to use, when declared. */
+  allowedTools?: string[];
+  /** Tool names the profile is explicitly denied, when declared. */
+  disallowedTools?: string[];
+}
+
+/** Full profile detail incl. the (potentially large) system prompt. */
+export interface ZanaProfileDetail extends ZanaProfile {
+  /** The profile's system prompt. Can be large; kept out of the list payload. */
+  systemPrompt?: string;
+  /** Permission mode, e.g. `default`/`acceptEdits`/`bypassPermissions`. */
+  permissionMode?: string;
+  /** Reasoning effort level, when declared. */
+  effortLevel?: string;
+}
+
 /** Aggregate metrics computed over the loaded tickets/sprints/artifacts. */
 export interface ZanaKpis {
   totalTickets: number;
@@ -113,6 +168,16 @@ export interface ZanaSource {
   label: string;
   /** Absolute path to the resolved `.zana/` dir. */
   path: string;
+}
+
+/** A project the panel can scope to, with cheap probe results for the rail. */
+export interface ZanaProjectSource {
+  id: string;            // project id ('' for the global entry)
+  name: string;          // display label ('Global' for ~/.zana)
+  path: string;          // project path ('' for global)
+  hasZana: boolean;      // a .zana/ dir exists
+  openTickets: number;   // open-ticket count for the rail badge
+  kind: 'global' | 'project';
 }
 
 /** Everything the panel needs for one render, from one source. */

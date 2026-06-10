@@ -9,8 +9,9 @@
 
 import type { AppModule } from '@shared/module-api';
 import { gusModule } from '../../../plugins/gus/module';
+import { zanaModule } from '../../../plugins/zana/module';
 
-export const APP_MODULES: AppModule[] = [gusModule];
+export const APP_MODULES: AppModule[] = [gusModule, zanaModule];
 
 /** Module ids, used to widen the NavId union at runtime. */
 export const MODULE_IDS = APP_MODULES.map((m) => m.id);

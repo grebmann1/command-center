@@ -33,6 +33,8 @@ export function createModuleHost(moduleId: string): ModuleHost {
       if (!id) return null;
       const p = useData.getState().projects.find((p) => p.id === id);
       return p ? { id: p.id, name: p.name, path: p.path } : null;
-    }
+    },
+    listProjects: () =>
+      useData.getState().projects.map((p) => ({ id: p.id, name: p.name, path: p.path }))
   };
 }

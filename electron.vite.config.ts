@@ -42,6 +42,12 @@ export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     build: {
+      // In `dev`, watch app-module sources under `plugins/` as well as `src/`.
+      // A module's main side (e.g. plugins/zana/main) is pulled into the main
+      // bundle via the registry, but lives outside `src/`; without this the
+      // dev watcher won't restart the main process when a plugin file changes,
+      // leaving a stale main that answers `modules:call` with "Unknown module".
+      watch: { include: ['src/**', 'plugins/**'] },
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') }
       }
@@ -50,6 +56,7 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
     build: {
+      watch: { include: ['src/**', 'plugins/**'] },
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/preload/index.ts') }
       }
