@@ -67,6 +67,11 @@ jobs:
           npm run build
           npx electron-builder --mac --${{ matrix.arch }} --publish never
         env:
+          # The renderer bundle pulls in the heavy monaco-vscode packages, which
+          # blow past Node's default ~2 GB heap during `electron-vite build`
+          # (FATAL: JavaScript heap out of memory). Raise the limit; macos
+          # runners have >=7 GB RAM.
+          NODE_OPTIONS: --max-old-space-size=6144
           # No code signing (unsigned personal build); skip electron-builder's
           # attempt to discover signing identities.
           CSC_IDENTITY_AUTO_DISCOVERY: false
