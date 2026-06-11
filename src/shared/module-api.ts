@@ -68,6 +68,32 @@ export interface ModuleHost {
    * module offer a project picker without reaching into core stores.
    */
   listProjects(): Array<{ id: string; name: string; path: string }>;
+
+  /**
+   * Make a project the app's globally-selected project — the same effect as
+   * clicking it in the core Projects sidebar. Lets a module keep the shell's
+   * selection in sync with its own in-panel project picker. No-op for an
+   * unknown id. Pass null to clear the selection.
+   */
+  selectProject(projectId: string | null): void;
+
+  /**
+   * Launch an interactive Claude session in a project and navigate the shell to
+   * the new tab. Always launches the base `claude` launch profile — a module
+   * shapes the run (model, system prompt, allowed/denied tools, permission
+   * mode, opening prompt) by passing the corresponding CLI flags via
+   * `extraArgs`, which are appended last and so win over global/project
+   * defaults.
+   *
+   * @returns the new session's id, or null when it couldn't be created (e.g.
+   *          no project matches `projectId`).
+   */
+  launchSession(opts: {
+    projectId: string;
+    extraArgs?: string[];
+    title?: string;
+    cwd?: string;
+  }): Promise<{ id: string } | null>;
 }
 
 /**

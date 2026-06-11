@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   XCircle,
   Cpu,
+  Play,
   Ticket as TicketIcon
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -279,6 +280,34 @@ function AuditDetail({ entry }: { entry: ZanaAuditEntry }) {
   );
 }
 
+/**
+ * Build the `claude` CLI `extraArgs` that turn a ticket + its assigned profile
+ * into a launchable agent session. Profile flags map 1:1 onto args the pty
+ * layer already understands (`pty.ts`); they're appended last so they win over
+ * global / project defaults. The final positional element becomes Claude's
+ * opening prompt (same mechanism the scheduler uses to seed a run).
+ */
+function buildLaunchArgs(profile: ZanaProfileDetail, ticket: ZanaTicketDetail): string[] {
+  const args: string[] = [];
+  if (profile.model) args.push('--model', profile.model);
+  if (profile.systemPrompt) args.push('--append-system-prompt', profile.systemPrompt);
+  if ((profile.allowedTools ?? []).length > 0) {
+    args.push('--allowedTools', profile.allowedTools!.join(','));
+  }
+  if ((profile.disallowedTools ?? []).length > 0) {
+    args.push('--disallowedTools', profile.disallowedTools!.join(','));
+  }
+  if (profile.permissionMode) args.push('--permission-mode', profile.permissionMode);
+
+  const who = profile.displayName || profile.id;
+  const desc = ticket.description ? `\n\n${ticket.description}` : '';
+  const prompt =
+    `Work Zana ticket ${shortId(ticket.id)}: ${ticket.title}${desc}\n\n` +
+    `You are acting as the "${who}" profile. Begin work on this ticket now.`;
+  args.push(prompt);
+  return args;
+}
+
 function TicketDetail({
   host,
   ticket,
@@ -315,6 +344,8 @@ function TicketDetail({
   const [localAssignee, setLocalAssignee] = useState<
     Pick<ZanaTicket, 'assigneeName' | 'assigneeProfileId'> | null
   >(null);
+  // True while a launch is in flight, so the Start button can disable + spin.
+  const [launching, setLaunching] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -373,6 +404,72 @@ function TicketDetail({
     }
     onAssign(choice);
   };
+  // Resolve the project this ticket should launch in. A project-scoped source
+  // matches by path; a global source falls back to the active project. Null
+  // when nothing resolves — Start is then disabled (a session needs a real
+  // project id + cwd).
+  const targetProject = (() => {
+    if (projectPath) {
+      return host.listProjects().find((p) => p.path === projectPath) ?? null;
+    }
+    return host.getActiveProject();
+  })();
+
+  // Start is available only when the ticket is assigned to a resolvable profile
+  // AND we have a project to launch in. Also gated on `!loading` so the launch
+  // prompt is built from the enriched on-disk detail, not the lean snapshot.
+  const canStart = !!assigneeProfileId && !!prof && !!targetProject && !loading && !launching;
+  const startTitle = !assigneeProfileId
+    ? 'Assign this ticket to a profile to start it.'
+    : !prof
+      ? 'The assigned profile is unavailable.'
+      : !targetProject
+        ? "Open this ticket's project to start it."
+        : loading
+          ? 'Loading ticket…'
+          : `Start with ${prof.displayName}`;
+
+  const handleStart = async () => {
+    if (!assigneeProfileId || !targetProject) return;
+    setLaunching(true);
+    try {
+      // Fail closed: the profile's full detail (system prompt, tools, model,
+      // permission mode) IS the point of launching from a profile. If we can't
+      // fetch it, don't silently launch a bare session that the toast would
+      // misleadingly attribute to the profile.
+      const full = await host
+        .call<ZanaProfileDetail | null>('getProfile', { id: assigneeProfileId })
+        .catch(() => null);
+      if (!full) {
+        host.toast(
+          `Couldn't load the “${prof?.displayName ?? assigneeProfileId}” profile — not started`,
+          'error'
+        );
+        return;
+      }
+      const extraArgs = buildLaunchArgs(full, detail);
+      const res = await host.launchSession({
+        projectId: targetProject.id,
+        cwd: targetProject.path,
+        extraArgs,
+        title: `Zana: ${detail.title.slice(0, 40)}`
+      });
+      if (res) {
+        host.toast(`Started “${detail.title}” with ${full.displayName}`);
+        onClose();
+      } else {
+        host.toast("Couldn't start session", 'error');
+      }
+    } catch (err) {
+      host.toast(
+        `Couldn't start session — ${err instanceof Error ? err.message : String(err)}`,
+        'error'
+      );
+    } finally {
+      setLaunching(false);
+    }
+  };
+
   const comments = detail.comments ?? [];
   // Activity log newest-first (snapshot stores it chronologically).
   const audit = [...detail.audit].reverse();
@@ -462,6 +559,30 @@ function TicketDetail({
               />
             )}
           </span>
+        </div>
+
+        {/* Start — spin up a Claude session from the assigned profile, seeded
+            with this ticket. Enabled only when assigned to a resolvable profile
+            and a launchable project exists. */}
+        <div className="zana-start-row">
+          <button
+            type="button"
+            className="zana-start-btn"
+            onClick={handleStart}
+            disabled={!canStart}
+            title={startTitle}
+          >
+            {launching ? (
+              <Loader2 size={14} className="gus-spin" aria-hidden />
+            ) : (
+              <Play size={14} aria-hidden />
+            )}
+            {launching
+              ? 'Starting…'
+              : prof
+                ? `Start with ${prof.displayName}`
+                : 'Start'}
+          </button>
         </div>
 
         {detail.labels.length > 0 && (

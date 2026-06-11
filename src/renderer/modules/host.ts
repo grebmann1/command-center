@@ -35,6 +35,23 @@ export function createModuleHost(moduleId: string): ModuleHost {
       return p ? { id: p.id, name: p.name, path: p.path } : null;
     },
     listProjects: () =>
-      useData.getState().projects.map((p) => ({ id: p.id, name: p.name, path: p.path }))
+      useData.getState().projects.map((p) => ({ id: p.id, name: p.name, path: p.path })),
+    selectProject: (projectId: string | null) => {
+      useUi.getState().selectProject(projectId);
+    },
+    launchSession: async ({ projectId, extraArgs, title, cwd }) => {
+      // Mirror CommandPalette.launch: spawn a claude tab, then bring the shell
+      // to it (nav → projects, select the project + new tab, show terminals).
+      const session = await useData
+        .getState()
+        .createTerminal(projectId, 'claude', 80, 24, { extraArgs, title, cwd });
+      if (!session) return null;
+      const ui = useUi.getState();
+      ui.setNav('projects');
+      ui.selectProject(projectId);
+      ui.selectTab(projectId, session.id);
+      ui.setWorkspaceMode(projectId, 'terminals');
+      return { id: session.id };
+    }
   };
 }

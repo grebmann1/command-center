@@ -363,6 +363,11 @@ export default function ZanaPanel({ host }: { host: ModuleHost }) {
     setSelectedSourceId(id);
     setSprintFilter(null);
     void host.storage.set(STORAGE_SOURCE_KEY, id);
+    // Mirror the core Projects sidebar: selecting a project source here also
+    // makes it the app's globally-selected project, so the rest of the shell
+    // follows along. A project source's rail id IS the app project id; Global
+    // ('') leaves the app selection untouched.
+    if (id) host.selectProject(id);
   };
 
   const profileMap = useMemo(() => buildProfileMap(profiles), [profiles]);

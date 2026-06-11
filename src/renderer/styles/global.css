@@ -8234,6 +8234,35 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
 .zana-assign-dropdown-btn:hover {
   filter: brightness(1.08);
 }
+/* Start row — full-width primary action that launches a session from the
+   ticket's assigned profile. Sits directly below the assign row. */
+.zana-start-row {
+  margin-top: 8px;
+}
+.zana-start-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  background: var(--success);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.zana-start-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.zana-start-btn:disabled {
+  background: var(--bg-base);
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+  cursor: not-allowed;
+}
 /* The resolved profile chip in the modal (facts row + assign row). */
 .zana-profile-chip {
   display: inline-flex;
