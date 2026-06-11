@@ -26,6 +26,7 @@ import {
   XCircle,
   Cpu,
   Play,
+  User,
   Ticket as TicketIcon
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -381,7 +382,7 @@ function TicketDetail({
     ['Status', detail.status],
     ['Priority', detail.priority],
     ['Type', detail.type],
-    ['Assignee', assigneeName],
+    // Assignee is surfaced in the action bar below, not duplicated here.
     ['Created by', detail.createdBy],
     ['Sprint', sprintLabel],
     ['Review phase', detail.reviewPhase],
@@ -508,81 +509,81 @@ function TicketDetail({
           {shownFacts.map(([k, v]) => (
             <div key={k} className="gus-fact">
               <dt>{k}</dt>
-              <dd>
-                {v}
-                {k === 'Assignee' && prof && (
-                  <span className="zana-profile-chip" title={`Profile: ${prof.displayName}`}>
-                    <span aria-hidden>{prof.icon}</span> {prof.displayName}
-                  </span>
-                )}
-              </dd>
+              <dd>{v}</dd>
             </div>
           ))}
         </dl>
 
-        {/* Assignment control — prominent dropdown to (re)assign or clear. */}
-        <div className="zana-assign-row">
-          <span className="zana-assign-row-label">
+        {/* Action bar — assignee on the left, Start + (re)assign on the right.
+            Start only appears once the ticket is assigned to a profile, so an
+            unassigned ticket shows a single clean Assign action. */}
+        <div className="zana-action-bar">
+          <div className="zana-action-assignee">
             {assigneeName ? (
               <>
-                Assigned to <strong>{assigneeName}</strong>
-                {prof && (
-                  <span className="zana-profile-chip" title={`Profile: ${prof.displayName}`}>
-                    <span aria-hidden>{prof.icon}</span> {prof.displayName}
-                  </span>
-                )}
+                <span className="zana-action-avatar" aria-hidden>
+                  {prof ? prof.icon : initials(assigneeName)}
+                </span>
+                <span className="zana-action-assignee-text">
+                  <span className="zana-action-assignee-name">{assigneeName}</span>
+                  {prof && (
+                    <span className="zana-action-assignee-sub">{prof.displayName}</span>
+                  )}
+                </span>
               </>
             ) : (
-              <span className="zana-card-unassigned">Unassigned</span>
+              <>
+                <span className="zana-action-avatar zana-action-avatar--empty" aria-hidden>
+                  <User size={13} />
+                </span>
+                <span className="zana-card-unassigned">Unassigned</span>
+              </>
             )}
-          </span>
-          <span className="zana-assign-row-control">
-            <button
-              type="button"
-              className="zana-assign-dropdown-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setAssignOpen((o) => !o);
-              }}
-              aria-haspopup="menu"
-              aria-expanded={assignOpen}
-            >
-              {assigneeName ? 'Reassign' : 'Assign'}
-              <ChevronDown size={12} aria-hidden />
-            </button>
-            {assignOpen && (
-              <AssignMenu
-                profiles={profiles}
-                onPick={handleAssign}
-                onClose={() => setAssignOpen(false)}
-                align="right"
-              />
-            )}
-          </span>
-        </div>
+          </div>
 
-        {/* Start — spin up a Claude session from the assigned profile, seeded
-            with this ticket. Enabled only when assigned to a resolvable profile
-            and a launchable project exists. */}
-        <div className="zana-start-row">
-          <button
-            type="button"
-            className="zana-start-btn"
-            onClick={handleStart}
-            disabled={!canStart}
-            title={startTitle}
-          >
-            {launching ? (
-              <Loader2 size={14} className="gus-spin" aria-hidden />
-            ) : (
-              <Play size={14} aria-hidden />
+          <div className="zana-action-controls">
+            {/* Start — spin up a Claude session from the assigned profile, seeded
+                with this ticket. Shown only when assigned to a profile. */}
+            {assigneeProfileId && (
+              <button
+                type="button"
+                className="zana-start-btn"
+                onClick={handleStart}
+                disabled={!canStart}
+                title={startTitle}
+              >
+                {launching ? (
+                  <Loader2 size={14} className="gus-spin" aria-hidden />
+                ) : (
+                  <Play size={14} aria-hidden />
+                )}
+                {launching ? 'Starting…' : 'Start'}
+              </button>
             )}
-            {launching
-              ? 'Starting…'
-              : prof
-                ? `Start with ${prof.displayName}`
-                : 'Start'}
-          </button>
+            <span className="zana-assign-row-control">
+              <button
+                type="button"
+                className={`zana-assign-dropdown-btn ${assigneeName ? 'zana-assign-dropdown-btn--secondary' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAssignOpen((o) => !o);
+                }}
+                aria-haspopup="menu"
+                aria-expanded={assignOpen}
+              >
+                {assigneeName ? 'Reassign' : 'Assign'}
+                <ChevronDown size={12} aria-hidden />
+              </button>
+              {assignOpen && (
+                <AssignMenu
+                  profiles={profiles}
+                  onPick={handleAssign}
+                  onClose={() => setAssignOpen(false)}
+                  align="right"
+                />
+              )}
+            </span>
+          </div>
         </div>
 
         {detail.labels.length > 0 && (

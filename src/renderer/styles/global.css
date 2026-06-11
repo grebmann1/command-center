@@ -8285,29 +8285,73 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   cursor: default;
 }
 
-/* === Zana: detail-modal assignment row + profile chip ===================== */
-.zana-assign-row {
-  position: relative;
+/* === Zana: detail-modal action bar (assignee + Start + assign) ============ */
+.zana-action-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-top: 12px;
-  padding: 8px 10px;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 10px 12px;
   background: var(--bg-base);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: 10px;
 }
-.zana-assign-row-label {
-  display: inline-flex;
+.zana-action-assignee {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--text-muted);
+  gap: 9px;
   min-width: 0;
 }
-.zana-assign-row-label strong {
+/* Round avatar: emoji for a profile, initials for a free-text assignee. */
+.zana-action-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
   color: var(--text-primary);
+}
+.zana-action-avatar--empty {
+  background: var(--bg-elevated, var(--surface-2, #1b2330));
+  color: var(--text-dim);
+}
+.zana-action-assignee-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+.zana-action-assignee-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zana-action-assignee-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zana-action-bar .zana-card-unassigned {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+.zana-action-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 .zana-assign-row-control {
   position: relative;
@@ -8320,42 +8364,49 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   background: var(--accent-blue);
   color: #fff;
   border: none;
-  border-radius: 6px;
-  padding: 5px 11px;
-  font-size: 12px;
+  border-radius: 7px;
+  padding: 7px 13px;
+  font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
+  transition: filter 0.12s ease, background 0.12s ease;
 }
 .zana-assign-dropdown-btn:hover {
   filter: brightness(1.08);
 }
-/* Start row — full-width primary action that launches a session from the
-   ticket's assigned profile. Sits directly below the assign row. */
-.zana-start-row {
-  margin-top: 8px;
+/* Secondary (ghost) styling for Reassign once a primary Start sits beside it. */
+.zana-assign-dropdown-btn--secondary {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
 }
+.zana-assign-dropdown-btn--secondary:hover {
+  filter: none;
+  color: var(--text-primary);
+  border-color: var(--text-dim);
+}
+/* Start — primary green action that launches a session from the assigned
+   profile. Compact (sits in the action bar), not a full-width bar. */
 .zana-start-btn {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 7px;
-  width: 100%;
+  gap: 6px;
   background: var(--success);
   color: #fff;
   border: none;
-  border-radius: 6px;
-  padding: 8px 12px;
+  border-radius: 7px;
+  padding: 7px 14px;
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
+  transition: filter 0.12s ease;
 }
 .zana-start-btn:hover:not(:disabled) {
   filter: brightness(1.08);
 }
 .zana-start-btn:disabled {
-  background: var(--bg-base);
-  color: var(--text-muted);
-  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--success) 22%, transparent);
+  color: color-mix(in srgb, #fff 55%, transparent);
   cursor: not-allowed;
 }
 /* The resolved profile chip in the modal (facts row + assign row). */
@@ -8633,7 +8684,7 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 0 0 4px;
+  margin: 14px 0 0;
 }
 .zana-modal-blocked-ids {
   display: flex;
