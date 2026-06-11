@@ -834,6 +834,74 @@ body.resizing-col {
   flex-shrink: 0;
 }
 
+/* ===== Project Focus Mode ===== */
+
+/* "← All projects" back affordance, lives in the list header. */
+.focus-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.focus-back:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Project header row inside focus mode (color dot + name + rollup dot + new). */
+.focus-project-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.focus-project-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+.focus-new-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.focus-new-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+/* Grouped status sections — reuse SectionHeader + .list-count-badge. The badge
+   is passed as the section action, so the existing .settings-scope-label--action
+   layout already right-aligns it via space-between. */
+.focus-bucket .project-terminals {
+  margin-left: 12px;
+}
+
 /* ===== Modal scaffolding (shared) ===== */
 
 .modal-backdrop {

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, EyeOff, Layers, Settings, ChevronRight } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, EyeOff, Layers, Settings, ChevronRight, ArrowLeft, RotateCcw } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
 import {
   useData,
   useUi,
+  useAgentStatus,
   useInbox,
   useInboxRead,
   useScheduler,
@@ -17,11 +18,12 @@ import {
 } from '../store';
 import { groupIcon, GROUP_FALLBACK_COLOR } from './scheduleGroupMeta';
 import { ScheduleGroupsModal } from './ScheduleGroupsModal';
-import type { OpenTarget } from '@shared/types';
+import type { OpenTarget, LaunchProfileId, Project, AgentState } from '@shared/types';
 import { MODULE_IDS } from '../modules';
 import { InboxSidebar } from './InboxSidebar';
 import { AddRemoteProjectDialog } from './AddRemoteProjectDialog';
 import { profileIcon } from '../util/profileIcon';
+import { bucketSessions } from '../util/sessionBuckets';
 
 const PROJECT_COLORS = [
   '#2f81f7', // blue (default)
@@ -71,6 +73,254 @@ function SectionHeader({
       </button>
       {action}
     </div>
+  );
+}
+
+/** Human label for the agent status dot's tooltip + aria. Mirrors TabBar. */
+const AGENT_STATE_LABEL: Record<AgentState, string> = {
+  blocked: 'Blocked — needs you',
+  working: 'Working',
+  done: 'Done — unseen',
+  idle: 'Idle',
+  unknown: ''
+};
+
+/**
+ * Live agent-state dot. Subscribes by id to a PRIMITIVE (the state string), so
+ * one session's transition repaints only its own dot. Renders nothing for
+ * `unknown` (plain shells, no signal yet). Mirrors TabBar's AgentStatusDot.
+ */
+function AgentStatusDot({ sessionId }: { sessionId: string }) {
+  const state = useAgentStatus((s) => s.byId[sessionId] ?? 'unknown');
+  if (state === 'unknown') return null;
+  return (
+    <span
+      className={`tab-agent-dot agent-${state}`}
+      title={AGENT_STATE_LABEL[state]}
+      aria-label={AGENT_STATE_LABEL[state]}
+    />
+  );
+}
+
+/** Project rollup dot — the most-urgent agent state across the project's live
+ *  sessions. Subscribes by project id to a PRIMITIVE so it repaints alone. */
+function ProjectRollupDot({ projectId }: { projectId: string }) {
+  const state = useAgentStatus((s) => s.rollup[projectId] ?? 'unknown');
+  if (state === 'unknown') return null;
+  return (
+    <span
+      className={`tab-agent-dot agent-${state}`}
+      title={AGENT_STATE_LABEL[state]}
+      aria-label={AGENT_STATE_LABEL[state]}
+    />
+  );
+}
+
+const KNOWN_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
+
+/** First entry in defaultAgents wins for one-click "+" semantics, but only if
+ *  it's a known profile id; otherwise default to 'claude'. Mirrors Workspace. */
+function projectDefaultProfile(project: Project): LaunchProfileId {
+  const first = project.defaultAgents?.[0];
+  if (first && (KNOWN_PROFILES as string[]).includes(first)) return first as LaunchProfileId;
+  return 'claude';
+}
+
+/**
+ * Focus mode: the column drills into a single project, showing all its sessions
+ * grouped by live status bucket. Replaces the project list while
+ * `focusedProjectId` is set. Renderer-only — consumes Sprint-1 store + buckets.
+ */
+function ProjectFocusView({ project }: { project: Project }) {
+  const exitProjectFocus = useUi((s) => s.exitProjectFocus);
+  const selectProject = useUi((s) => s.selectProject);
+  const selectTab = useUi((s) => s.selectTab);
+  const selectedTabId = useUi((s) => s.selectedTabId);
+  const selectedId = useUi((s) => s.selectedProjectId);
+  const collapsedSections = useUi((s) => s.collapsedSections);
+  const unread = useUi((s) => s.unread);
+  const createTerminal = useData((s) => s.createTerminal);
+  const closeTerminal = useData((s) => s.closeTerminal);
+  const restoreTerminal = useData((s) => s.restoreTerminal);
+
+  // Raw, stable slices only — never call bucketSessions() inside an inline
+  // selector (it returns a fresh array → infinite render loop, see
+  // zustand-selector-stable-ref memory). Subscribe to the project's session
+  // list and the whole agent-status map as primitives/stable refs, then derive
+  // the buckets in a useMemo keyed on them.
+  const sessions = useData((s) => s.terminals[project.id]);
+  const agentById = useAgentStatus((s) => s.byId);
+
+  const buckets = useMemo(
+    // Pass the FULL list (visible + headless); bucketSessions partitions
+    // background itself via the headless flag.
+    () => bucketSessions(sessions ?? [], agentById),
+    [sessions, agentById]
+  );
+
+  const activeTab = selectedId === project.id ? selectedTabId[project.id] : undefined;
+  const totalSessions = (sessions ?? []).length;
+
+  const handleNew = () => {
+    const profile = projectDefaultProfile(project);
+    void createTerminal(project.id, profile, 80, 24).then((session) => {
+      if (session) {
+        selectProject(project.id);
+        selectTab(project.id, session.id);
+      }
+    });
+  };
+
+  return (
+    <section className="list-pane">
+      <header className="list-header">
+        <button
+          type="button"
+          className="focus-back"
+          onClick={() => exitProjectFocus()}
+          title="Back to all projects"
+        >
+          <ArrowLeft size={14} />
+          <span>All projects</span>
+        </button>
+      </header>
+      <div className="focus-project-header">
+        <span
+          className="project-dot"
+          style={project.color ? { background: project.color } : undefined}
+        />
+        <span className="focus-project-name" title={project.path}>
+          {project.name}
+        </span>
+        <ProjectRollupDot projectId={project.id} />
+        <button
+          type="button"
+          className="focus-new-btn"
+          aria-label="New session"
+          title={`New ${projectDefaultProfile(project)} session`}
+          onClick={handleNew}
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+      <div className="list-body">
+        {totalSessions === 0 ? (
+          <div className="list-empty">
+            No sessions.
+            <br />
+            Click <strong>+</strong> to start one.
+          </div>
+        ) : (
+          buckets.map((bucket) => {
+            const sectionKey = `focus:${project.id}:${bucket.id}`;
+            const collapsed = !!collapsedSections[sectionKey];
+            const isBackground = bucket.id === 'background';
+            return (
+              <div key={bucket.id} className="focus-bucket">
+                <SectionHeader
+                  label={bucket.label}
+                  sectionKey={sectionKey}
+                  action={<span className="list-count-badge">{bucket.sessions.length}</span>}
+                />
+                {!collapsed && (
+                  <div className="project-terminals" role="list">
+                    {bucket.sessions.map((t) => {
+                      const exited = t.status === 'exited';
+                      const bad = exited && (t.exitCode ?? 0) !== 0;
+                      return (
+                        <div
+                          key={t.id}
+                          role="listitem"
+                          className={`project-terminal-row ${activeTab === t.id ? 'active' : ''} ${
+                            exited ? 'exited' : ''
+                          } ${bad ? 'exited-bad' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isBackground) {
+                              void restoreTerminal(t.id, project.id);
+                            } else {
+                              selectProject(project.id);
+                              selectTab(project.id, t.id);
+                            }
+                          }}
+                          title={
+                            isBackground
+                              ? `${t.title} · running in the background — click to resume`
+                              : exited && t.exitCode != null
+                                ? `${t.title} · exited (code ${t.exitCode})`
+                                : t.title
+                          }
+                        >
+                          <span
+                            className={`tab-profile-icon profile-${t.profile}`}
+                            aria-hidden="true"
+                          >
+                            {profileIcon(t.profile)}
+                          </span>
+                          <span className="project-terminal-name">{t.title}</span>
+                          <AgentStatusDot sessionId={t.id} />
+                          {bad && (
+                            <span
+                              className="project-terminal-exit-bad"
+                              aria-label={`Exit code ${t.exitCode}`}
+                            >
+                              ✗{t.exitCode}
+                            </span>
+                          )}
+                          {unread[t.id] && activeTab !== t.id && (
+                            <span className="project-terminal-unread" aria-label="Unread output" />
+                          )}
+                          {isBackground && (
+                            <button
+                              type="button"
+                              className="project-terminal-close"
+                              aria-label={`Resume ${t.title}`}
+                              title="Resume into a tab"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void restoreTerminal(t.id, project.id);
+                              }}
+                            >
+                              <RotateCcw size={13} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="project-terminal-close"
+                            aria-label={exited ? `Dismiss ${t.title}` : `Delete ${t.title}`}
+                            title={
+                              isBackground
+                                ? 'Terminate this background session'
+                                : exited
+                                  ? 'Dismiss'
+                                  : 'Delete (ends the process)'
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (
+                                !exited &&
+                                !window.confirm(
+                                  `Delete “${t.title}”? The process will be terminated.`
+                                )
+                              ) {
+                                return;
+                              }
+                              void closeTerminal(t.id, project.id);
+                            }}
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -161,6 +411,9 @@ function ProjectsList() {
   const reorderProjects = useData((s) => s.reorderProjects);
   const selectedId = useUi((s) => s.selectedProjectId);
   const selectProject = useUi((s) => s.selectProject);
+  const focusedProjectId = useUi((s) => s.focusedProjectId);
+  const enterProjectFocus = useUi((s) => s.enterProjectFocus);
+  const exitProjectFocus = useUi((s) => s.exitProjectFocus);
   const setNav = useUi((s) => s.setNav);
   const setSettingsTab = useUi((s) => s.setSettingsTab);
   const selectTab = useUi((s) => s.selectTab);
@@ -206,6 +459,15 @@ function ProjectsList() {
   };
 
   const sortedProjects = sortProjectsForDisplay(projects);
+
+  // Focus mode: drill into a single project. If the focused project was
+  // deleted/closed while focused, fall back to the list gracefully.
+  const focusedProject = focusedProjectId
+    ? projects.find((p) => p.id === focusedProjectId) ?? null
+    : null;
+  useEffect(() => {
+    if (focusedProjectId && !focusedProject) exitProjectFocus();
+  }, [focusedProjectId, focusedProject, exitProjectFocus]);
 
   const visibleProjects = (() => {
     const q = filter.trim().toLowerCase();
@@ -320,6 +582,8 @@ function ProjectsList() {
     window.cc.config.set({ listPaneWidth: 280 }).catch(() => {});
   };
 
+  if (focusedProject) return <ProjectFocusView project={focusedProject} />;
+
   return (
     <section
       className={`list-pane ${dropOver ? 'drop-over' : ''}`}
@@ -392,6 +656,13 @@ function ProjectsList() {
                   : ''
               }`}
               onClick={() => selectProject(p.id)}
+              onDoubleClick={(e) => {
+                // Double-clicking the row enters focus mode. The project NAME
+                // has its own onDoubleClick (rename) with stopPropagation, so
+                // double-clicking the name renames and never reaches here.
+                e.stopPropagation();
+                enterProjectFocus(p.id);
+              }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setMenu({ projectId: p.id, x: e.clientX, y: e.clientY });
