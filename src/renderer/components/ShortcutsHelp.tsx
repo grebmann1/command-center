@@ -42,8 +42,8 @@ const SECTIONS: Section[] = [
       { keys: ['⌘', '⇧', 'D'], label: 'Duplicate active tab (same profile)' },
       { keys: ['⌘', '⇧', 'R'], label: 'Restart active tab (kill + respawn)' },
       { keys: ['⌘', '⇧', 'T'], label: 'Reopen / resume last removed tab' },
-      { keys: ['⌘', 'W'], label: 'Close active tab (ends the process)' },
-      { keys: ['⌘', '⇧', 'W'], label: 'Send active tab to background (keeps running)' },
+      { keys: ['⌘', 'W'], label: 'Hide active tab (process keeps running)' },
+      { keys: ['⌘', '⇧', 'W'], label: 'Delete active tab (terminates the process)' },
       { keys: ['⌘', '1'], label: 'Switch to tab 1 (… up to ⌘9)' },
       { keys: ['⌘', ']'], label: 'Next tab' },
       { keys: ['⌘', '['], label: 'Previous tab' }

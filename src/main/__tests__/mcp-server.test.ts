@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchMcpRoute } from '../mcp-server.js';
+import { matchMcpRoute, matchNotifyHookRoute } from '../mcp-server.js';
 
 describe('matchMcpRoute', () => {
   it('matches the project-scoped route', () => {
@@ -42,5 +42,39 @@ describe('matchMcpRoute', () => {
   it('rejects unrelated paths and undefined input', () => {
     expect(matchMcpRoute('/health')).toBeNull();
     expect(matchMcpRoute(undefined)).toBeNull();
+  });
+});
+
+describe('matchNotifyHookRoute', () => {
+  it('matches the blocked action', () => {
+    expect(matchNotifyHookRoute('/hook/notify/proj-1/sess-A/blocked')).toEqual({
+      projectId: 'proj-1',
+      sessionId: 'sess-A',
+      action: 'blocked'
+    });
+  });
+
+  it('matches the unblocked action', () => {
+    expect(matchNotifyHookRoute('/hook/notify/proj-1/sess-A/unblocked')).toEqual({
+      projectId: 'proj-1',
+      sessionId: 'sess-A',
+      action: 'unblocked'
+    });
+  });
+
+  it('url-decodes captured ids and ignores query strings', () => {
+    expect(matchNotifyHookRoute('/hook/notify/proj%2F1/sess%20A/blocked?x=1')).toEqual({
+      projectId: 'proj/1',
+      sessionId: 'sess A',
+      action: 'blocked'
+    });
+  });
+
+  it('rejects unknown actions and malformed paths', () => {
+    expect(matchNotifyHookRoute('/hook/notify/proj-1/sess-A/paused')).toBeNull();
+    expect(matchNotifyHookRoute('/hook/notify/proj-1/sess-A')).toBeNull();
+    expect(matchNotifyHookRoute('/hook/notify/proj-1/sess-A/blocked/extra')).toBeNull();
+    expect(matchNotifyHookRoute('/hook/stop/proj-1/sess-A')).toBeNull();
+    expect(matchNotifyHookRoute(undefined)).toBeNull();
   });
 });

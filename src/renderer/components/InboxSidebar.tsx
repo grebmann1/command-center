@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { useInbox, useInboxRead, useInboxSelection } from '../store';
+import { useData, useInbox, useInboxRead, useInboxSelection } from '../store';
 import type { InboxEntry } from '@shared/types';
+import { groupByBucketThenProject, flattenVisible } from '../util/inboxGrouping';
 
 /**
  * Inbox sidebar list — port of OpenAlice's InboxSidebar.tsx.
  *
  * Linear-style:
  * - Date-bucketed (Today / Yesterday / This week / Older), newest-first
- * - Each row: project label · relative time · text preview · unread state
- * - j/k keyboard navigation
+ * - Within each bucket, entries are sub-grouped by project (color dot +
+ *   name + count) so the user can scan per-project activity
+ * - Each row: unread dot · relative time · text preview
+ * - j/k keyboard navigation (walks the flattened render order)
  * - Default-selects the newest entry on first load if none is selected
  *
  * Read semantics: SELECTION marks read. Every site that mutates the
@@ -29,6 +32,7 @@ export function InboxSidebar({
   const select = useInboxSelection((s) => s.select);
   const readIds = useInboxRead((s) => s.readIds);
   const markRead = useInboxRead((s) => s.markRead);
+  const projects = useData((s) => s.projects);
 
   const selectAndRead = (id: string) => {
     select(id);
@@ -48,36 +52,44 @@ export function InboxSidebar({
     });
   }, [entries, query, unreadOnly, readIds]);
 
+  const groups = useMemo(() => groupByBucketThenProject(filtered), [filtered]);
+  // Render order (bucket → project → entry), flattened to entry ids. j/k and
+  // default-select MUST walk this, not `filtered` — the two diverge once a
+  // project's entries are interleaved with another's in the same bucket.
+  const visibleIds = useMemo(() => flattenVisible(groups), [groups]);
+  const projectsById = useMemo(
+    () => new Map(projects.map((p) => [p.id, p])),
+    [projects]
+  );
+
   // Default-select the latest entry on first non-empty load. Latch the
   // ref so once the user touches anything we never override their pick.
   const everSelectedRef = useRef(false);
   useEffect(() => {
     if (everSelectedRef.current) return;
-    if (filtered.length === 0) return;
+    if (visibleIds.length === 0) return;
     if (!selectedId) {
-      selectAndRead(filtered[0].id);
+      selectAndRead(visibleIds[0]);
     }
     everSelectedRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered, selectedId]);
+  }, [visibleIds, selectedId]);
 
-  // j/k navigation across the visible (filtered) sequence.
+  // j/k navigation across the visible (render-ordered) sequence.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key !== 'j' && e.key !== 'k') return;
-      if (filtered.length === 0) return;
-      const idx = filtered.findIndex((x) => x.id === selectedId);
-      const next = e.key === 'j' ? Math.min(filtered.length - 1, idx + 1) : Math.max(0, idx - 1);
-      if (next !== idx && filtered[next]) selectAndRead(filtered[next].id);
+      if (visibleIds.length === 0) return;
+      const idx = visibleIds.indexOf(selectedId ?? '');
+      const next = e.key === 'j' ? Math.min(visibleIds.length - 1, idx + 1) : Math.max(0, idx - 1);
+      if (next !== idx && visibleIds[next]) selectAndRead(visibleIds[next]);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered, selectedId]);
-
-  const groups = useMemo(() => groupByBucket(filtered), [filtered]);
+  }, [visibleIds, selectedId]);
 
   if (loading && entries.length === 0) {
     return <div className="inbox-sidebar-empty">Loading…</div>;
@@ -106,20 +118,38 @@ export function InboxSidebar({
 
   return (
     <div className="inbox-sidebar-list">
-      {groups.map(([bucket, items]) => (
+      {groups.map(([bucket, subgroups]) => (
         <div key={bucket} className="inbox-bucket">
           <div className="inbox-bucket-label">{bucket}</div>
-          <div>
-            {items.map((entry) => (
-              <InboxRow
-                key={entry.id}
-                entry={entry}
-                active={entry.id === selectedId}
-                unread={!readIds[entry.id]}
-                onClick={() => selectAndRead(entry.id)}
-              />
-            ))}
-          </div>
+          {subgroups.map((sg) => {
+            const project = projectsById.get(sg.projectId) ?? null;
+            const name = project?.name ?? sg.fallbackLabel;
+            const color = project?.color;
+            return (
+              <div key={sg.projectId} className="inbox-project-group">
+                <div className="inbox-project-subhead">
+                  <span
+                    className={`inbox-project-dot ${color ? '' : 'inbox-project-dot--none'}`}
+                    style={color ? { background: color } : undefined}
+                    aria-hidden
+                  />
+                  <span className={`inbox-project-name ${project ? '' : 'tombstoned'}`}>
+                    {name}
+                  </span>
+                  <span className="inbox-project-count">{sg.entries.length}</span>
+                </div>
+                {sg.entries.map((entry) => (
+                  <InboxRow
+                    key={entry.id}
+                    entry={entry}
+                    active={entry.id === selectedId}
+                    unread={!readIds[entry.id]}
+                    onClick={() => selectAndRead(entry.id)}
+                  />
+                ))}
+              </div>
+            );
+          })}
         </div>
       ))}
     </div>
@@ -152,12 +182,9 @@ function InboxRow({
     >
       <div className="inbox-row-line1">
         <span aria-hidden className={`inbox-row-dot ${unread ? 'on' : ''}`} />
-        <span className="inbox-row-label">
-          {entry.projectLabel ?? entry.projectId}
-        </span>
+        <span className="inbox-row-preview-inline">{previewFor(entry)}</span>
         <span className="inbox-row-ts">{formatRelative(entry.ts)}</span>
       </div>
-      <div className="inbox-row-preview">{previewFor(entry)}</div>
     </div>
   );
 }
@@ -182,36 +209,6 @@ function previewFor(entry: InboxEntry): string {
     }
   }
   return '';
-}
-
-type Bucket = 'Today' | 'Yesterday' | 'This week' | 'Older';
-
-function groupByBucket(entries: readonly InboxEntry[]): Array<[Bucket, InboxEntry[]]> {
-  const now = Date.now();
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
-  const today = startOfDay.getTime();
-  const yesterday = today - 86_400_000;
-  const weekStart = today - 6 * 86_400_000;
-
-  const buckets: Record<Bucket, InboxEntry[]> = {
-    Today: [],
-    Yesterday: [],
-    'This week': [],
-    Older: []
-  };
-
-  for (const e of entries) {
-    if (e.ts >= today) buckets.Today.push(e);
-    else if (e.ts >= yesterday) buckets.Yesterday.push(e);
-    else if (e.ts >= weekStart) buckets['This week'].push(e);
-    else buckets.Older.push(e);
-  }
-
-  const order: Bucket[] = ['Today', 'Yesterday', 'This week', 'Older'];
-  return order
-    .map((b): [Bucket, InboxEntry[]] => [b, buckets[b]])
-    .filter(([, items]) => items.length > 0);
 }
 
 function formatRelative(ts: number): string {

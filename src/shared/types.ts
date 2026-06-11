@@ -84,6 +84,54 @@ export interface InboxEntry {
   sessionId?: string;
 }
 
+/** A frozen snapshot of an inbox doc, captured at save time. */
+export interface SavedDoc {
+  /** Original path relative to the project root (for reference/search). */
+  path: string;
+  /** File content at save time. Absent if it couldn't be read. */
+  content?: string;
+  /** True if content was truncated by the fs read cap (mirrors FsReadResult). */
+  truncated?: boolean;
+  /** True if the file was binary and not snapshotted. */
+  binary?: boolean;
+  /** Set when the snapshot read failed (project tombstoned, missing file). */
+  error?: string;
+}
+
+/**
+ * A saved inbox report — a durable, frozen copy of an inbox entry's docs +
+ * comments, kept for later reuse. Persisted GLOBAL-only, one JSON file per
+ * record at `~/.cc-center/saved/<id>.json`. Doc contents are SNAPSHOTTED at
+ * save time (unlike live inbox docs) so the record survives project file
+ * changes / moves / deletion. The bundled `saved-reports` skill reads these
+ * files directly. Each record carries `projectId` so it can be filtered.
+ */
+export interface SavedRecord {
+  id: string;
+  savedAt: number;
+  /** Originating inbox entry id, when known. */
+  sourceEntryId?: string;
+  projectId: string;
+  /** Display snapshot of the project label; readers fall back to projectId. */
+  projectLabel?: string;
+  /** Short title derived from the first comment line or first doc path. */
+  title: string;
+  comments?: string;
+  docs?: SavedDoc[];
+  tags?: string[];
+}
+
+/** Input to SavedStore.save — the record minus the store-assigned id/savedAt. */
+export interface SavedRecordInput {
+  sourceEntryId?: string;
+  projectId: string;
+  projectLabel?: string;
+  title: string;
+  comments?: string;
+  docs?: SavedDoc[];
+  tags?: string[];
+}
+
 /**
  * Live agent state for a session, inferred from detection signals (OSC title
  * spinner, screen-scan, lifecycle hooks). Deliberately separate from
@@ -266,6 +314,26 @@ export type OpenTarget = 'cursor' | 'code' | 'finder' | 'terminal' | 'browser';
 
 export interface OpenResult {
   ok: boolean;
+  message?: string;
+}
+
+/**
+ * Payload for `inbox.exportPdf`. The renderer serializes the already-rendered
+ * inbox detail into a self-contained HTML document (inlined CSS, mermaid SVGs,
+ * highlighted code) and passes it here for the main process to print to PDF.
+ */
+export interface InboxPdfExport {
+  /** Full standalone HTML document to render and print. */
+  html: string;
+  /** Suggested filename (without extension) for the save dialog. */
+  suggestedName: string;
+}
+
+export interface InboxPdfExportResult {
+  ok: boolean;
+  /** Absolute path the PDF was written to, when ok. */
+  path?: string;
+  /** Absent on user-cancel; set when something actually failed. */
   message?: string;
 }
 
@@ -741,8 +809,22 @@ export interface CcApi {
       projectId?: string;
     }): Promise<{ entries: InboxEntry[]; hasMore: boolean }>;
     delete(id: string): Promise<boolean>;
+    /**
+     * Render a standalone HTML document (the inbox detail, already rendered
+     * in the renderer — mermaid SVGs and highlighted code included) to a PDF
+     * via a hidden BrowserWindow, prompting the user for a save location.
+     * Resolves the result of the save (cancelled is `{ ok: false }`).
+     */
+    exportPdf(input: InboxPdfExport): Promise<InboxPdfExportResult>;
     onAppended(cb: (entry: InboxEntry) => void): () => void;
     onRemoved(cb: (id: string) => void): () => void;
+  };
+  saved: {
+    /** Persist a saved report. Resolves null on failure (caller toasts). */
+    save(input: SavedRecordInput): Promise<SavedRecord | null>;
+    list(): Promise<SavedRecord[]>;
+    delete(id: string): Promise<boolean>;
+    onChanged(cb: (records: SavedRecord[]) => void): () => void;
   };
   mcp: {
     list(projectPath: string): Promise<McpServer[]>;

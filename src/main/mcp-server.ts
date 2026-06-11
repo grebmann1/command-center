@@ -47,6 +47,14 @@ export interface McpServerOptions {
    */
   onStopHook?: (projectId: string, sessionId: string) => void;
   /**
+   * Called when a session's Notification / UserPromptSubmit hook pings back.
+   * `action` is `blocked` (agent is waiting on the user — permission prompt or
+   * interactive question) or `unblocked` (user answered / turn ended). Drives
+   * the live "blocked — needs you" agent status. The url path carries identity:
+   * `/hook/notify/:projectId/:sessionId/:action`. Best-effort; always 200s.
+   */
+  onNotifyHook?: (projectId: string, sessionId: string, action: 'blocked' | 'unblocked') => void;
+  /**
    * Called when a scheduled agent files a run report via the `schedule_report`
    * tool. The url path carries identity (`/mcp/:projectId/:sessionId`), so the
    * summary is attributable to an exact session — the scheduler attaches it to
@@ -145,6 +153,29 @@ export function matchStopHookRoute(
   };
 }
 
+/**
+ * Match `/hook/notify/:projectId/:sessionId/:action` where action is
+ * `blocked` or `unblocked` — the live-status callback. Exported for unit tests.
+ */
+export function matchNotifyHookRoute(
+  rawUrl: string | undefined
+): { projectId: string; sessionId: string; action: 'blocked' | 'unblocked' } | null {
+  if (!rawUrl) return null;
+  let pathname: string;
+  try {
+    pathname = new URL(rawUrl, 'http://127.0.0.1').pathname;
+  } catch {
+    return null;
+  }
+  const m = /^\/hook\/notify\/([^/]+)\/([^/]+)\/(blocked|unblocked)$/.exec(pathname);
+  if (!m) return null;
+  return {
+    projectId: decodeURIComponent(m[1]),
+    sessionId: decodeURIComponent(m[2]),
+    action: m[3] as 'blocked' | 'unblocked'
+  };
+}
+
 export async function startMcpServer(opts: McpServerOptions): Promise<McpServerHandle> {
   const log = opts.log ?? ((m) => console.log(m));
 
@@ -194,6 +225,22 @@ async function handleRequest(
       opts.onStopHook?.(stopRoute.projectId, stopRoute.sessionId);
     } catch (err) {
       log(`[mcp] stop-hook handler failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    res.statusCode = 200;
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.end('ok');
+    return;
+  }
+
+  // Notification / UserPromptSubmit callback. Fire-and-forget, same contract
+  // as the stop-hook route: drain the body, invoke the handler, always 200.
+  const notifyRoute = matchNotifyHookRoute(req.url);
+  if (notifyRoute) {
+    req.resume();
+    try {
+      opts.onNotifyHook?.(notifyRoute.projectId, notifyRoute.sessionId, notifyRoute.action);
+    } catch (err) {
+      log(`[mcp] notify-hook handler failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     res.statusCode = 200;
     res.setHeader('content-type', 'text/plain; charset=utf-8');

@@ -7,6 +7,7 @@ import type {
   InboxEntry,
   McpServerEntry,
   PluginEntry,
+  SavedRecord,
   TerminalSession
 } from '../shared/types.js';
 
@@ -93,6 +94,7 @@ const api: CcApi = {
   inbox: {
     history: (opts) => ipcRenderer.invoke(IPC.inbox.history, opts),
     delete: (id) => ipcRenderer.invoke(IPC.inbox.delete, id),
+    exportPdf: (input) => ipcRenderer.invoke(IPC.inbox.exportPdf, input),
     onAppended: (cb) => {
       const handler = (_e: unknown, entry: InboxEntry) => cb(entry);
       ipcRenderer.on(IPC.inbox.onAppended, handler);
@@ -102,6 +104,16 @@ const api: CcApi = {
       const handler = (_e: unknown, id: string) => cb(id);
       ipcRenderer.on(IPC.inbox.onRemoved, handler);
       return () => ipcRenderer.off(IPC.inbox.onRemoved, handler);
+    }
+  },
+  saved: {
+    save: (input) => ipcRenderer.invoke(IPC.saved.save, input),
+    list: () => ipcRenderer.invoke(IPC.saved.list),
+    delete: (id) => ipcRenderer.invoke(IPC.saved.delete, id),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, records: SavedRecord[]) => cb(records);
+      ipcRenderer.on(IPC.saved.onChanged, handler);
+      return () => ipcRenderer.off(IPC.saved.onChanged, handler);
     }
   },
   mcp: {

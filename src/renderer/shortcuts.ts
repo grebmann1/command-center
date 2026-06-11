@@ -206,15 +206,24 @@ export function installShortcuts(): () => void {
       }).catch(() => {});
       return;
     }
-    // cmd+shift+w — send current tab to the background (detach; pty keeps
-    // running). Paired with ⌘W (close); resume from the + menu's Background
-    // section or with ⌘⇧T.
+    // cmd+shift+w — DELETE the current tab: terminate the process and remove
+    // it. The keyboard counterpart to right-click → Delete (⌘W only hides, so
+    // without this there'd be no keyboard path to actually end a process).
+    // Confirm for a live session so a stray chord can't kill a running agent;
+    // an exited tombstone is dismissed without a prompt. ⌘⇧T reopens.
     if ((e.key === 'W' || (e.key === 'w' && e.shiftKey)) && e.shiftKey) {
       if (!projectId || !activeTabId) return;
       e.preventDefault();
       const active = tabs.find((t) => t.id === activeTabId);
-      if (active?.pinned || active?.status === 'exited') return;
-      data.hideTerminal(activeTabId, projectId).catch(() => {});
+      if (active?.pinned) return;
+      if (
+        active &&
+        active.status !== 'exited' &&
+        !window.confirm(`Delete “${active.title}”? The process will be terminated.`)
+      ) {
+        return;
+      }
+      data.closeTerminal(activeTabId, projectId).catch(() => {});
       return;
     }
     // cmd+w — hide the current tab (does NOT kill the process). A live session

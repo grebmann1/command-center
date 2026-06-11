@@ -69,6 +69,8 @@ interface Props {
   onResumeBackground?: (id: string) => void;
   /** Kill a background session outright from the Background list. */
   onKillBackground?: (id: string) => void;
+  /** Kill ALL background sessions for this project (bulk cleanup). */
+  onKillAllBackground?: () => void;
   onNew: (profile: LaunchProfileId) => void;
   onReorder?: (fromId: string, toId: string) => void;
   onRename?: (id: string, title: string) => void;
@@ -96,7 +98,7 @@ interface TabContextMenu {
   y: number;
 }
 
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgroundTabs, onResumeBackground, onKillBackground, onNew, onReorder, onRename, onDuplicate, onRestart, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
+export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgroundTabs, onResumeBackground, onKillBackground, onKillAllBackground, onNew, onReorder, onRename, onDuplicate, onRestart, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
   const splitSet = new Set((splitTabIds ?? []).filter((x): x is string => !!x));
   const [menuOpen, setMenuOpen] = useState(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -395,6 +397,27 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
                 )}
               </div>
             ))}
+          {showBackground && onKillAllBackground && bg.length > 1 && (
+            <button
+              type="button"
+              className="tab-bg-killall"
+              title={`Terminate all ${bg.length} background sessions`}
+              onClick={(e) => {
+                e.stopPropagation();
+                e.currentTarget.blur();
+                if (
+                  window.confirm(
+                    `Terminate all ${bg.length} background session${bg.length > 1 ? 's' : ''}? Their processes will be ended.`
+                  )
+                ) {
+                  onKillAllBackground();
+                }
+              }}
+            >
+              <Trash2 size={12} aria-hidden />
+              <span>Close all</span>
+            </button>
+          )}
         </>
       )}
       <button
@@ -635,6 +658,25 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
                   )}
                 </div>
               ))}
+              {onKillAllBackground && backgroundTabs.length > 1 && (
+                <button
+                  className="tab-menu-bg-killall"
+                  title={`Terminate all ${backgroundTabs.length} background sessions`}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `Terminate all ${backgroundTabs.length} background sessions? Their processes will be ended.`
+                      )
+                    ) {
+                      setMenuOpen(false);
+                      onKillAllBackground();
+                    }
+                  }}
+                >
+                  <Trash2 size={12} aria-hidden />
+                  <span>Close all background</span>
+                </button>
+              )}
             </>
           )}
         </div>

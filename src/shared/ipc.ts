@@ -58,8 +58,15 @@ export const IPC = {
   inbox: {
     history: 'inbox:history',
     delete: 'inbox:delete',
+    exportPdf: 'inbox:exportPdf',
     onAppended: 'inbox:onAppended',
     onRemoved: 'inbox:onRemoved'
+  },
+  saved: {
+    save: 'saved:save',
+    list: 'saved:list',
+    delete: 'saved:delete',
+    onChanged: 'saved:onChanged'
   },
   mcp: {
     list: 'mcp:list',

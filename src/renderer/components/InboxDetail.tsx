@@ -1,20 +1,26 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ArrowRight, CornerDownLeft, ExternalLink, MessageSquare, Send, Trash2 } from 'lucide-react';
+import { isValidElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowRight, Bookmark, BookmarkCheck, CornerDownLeft, Download, ExternalLink, MessageSquare, Send, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/github-dark.css';
+import { MermaidDiagram } from './MermaidDiagram';
 import {
   deleteInboxEntry,
   replyToInboxEntry,
+  saveInboxEntry,
   useData,
   useInbox,
   useInboxAnswered,
   useInboxRead,
   useInboxSelection,
+  useSavedMark,
   useUi
 } from '../store';
 import { InboxGuidance } from './InboxGuidance';
 import { unwrapBareFence } from '../util/markdown';
-import type { InboxDoc, InboxEntry, FsReadResult, Project } from '@shared/types';
+import { buildStandaloneHtml } from '../util/exportHtml';
+import type { InboxDoc, InboxEntry, FsReadResult, Project, SavedDoc, SavedRecordInput } from '@shared/types';
 
 interface InboxDetailProps {
   /**
@@ -115,6 +121,10 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
   const restoreTerminal = useData((s) => s.restoreTerminal);
   const setNav = useUi((s) => s.setNav);
   const selectProject = useUi((s) => s.selectProject);
+  const pushToast = useUi((s) => s.pushToast);
+
+  const exportRef = useRef<HTMLDivElement>(null);
+  const [exporting, setExporting] = useState(false);
 
   const aliveProject = projects.find((p) => p.id === entry.projectId) ?? null;
   const projectAlive = aliveProject !== null;
@@ -141,6 +151,76 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
     // visible tab list, which is exactly the case for a headless session.
     if (aliveSession) {
       void restoreTerminal(aliveSession.id, aliveProject.id);
+    }
+  };
+
+  /**
+   * Export the rendered detail (docs + comments, with diagrams and
+   * highlighted code already painted) to a PDF. We snapshot the live DOM
+   * subtree so the PDF matches the screen exactly, then hand the standalone
+   * HTML to the main process to print via a hidden window.
+   */
+  const exportPdf = async () => {
+    if (exporting || !exportRef.current) return;
+    setExporting(true);
+    try {
+      const html = buildStandaloneHtml(exportRef.current, displayLabel);
+      const suggestedName = `${displayLabel} — ${formatAbsolute(entry.ts)}`;
+      const result = await window.cc.inbox.exportPdf({ html, suggestedName });
+      if (result.ok) {
+        pushToast('PDF saved', 'info');
+      } else if (result.message) {
+        pushToast(result.message, 'error');
+      }
+      // No message → user cancelled the save dialog; stay quiet.
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'PDF export failed', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const canExport = hasDocs || hasComments;
+
+  // Save: freeze a reusable copy of this report (comments + a snapshot of each
+  // doc's current content) under ~/.cc-center/saved/. Docs are re-read fresh on
+  // click so the snapshot is current; the saved-state marker is per-entry.
+  const alreadySaved = useSavedMark((s) => !!s.savedEntryIds[entry.id]);
+  const [saving, setSaving] = useState(false);
+  const onSave = async () => {
+    if (saving || alreadySaved) return;
+    setSaving(true);
+    try {
+      const docs: SavedDoc[] = [];
+      for (const d of entry.docs ?? []) {
+        if (!aliveProject) {
+          docs.push({ path: d.path, error: 'Project no longer exists' });
+          continue;
+        }
+        try {
+          const r = await window.cc.fs.readFile(joinPath(aliveProject.path, d.path));
+          docs.push({
+            path: d.path,
+            content: r.ok ? r.content : undefined,
+            truncated: r.truncated,
+            binary: r.binary,
+            error: r.ok ? undefined : r.message ?? 'Read failed'
+          });
+        } catch (e) {
+          docs.push({ path: d.path, error: e instanceof Error ? e.message : 'Read failed' });
+        }
+      }
+      const input: SavedRecordInput = {
+        sourceEntryId: entry.id,
+        projectId: entry.projectId,
+        projectLabel: displayLabel,
+        title: deriveTitle(entry),
+        comments: entry.comments,
+        docs: docs.length ? docs : undefined
+      };
+      await saveInboxEntry(input, entry.id);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -177,6 +257,34 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
           <span className="inbox-detail-ts-sep">·</span>
           {formatRelative(entry.ts)}
         </span>
+        {canExport && (
+          <button
+            type="button"
+            onClick={() => void onSave()}
+            className={`inbox-detail-save ${alreadySaved ? 'is-saved' : ''}`}
+            disabled={saving || alreadySaved}
+            title={alreadySaved ? 'Saved for later' : 'Save this report for later reuse'}
+            aria-label={alreadySaved ? 'Saved for later' : 'Save this report for later'}
+          >
+            {alreadySaved ? (
+              <BookmarkCheck size={14} strokeWidth={1.75} />
+            ) : (
+              <Bookmark size={14} strokeWidth={1.75} />
+            )}
+          </button>
+        )}
+        {canExport && (
+          <button
+            type="button"
+            onClick={() => void exportPdf()}
+            className="inbox-detail-download"
+            disabled={exporting}
+            title="Download as PDF"
+            aria-label="Download this inbox entry as PDF"
+          >
+            <Download size={14} strokeWidth={1.75} />
+          </button>
+        )}
         <button
           type="button"
           onClick={onDelete}
@@ -188,20 +296,22 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
         </button>
       </div>
 
-      {hasDocs && (
-        <div className="inbox-detail-docs">
-          {entry.docs!.map((doc) => (
-            <DocBlock key={doc.path} project={aliveProject} doc={doc} />
-          ))}
-        </div>
-      )}
+      <div ref={exportRef}>
+        {hasDocs && (
+          <div className="inbox-detail-docs">
+            {entry.docs!.map((doc) => (
+              <DocBlock key={doc.path} project={aliveProject} doc={doc} />
+            ))}
+          </div>
+        )}
 
-      {hasComments && (
-        <div className={`inbox-detail-comments ${hasDocs ? 'has-divider' : ''}`}>
-          <div className="inbox-detail-section-label">Comments</div>
-          <MarkdownContent text={entry.comments!} />
-        </div>
-      )}
+        {hasComments && (
+          <div className={`inbox-detail-comments ${hasDocs ? 'has-divider' : ''}`}>
+            <div className="inbox-detail-section-label">Comments</div>
+            <MarkdownContent text={entry.comments!} />
+          </div>
+        )}
+      </div>
 
       <div className="inbox-detail-footer">
         {projectAlive ? (
@@ -419,6 +529,10 @@ function MarkdownContent({ text }: { text: string }) {
     <div className="inbox-md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        // Syntax-highlight fenced code blocks. `ignoreMissing` keeps unknown
+        // languages (incl. ```mermaid, which the pre override intercepts
+        // before this matters) from throwing — they just render unhighlighted.
+        rehypePlugins={[[rehypeHighlight, { ignoreMissing: true }]]}
         components={{
           // Open links in a new window — Electron treats that as the OS
           // default browser. Avoid destructuring `node` (deprecated in
@@ -430,7 +544,16 @@ function MarkdownContent({ text }: { text: string }) {
             <div className="inbox-md-table-wrap">
               <table {...props} />
             </div>
-          )
+          ),
+          // Intercept ```mermaid fences and render them as diagrams. A
+          // non-mermaid fence falls through to the default <pre>. We hook
+          // `pre` (not `code`) so the rendered SVG isn't nested inside a
+          // monospace code block.
+          pre: (props) => {
+            const mermaid = extractMermaid(props.children);
+            if (mermaid !== null) return <MermaidDiagram code={mermaid} />;
+            return <pre {...props} />;
+          }
         }}
       >
         {body}
@@ -443,6 +566,21 @@ function MarkdownContent({ text }: { text: string }) {
 // Helpers
 // ============================================================================
 
+/**
+ * Given the children of a markdown `<pre>` (which react-markdown renders as a
+ * single `<code className="language-…">` element), return the raw source if
+ * it's a ```mermaid fence, otherwise null. Returning null lets the caller
+ * fall back to the default code-block rendering.
+ */
+function extractMermaid(children: ReactNode): string | null {
+  if (!isValidElement(children)) return null;
+  const props = children.props as { className?: string; children?: ReactNode };
+  const className = props.className ?? '';
+  if (!/(^|\s)language-mermaid(\s|$)/.test(className)) return null;
+  const source = props.children;
+  return typeof source === 'string' ? source.replace(/\n$/, '') : null;
+}
+
 function joinPath(root: string, rel: string): string {
   // The renderer doesn't have access to Node's `path`. Inbox docs are
   // documented as relative paths against the project root. Strip any
@@ -450,6 +588,23 @@ function joinPath(root: string, rel: string): string {
   const cleanRel = rel.replace(/^[/\\]+/, '');
   if (root.endsWith('/') || root.endsWith('\\')) return root + cleanRel;
   return `${root}/${cleanRel}`;
+}
+
+/**
+ * Derive a short title for a saved report: first non-empty comment line with
+ * leading markdown markers stripped, else the first doc path, else the project
+ * label. Clamped so the title stays scannable. Mirrors the sidebar preview.
+ */
+function deriveTitle(entry: InboxEntry): string {
+  const c = (entry.comments ?? '').trim();
+  if (c) {
+    const firstLine = c.split('\n').find((l) => l.trim().length > 0) ?? '';
+    const stripped = firstLine.replace(/^[#>*\-\s]+/, '').trim();
+    if (stripped) return stripped.slice(0, 120);
+  }
+  const firstDoc = entry.docs?.[0]?.path;
+  if (firstDoc) return firstDoc;
+  return entry.projectLabel ?? entry.projectId;
 }
 
 function formatAbsolute(ts: number): string {

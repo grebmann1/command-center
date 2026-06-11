@@ -10,6 +10,8 @@ import type {
   InboxEntry,
   McpServerEntry,
   PluginEntry,
+  SavedRecord,
+  SavedRecordInput,
   ScheduledTask,
   ScheduleTemplate,
   ScheduleGroup
@@ -633,6 +635,13 @@ interface DataState {
    * "prefer un-detach over reopen-closed" behavior.
    */
   restoreLastDetached: (projectId: string) => Promise<string | null>;
+  /**
+   * Terminate every background (headless, still-live) session in a project.
+   * Since closing a tab now only hides it, background sessions accumulate;
+   * this is the bulk "clean up the background" escape hatch behind the tray's
+   * trash affordance. Returns the count actually terminated.
+   */
+  closeAllBackground: (projectId: string) => Promise<number>;
   restartTerminal: (sessionId: string, projectId: string) => Promise<TerminalSession | null>;
   reorderTerminal: (projectId: string, fromId: string, toId: string) => void;
   renameTerminal: (projectId: string, sessionId: string, title: string) => void;
@@ -788,6 +797,18 @@ export const useData = create<DataState>((set, get) => ({
     });
     window.cc.inbox.onRemoved((id) => {
       useInbox.getState().removeLocal(id);
+    });
+
+    // Saved reports: one-shot list + full-list push (like the scheduler). Low
+    // volume, so main replaces the whole list on every save/delete.
+    try {
+      const records = await window.cc.saved.list();
+      useSaved.setState({ records, loading: false });
+    } catch {
+      useSaved.setState({ loading: false });
+    }
+    window.cc.saved.onChanged((records) => {
+      useSaved.setState({ records, loading: false });
     });
 
     // Scheduler: one-shot list + push subscription. The main process emits
@@ -1297,6 +1318,17 @@ export const useData = create<DataState>((set, get) => ({
     return alive ? sessionId : null;
   },
 
+  async closeAllBackground(projectId) {
+    const victims = backgroundTerminals(get().terminals[projectId]);
+    // closeTerminal handles the per-session kill IPC + state cleanup (terminals
+    // map, detachedStack, unread, split slots). Run them in order; each await
+    // keeps the optimistic state updates from interleaving confusingly.
+    for (const t of victims) {
+      await get().closeTerminal(t.id, projectId);
+    }
+    return victims.length;
+  },
+
   async restartTerminal(sessionId, projectId) {
     const list = get().terminals[projectId] || [];
     const idx = list.findIndex((t) => t.id === sessionId);
@@ -1690,6 +1722,45 @@ export const useScheduler = create<SchedulerLiveState>(() => ({
   loading: true
 }));
 
+/**
+ * Saved inbox reports — live mirror of `~/.cc-center/saved/`. Full-list
+ * replacement on every `saved:onChanged` push (low volume), like useScheduler.
+ */
+interface SavedLiveState {
+  records: SavedRecord[];
+  loading: boolean;
+}
+
+export const useSaved = create<SavedLiveState>(() => ({
+  records: [],
+  loading: true
+}));
+
+/**
+ * Per-inbox-entry "saved" marker, persisted to localStorage (mirrors
+ * useInboxAnswered). Lets the detail view show a "Saved ✓" state without
+ * scanning the saved records for a matching sourceEntryId on every render.
+ */
+interface SavedMarkState {
+  savedEntryIds: Record<string, true>;
+  markSaved: (entryId: string) => void;
+}
+
+export const useSavedMark = create<SavedMarkState>()(
+  persist(
+    (set) => ({
+      savedEntryIds: {},
+      markSaved: (entryId) =>
+        set((s) =>
+          s.savedEntryIds[entryId]
+            ? s
+            : { savedEntryIds: { ...s.savedEntryIds, [entryId]: true } }
+        )
+    }),
+    { name: 'cc.inbox-saved.v1', version: 1 }
+  )
+);
+
 interface ScheduleTemplatesState {
   templates: ScheduleTemplate[];
   loading: boolean;
@@ -1788,6 +1859,37 @@ export async function deleteInboxEntry(id: string): Promise<void> {
     await window.cc.inbox.delete(id);
   } catch (err) {
     pushErrorToast(errorMessage(err, 'Failed to delete inbox entry'));
+  }
+}
+
+/**
+ * Save an inbox report for later reuse. The caller (InboxDetail) assembles the
+ * `SavedRecordInput` — it already holds the resolved project + freshly-read doc
+ * snapshots — and this just persists it via IPC, marks the source entry saved
+ * (so the UI can show "Saved ✓"), and toasts. Main returns null on failure.
+ */
+export async function saveInboxEntry(
+  input: SavedRecordInput,
+  sourceEntryId?: string
+): Promise<boolean> {
+  try {
+    const rec = await window.cc.saved.save(input);
+    if (!rec) throw new Error('save returned null');
+    if (sourceEntryId) useSavedMark.getState().markSaved(sourceEntryId);
+    useUi.getState().pushToast('Saved for later', 'info');
+    return true;
+  } catch (err) {
+    pushErrorToast(errorMessage(err, 'Failed to save report'));
+    return false;
+  }
+}
+
+/** Delete a saved report by id. The onChanged push reconciles the list. */
+export async function deleteSavedRecord(id: string): Promise<void> {
+  try {
+    await window.cc.saved.delete(id);
+  } catch (err) {
+    pushErrorToast(errorMessage(err, 'Failed to delete saved report'));
   }
 }
 

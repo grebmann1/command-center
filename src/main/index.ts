@@ -22,9 +22,12 @@ import { listDir, readFile as fsReadFile, writeFile as fsWriteFile, walkFiles, s
 import { openIn } from './openers.js';
 import { getGitStatus, showHead, discardChanges } from './git.js';
 import { createInboxStore, type IInboxStore, type InboxEntry } from './inbox-store.js';
+import { exportInboxPdf } from './inbox-pdf.js';
+import { createSavedStore, type ISavedStore } from './saved-store.js';
+import type { SavedRecord, SavedRecordInput } from '../shared/types.js';
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import { ensureMcpConfigForProject } from './mcp-config.js';
-import { installCcCenterSkill } from './skill-installer.js';
+import { installCcCenterSkill, installSavedReportsSkill } from './skill-installer.js';
 import { listMcpServers, setMcpServerEnabled } from './mcp.js';
 import {
   listMcpServersAll,
@@ -67,7 +70,8 @@ import type {
   ScheduleGroup,
   ScheduleGroupInput,
   SkillBundleInput,
-  SkillBundleApplyMode
+  SkillBundleApplyMode,
+  InboxPdfExport
 } from '../shared/types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -208,6 +212,7 @@ let win: BrowserWindow | null = null;
 const ptys = new PtyManager();
 const agentStatus = new AgentStatusTracker();
 const inboxStore: IInboxStore = createInboxStore();
+const savedStore: ISavedStore = createSavedStore();
 const scheduler = new SchedulerManager();
 let tray: TrayController | null = null;
 const templates = new TemplateStore(() => store.listProjects());
@@ -572,11 +577,34 @@ function registerIpc() {
     (id: string) => inboxStore.delete(id),
     () => false
   );
+  safeHandle(
+    IPC.inbox.exportPdf,
+    (input: InboxPdfExport) => exportInboxPdf(win, input),
+    (err) => ({ ok: false, message: err instanceof Error ? err.message : String(err) })
+  );
   inboxStore.onAppended((entry: InboxEntry) => {
     safeSend(IPC.inbox.onAppended, entry);
   });
   inboxStore.onRemoved((id: string) => {
     safeSend(IPC.inbox.onRemoved, id);
+  });
+
+  // Saved reports: save/list/delete RPCs + full-list change pushes. The save
+  // onError returns null so a failed write surfaces as a toast in the renderer
+  // rather than throwing across IPC (the bridge type is SavedRecord | null).
+  safeHandle(
+    IPC.saved.save,
+    (input: SavedRecordInput) => savedStore.save(input),
+    () => null
+  );
+  safeHandle(IPC.saved.list, () => savedStore.list(), () => []);
+  safeHandle(
+    IPC.saved.delete,
+    (id: string) => savedStore.delete(id),
+    () => false
+  );
+  savedStore.onChanged((records: SavedRecord[]) => {
+    safeSend(IPC.saved.onChanged, records);
   });
 
   safeHandle(
@@ -1064,6 +1092,11 @@ app.whenReady().then(() => {
   installCcCenterSkill(logMainError).catch((err) =>
     logMainError('installCcCenterSkill', err)
   );
+  // Deploy the bundled `saved-reports` skill so agents can find & reuse the
+  // reports the user saved from the inbox (read-only JSON under ~/.cc-center/saved).
+  installSavedReportsSkill(logMainError).catch((err) =>
+    logMainError('installSavedReportsSkill', err)
+  );
   // Boot app modules (plugins/*). Each module's setup() runs once; failures
   // are isolated per-module so a broken module never blocks app start.
   moduleHost.setupAll(MAIN_MODULES).catch((err) => logMainError('moduleHost.setupAll', err));
@@ -1083,6 +1116,16 @@ app.whenReady().then(() => {
     // close so nothing regresses.
     onStopHook: (_projectId: string, sessionId: string) => {
       scheduler.onAgentFinished(sessionId);
+      // A finished turn is no longer waiting on the user — drop any blocked
+      // overlay so the dot doesn't stick red after the agent moves on.
+      agentStatus.clearBlocked(sessionId);
+    },
+    // Notification/UserPromptSubmit callback → live "blocked — needs you"
+    // status. The agent is waiting on the user on `blocked`, and resumed (or
+    // the user answered) on `unblocked`.
+    onNotifyHook: (_projectId: string, sessionId: string, action) => {
+      if (action === 'blocked') agentStatus.markBlocked(sessionId);
+      else agentStatus.clearBlocked(sessionId);
     },
     // A scheduled agent filed a run report via schedule_report. Attach it to
     // the matching run by sessionId (projectId is implied by the session).

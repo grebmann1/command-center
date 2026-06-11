@@ -10,18 +10,23 @@
  *    parsed straight from the raw PTY byte stream, so it works for hidden /
  *    unfocused tabs too — something herdr cannot do since it reads the
  *    *rendered* title),
- *  - debounce/coalescing so a burst of detections collapses to at most one
- *    emit per session per window.
+ *  - the Notification-hook overlay, which is the ONLY signal that can tell
+ *    "idle at the prompt" apart from "waiting on the user" (a permission
+ *    prompt or an interactive question). The OSC title shows the same `✳`
+ *    glyph in both cases, so without the hook a blocked agent reads as idle.
+ *  - a small resolver that fuses the two sources, and debounce/coalescing so a
+ *    burst of detections collapses to at most one emit per session per window.
  *
  * It deliberately does NOT touch `TerminalSession`: status streams over its own
  * `onAgentStatus` channel into a dedicated renderer store slice, so a status
  * tick never rebuilds the `terminals` map (the render-storm guard the arch
  * council made binding — BC 7/10).
  *
- * Screen-scan (LAS-07) and lifecycle hooks (LAS-04/09) are later, additive
- * inputs: they will call {@link AgentStatusTracker.report} with their own
- * derived state and the resolver here will fuse them. For now the OSC title is
- * the only producer, which is enough to light a real dot.
+ * Source fusion (see {@link resolve}): an active spinner (`working`) always
+ * wins — it means the agent is producing output again, so any stale "blocked"
+ * overlay is dropped. Otherwise the Notification overlay (`blocked`) wins over
+ * the OSC `idle`/`unknown`, because while blocked Claude keeps emitting the
+ * idle glyph. Screen-scan (LAS-07) is a later, additive OSC-like input.
  */
 
 import { EventEmitter } from 'node:events';
@@ -73,9 +78,34 @@ export function extractLastOscTitle(chunk: string): string | null {
 interface Entry {
   /** Last state we actually emitted to listeners. */
   emitted: AgentState;
-  /** Latest state a detector derived, awaiting debounce flush. */
-  pending: AgentState;
+  /**
+   * Latest state derived from the PTY stream (OSC title / screen-scan). This is
+   * the moment-to-moment signal: spinner → `working`, `✳` → `idle`.
+   */
+  osc: AgentState;
+  /**
+   * Whether the Notification hook says this session is waiting on the user.
+   * Sticky: set true on a `permission_prompt`/`idle_prompt` notification and
+   * only cleared when the agent visibly resumes (`working`) or the turn is
+   * answered (UserPromptSubmit / Stop). The OSC `idle` glyph can't clear it —
+   * Claude shows that same glyph the whole time it's blocked.
+   */
+  blocked: boolean;
   timer: NodeJS.Timeout | null;
+}
+
+/**
+ * Fuse the per-session inputs into the single state we surface.
+ *  - `working` always wins: the spinner means the agent is producing output, so
+ *    any stale blocked overlay is moot (and `clearBlocked` will have dropped it).
+ *  - otherwise a `blocked` overlay wins over the OSC reading, because Claude
+ *    keeps emitting the `idle` glyph while it waits on the user.
+ *  - else fall through to whatever the OSC stream last said.
+ */
+function resolve(entry: Entry): AgentState {
+  if (entry.osc === 'working') return 'working';
+  if (entry.blocked) return 'blocked';
+  return entry.osc;
 }
 
 /**
@@ -92,6 +122,15 @@ export class AgentStatusTracker extends EventEmitter {
     return this.entries.get(sessionId)?.emitted ?? 'unknown';
   }
 
+  private entry(sessionId: string): Entry {
+    let entry = this.entries.get(sessionId);
+    if (!entry) {
+      entry = { emitted: 'unknown', osc: 'unknown', blocked: false, timer: null };
+      this.entries.set(sessionId, entry);
+    }
+    return entry;
+  }
+
   /**
    * Feed a raw PTY data chunk through the OSC-title detector. Called from the
    * pty `data` event. Cheap: a regex over the chunk, only acts when the chunk
@@ -106,22 +145,42 @@ export class AgentStatusTracker extends EventEmitter {
   }
 
   /**
-   * Record a detector's derived state for a session and schedule a debounced
-   * emit. Idempotent within a window: repeated identical states reset nothing
-   * once already emitted. This is the single entry point other detectors
-   * (screen-scan, hooks) will also call.
+   * Record an OSC/screen-scan derived state. A `working` reading also implies
+   * the agent has resumed, so it clears any sticky blocked overlay.
    */
   report(sessionId: string, state: AgentState): void {
-    let entry = this.entries.get(sessionId);
-    if (!entry) {
-      entry = { emitted: 'unknown', pending: state, timer: null };
-      this.entries.set(sessionId, entry);
-    } else {
-      entry.pending = state;
-    }
-    // Already showing this state and nothing else pending → nothing to do.
-    if (entry.timer === null && entry.emitted === state) return;
+    const entry = this.entry(sessionId);
+    entry.osc = state;
+    if (state === 'working') entry.blocked = false;
+    this.schedule(sessionId, entry);
+  }
+
+  /**
+   * The Notification hook fired — the agent is waiting on the user (permission
+   * prompt or an interactive question). Sets the sticky blocked overlay.
+   */
+  markBlocked(sessionId: string): void {
+    const entry = this.entry(sessionId);
+    entry.blocked = true;
+    this.schedule(sessionId, entry);
+  }
+
+  /**
+   * The user answered (UserPromptSubmit) or the turn ended (Stop) — the agent
+   * is no longer waiting on input. Drops the blocked overlay; the resolved
+   * state falls back to the latest OSC reading.
+   */
+  clearBlocked(sessionId: string): void {
+    const entry = this.entries.get(sessionId);
+    if (!entry || !entry.blocked) return;
+    entry.blocked = false;
+    this.schedule(sessionId, entry);
+  }
+
+  /** Schedule a debounced flush when the resolved state would change. */
+  private schedule(sessionId: string, entry: Entry): void {
     if (entry.timer !== null) return; // a flush is already scheduled
+    if (resolve(entry) === entry.emitted) return; // nothing would change
     entry.timer = setTimeout(() => this.flush(sessionId), EMIT_DEBOUNCE_MS);
   }
 
@@ -129,8 +188,9 @@ export class AgentStatusTracker extends EventEmitter {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     entry.timer = null;
-    if (entry.pending === entry.emitted) return;
-    entry.emitted = entry.pending;
+    const next = resolve(entry);
+    if (next === entry.emitted) return;
+    entry.emitted = next;
     this.emit('status', sessionId, entry.emitted);
   }
 

@@ -19,10 +19,12 @@ extraResources:
   # png below.
   - from: resources/icon-1024.png
     to: icon-1024.png
-  # Bundled Claude Code skill, deployed to ~/.claude/skills/cc-center on boot
+  # Bundled Claude Code skills, deployed to ~/.claude/skills/<name> on boot
   # (see src/main/skill-installer.ts). Resolved via process.resourcesPath.
   - from: resources/cc-center-skill.md
     to: cc-center-skill.md
+  - from: resources/saved-reports-skill.md
+    to: saved-reports-skill.md
 
 asar: true
 asarUnpack:

@@ -128,3 +128,72 @@ describe('AgentStatusTracker (debounced emits)', () => {
     expect(seen).toEqual([]);
   });
 });
+
+describe('AgentStatusTracker (Notification-hook blocked overlay)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('markBlocked overrides the OSC idle glyph (the core bug)', () => {
+    const tracker = new AgentStatusTracker();
+    const seen: string[] = [];
+    tracker.on('status', (_id, state) => seen.push(state));
+
+    // Claude shows the ✳ idle glyph even while waiting on the user…
+    tracker.report('s1', 'idle');
+    vi.advanceTimersByTime(250);
+    expect(seen).toEqual(['idle']);
+
+    // …but the Notification hook tells us it's actually blocked.
+    tracker.markBlocked('s1');
+    vi.advanceTimersByTime(250);
+    expect(seen).toEqual(['idle', 'blocked']);
+    expect(tracker.get('s1')).toBe('blocked');
+
+    // A later idle reading must NOT clear blocked — same glyph the whole wait.
+    tracker.report('s1', 'idle');
+    vi.advanceTimersByTime(250);
+    expect(tracker.get('s1')).toBe('blocked');
+  });
+
+  it('a working spinner clears a sticky blocked overlay', () => {
+    const tracker = new AgentStatusTracker();
+    const seen: string[] = [];
+    tracker.on('status', (_id, state) => seen.push(state));
+
+    tracker.markBlocked('s1');
+    vi.advanceTimersByTime(250);
+    tracker.report('s1', 'working'); // agent resumed producing output
+    vi.advanceTimersByTime(250);
+
+    expect(seen).toEqual(['blocked', 'working']);
+  });
+
+  it('clearBlocked falls back to the latest OSC reading', () => {
+    const tracker = new AgentStatusTracker();
+    const seen: string[] = [];
+    tracker.on('status', (_id, state) => seen.push(state));
+
+    tracker.report('s1', 'idle');
+    tracker.markBlocked('s1');
+    vi.advanceTimersByTime(250);
+    expect(tracker.get('s1')).toBe('blocked');
+
+    tracker.clearBlocked('s1'); // user answered / turn ended
+    vi.advanceTimersByTime(250);
+    expect(tracker.get('s1')).toBe('idle');
+    expect(seen).toEqual(['blocked', 'idle']);
+  });
+
+  it('clearBlocked on a session that was never blocked is a no-op', () => {
+    const tracker = new AgentStatusTracker();
+    const seen: string[] = [];
+    tracker.on('status', (_id, state) => seen.push(state));
+
+    tracker.report('s1', 'working');
+    vi.advanceTimersByTime(250);
+    tracker.clearBlocked('s1');
+    vi.advanceTimersByTime(250);
+
+    expect(seen).toEqual(['working']);
+  });
+});
