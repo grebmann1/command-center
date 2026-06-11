@@ -64,6 +64,10 @@ interface UiState {
   overviewOpen: boolean;
   setOverviewOpen: (open: boolean) => void;
   selectedProjectId: string | null;
+  /** Non-null ⇒ the project list column is drilled into this project's
+   *  focused session view. Kept in sync with selectedProjectId and persisted
+   *  via AppConfig.focusedProjectId so focus survives relaunch. */
+  focusedProjectId: string | null;
   // tabs grouped by project — selected ids per project
   selectedTabId: Record<string, string | undefined>;
   paletteOpen: boolean;
@@ -136,6 +140,11 @@ interface UiState {
   catalogueFilter: { skills?: string; mcp?: string };
   setCatalogueFilter: (key: 'skills' | 'mcp', value: string | undefined) => void;
   selectProject: (id: string | null) => void;
+  /** Drill the project list column into `id`'s focused session view. Keeps
+   *  selection in sync (calls selectProject) and persists the focus. */
+  enterProjectFocus: (id: string) => void;
+  /** Leave focus mode and return the column to the full project list. */
+  exitProjectFocus: () => void;
   selectTab: (projectId: string, tabId: string | undefined) => void;
   setPaletteOpen: (open: boolean) => void;
   setQuickOpenOpen: (open: boolean) => void;
@@ -254,6 +263,7 @@ export const useUi = create<UiState>((set, get) => ({
   setOverviewOpen: (overviewOpen) => set({ overviewOpen }),
   revealScheduleId: null,
   selectedProjectId: null,
+  focusedProjectId: null,
   selectedTabId: {},
   paletteOpen: false,
   quickOpenOpen: false,
@@ -347,6 +357,16 @@ export const useUi = create<UiState>((set, get) => ({
     // jump to the top of the sidebar mid-session, which is jarring.
     window.cc.projects.touch(id).catch(() => {});
     useData.getState().loadGitStatus(id);
+  },
+  enterProjectFocus: (id) => {
+    set({ focusedProjectId: id });
+    // Keep selection in sync with focus so the workspace tracks the column.
+    get().selectProject(id);
+    window.cc.config.set({ focusedProjectId: id }).catch(() => {});
+  },
+  exitProjectFocus: () => {
+    set({ focusedProjectId: null });
+    window.cc.config.set({ focusedProjectId: null }).catch(() => {});
   },
   selectTab: (projectId, tabId) => {
     set((s) => {
@@ -709,6 +729,13 @@ export const useData = create<DataState>((set, get) => ({
       }
       if (config.lastProjectId && projects.find((p) => p.id === config.lastProjectId)) {
         useUi.getState().selectProject(config.lastProjectId);
+      }
+      // Restore focus mode only if the focused project still exists. Set the
+      // field directly (rather than enterProjectFocus) to avoid re-persisting
+      // the value we just read; selectProject keeps selection in sync.
+      if (config.focusedProjectId && projects.find((p) => p.id === config.focusedProjectId)) {
+        useUi.getState().selectProject(config.focusedProjectId);
+        useUi.setState({ focusedProjectId: config.focusedProjectId });
       }
       get().refreshAllGitStatus();
 

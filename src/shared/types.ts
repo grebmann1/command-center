@@ -140,6 +140,11 @@ export interface AppConfig {
   claudeBinary: string;
   fontSize: number;
   lastProjectId: string | null;
+  /**
+   * Non-null ⇒ the project list column is drilled into that project's focused
+   * session view. Persisted so focus survives relaunch, like lastProjectId.
+   */
+  focusedProjectId?: string | null;
   workspaceModes?: Record<string, 'terminals' | 'explorer'>;
   listPaneWidth?: number;
   windowBounds?: { x?: number; y?: number; width: number; height: number };
