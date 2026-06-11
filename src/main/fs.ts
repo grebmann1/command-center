@@ -1,6 +1,6 @@
 import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync, writeFileSync, type Dirent } from 'node:fs';
-import { join, relative } from 'node:path';
-import type { FsEntry, FsReadResult, FsWriteResult, SearchHit, SearchResult, SearchOptions } from '../shared/types.js';
+import { join, relative, extname } from 'node:path';
+import type { FsEntry, FsReadResult, FsWriteResult, FsReadDataUrlResult, SearchHit, SearchResult, SearchOptions } from '../shared/types.js';
 
 const DENY = new Set([
   'node_modules',
@@ -239,4 +239,42 @@ export function searchFiles(
   }
 
   return { hits, scanned, truncated };
+}
+
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+function mimeFromExt(ext: string): string {
+  const lower = ext.toLowerCase();
+  if (lower === '.png') return 'image/png';
+  if (lower === '.jpg' || lower === '.jpeg') return 'image/jpeg';
+  if (lower === '.gif') return 'image/gif';
+  if (lower === '.webp') return 'image/webp';
+  if (lower === '.svg') return 'image/svg+xml';
+  if (lower === '.pdf') return 'application/pdf';
+  return 'application/octet-stream';
+}
+
+export function readDataUrl(absPath: string): FsReadDataUrlResult {
+  let stats;
+  try {
+    stats = statSync(absPath);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+  if (!stats.isFile()) return { ok: false, message: 'Not a file' };
+  if (stats.size > MAX_IMAGE_BYTES) {
+    return { ok: false, message: `File too large (${stats.size} > ${MAX_IMAGE_BYTES})` };
+  }
+
+  let buf: Buffer;
+  try {
+    buf = readFileSync(absPath);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+
+  const ext = extname(absPath);
+  const mime = mimeFromExt(ext);
+  const b64 = buf.toString('base64');
+  return { ok: true, dataUrl: `data:${mime};base64,${b64}`, bytes: buf.byteLength };
 }

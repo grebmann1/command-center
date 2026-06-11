@@ -18,13 +18,15 @@ import { store } from './store.js';
 import { PtyManager } from './pty.js';
 import { AgentStatusTracker } from './agent-status.js';
 import { listClaudeSessions } from './claude.js';
-import { listDir, readFile as fsReadFile, writeFile as fsWriteFile, walkFiles, searchFiles } from './fs.js';
+import { listDir, readFile as fsReadFile, writeFile as fsWriteFile, walkFiles, searchFiles, readDataUrl } from './fs.js';
 import { openIn } from './openers.js';
 import { getGitStatus, showHead, discardChanges } from './git.js';
 import { createInboxStore, type IInboxStore, type InboxEntry } from './inbox-store.js';
 import { exportInboxPdf } from './inbox-pdf.js';
 import { createSavedStore, type ISavedStore } from './saved-store.js';
 import type { SavedRecord, SavedRecordInput } from '../shared/types.js';
+import { LibraryStore, type ILibraryStore } from './library-store.js';
+import type { LibraryDoc, LibraryAddInput, LibraryScope } from '../shared/types.js';
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import { ensureMcpConfigForProject } from './mcp-config.js';
 import { installCcCenterSkill, installSavedReportsSkill } from './skill-installer.js';
@@ -213,6 +215,7 @@ const ptys = new PtyManager();
 const agentStatus = new AgentStatusTracker();
 const inboxStore: IInboxStore = createInboxStore();
 const savedStore: ISavedStore = createSavedStore();
+const libraryStore: ILibraryStore = new LibraryStore(() => store.listProjects());
 const scheduler = new SchedulerManager();
 let tray: TrayController | null = null;
 const templates = new TemplateStore(() => store.listProjects());
@@ -401,6 +404,7 @@ function registerIpc() {
         logMainError(`ensureMcpConfigForProject(${project.id})`, err)
       );
       templates.rebindProjects();
+      libraryStore.rebindProjects?.();
       scheduler.rebindWatchers();
       return { ok: true, value: project };
     } catch (err) {
@@ -431,6 +435,7 @@ function registerIpc() {
       scheduler.onProjectRemoved(id);
       scheduler.rebindWatchers();
       templates.rebindProjects();
+      libraryStore.rebindProjects?.();
       // If the removed project was the one whose .claude/skills we were watching,
       // tear the watcher down — its path is now gone or owned by no-one.
       if (activeProjectSkillsId === id) setActiveProjectSkillsWatcher(null, null);
@@ -620,6 +625,36 @@ function registerIpc() {
   savedStore.onChanged((records: SavedRecord[]) => {
     safeSend(IPC.saved.onChanged, records);
   });
+
+  // Library: add/list/update/remove/reveal RPCs + full-list change pushes.
+  safeHandle(IPC.library.list, () => libraryStore.list(), () => []);
+  safeHandle(
+    IPC.library.add,
+    (input: LibraryAddInput) => libraryStore.add(input),
+    () => null
+  );
+  safeHandle(
+    IPC.library.update,
+    (id: string, patch: Partial<Pick<LibraryDoc, 'title' | 'summary' | 'tags'>>) =>
+      libraryStore.update(id, patch),
+    () => null
+  );
+  safeHandle(
+    IPC.library.remove,
+    (id: string) => libraryStore.remove(id),
+    () => false
+  );
+  safeHandle(
+    IPC.library.reveal,
+    (scope: LibraryScope, projectId?: string) => libraryStore.revealDir(scope, projectId),
+    () => ({ ok: false, path: '', message: 'Reveal failed' })
+  );
+  libraryStore.onChanged(() => {
+    const docs = libraryStore.list();
+    safeSend(IPC.library.onChanged, docs);
+  });
+
+  safeHandle(IPC.fs.readDataUrl, (p: string) => readDataUrl(p), () => ({ ok: false, message: 'Read failed' }));
 
   safeHandle(
     IPC.mcp.list,
@@ -1097,6 +1132,7 @@ app.whenReady().then(() => {
     logMainError('powerMonitor.resume', err);
   }
   templates.start();
+  libraryStore.start?.();
   skillBundles.start();
   scheduleGroups.start();
   startSkillsWatchers();
@@ -1220,6 +1256,7 @@ app.on('before-quit', (event) => {
   tray?.stop();
   tray = null;
   templates.stop();
+  libraryStore.stop?.();
   skillBundles.stop();
   scheduleGroups.stop();
   stopSkillsWatchers();

@@ -5,6 +5,7 @@ import type {
   CcApi,
   CreateTerminalRequest,
   InboxEntry,
+  LibraryDoc,
   McpServerEntry,
   PluginEntry,
   SavedRecord,
@@ -78,7 +79,8 @@ const api: CcApi = {
     writeFile: (path, content) => ipcRenderer.invoke(IPC.fs.writeFile, path, content),
     walkFiles: (path) => ipcRenderer.invoke(IPC.fs.walkFiles, path),
     searchFiles: (path, query, opts) =>
-      ipcRenderer.invoke(IPC.fs.searchFiles, path, query, opts)
+      ipcRenderer.invoke(IPC.fs.searchFiles, path, query, opts),
+    readDataUrl: (path) => ipcRenderer.invoke(IPC.fs.readDataUrl, path)
   },
   openers: {
     openIn: (target, path) => ipcRenderer.invoke(IPC.openers.openIn, target, path)
@@ -115,6 +117,18 @@ const api: CcApi = {
       const handler = (_e: unknown, records: SavedRecord[]) => cb(records);
       ipcRenderer.on(IPC.saved.onChanged, handler);
       return () => ipcRenderer.off(IPC.saved.onChanged, handler);
+    }
+  },
+  library: {
+    list: () => ipcRenderer.invoke(IPC.library.list),
+    add: (input) => ipcRenderer.invoke(IPC.library.add, input),
+    update: (id, patch) => ipcRenderer.invoke(IPC.library.update, id, patch),
+    remove: (id) => ipcRenderer.invoke(IPC.library.remove, id),
+    reveal: (scope, projectId) => ipcRenderer.invoke(IPC.library.reveal, scope, projectId),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, docs: LibraryDoc[]) => cb(docs);
+      ipcRenderer.on(IPC.library.onChanged, handler);
+      return () => ipcRenderer.off(IPC.library.onChanged, handler);
     }
   },
   mcp: {

@@ -45,7 +45,8 @@ export const IPC = {
     readFile: 'fs:readFile',
     writeFile: 'fs:writeFile',
     walkFiles: 'fs:walkFiles',
-    searchFiles: 'fs:searchFiles'
+    searchFiles: 'fs:searchFiles',
+    readDataUrl: 'fs:readDataUrl'
   },
   openers: {
     openIn: 'openers:openIn'
@@ -68,6 +69,14 @@ export const IPC = {
     list: 'saved:list',
     delete: 'saved:delete',
     onChanged: 'saved:onChanged'
+  },
+  library: {
+    list: 'library:list',
+    add: 'library:add',
+    update: 'library:update',
+    remove: 'library:remove',
+    reveal: 'library:reveal',
+    onChanged: 'library:onChanged'
   },
   mcp: {
     list: 'mcp:list',

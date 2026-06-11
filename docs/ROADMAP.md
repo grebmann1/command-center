@@ -5,6 +5,60 @@ can be picked up cold. `Status` ∈ {parked, planned, in-progress, shipped, drop
 
 ---
 
+## Document Library
+
+**Status:** planned (designed 2026-06-12)
+**Full plan:** [`docs/document-library-plan.md`](./document-library-plan.md)
+
+### One-line
+A first-class place to keep generated artifacts (md, pdf, images, code), browse
+them with a tree + multi-format preview, and let agents search/fetch/store them
+via a skill.
+
+### Key insight (don't re-derive)
+~85% of this already exists — it's assembly, not new infrastructure.
+`saved-store.ts` (atomic write, tolerant read, `onChanged`) + `template-store.ts`
+(dual-scope precedence merge) are the store template; `fs.ts` already does
+`walkFiles`/`searchFiles`/`readFile`; `ExplorerView` is tree + Monaco + md/mermaid
+preview; `PreviewPane` already hosts `<webview>`s (→ Chromium's built-in PDF
+viewer). The agent-access pattern is the **`saved-reports` skill** — explicitly
+"NOT an API and NOT an MCP tool": agents just Read/Write/Grep the store.
+
+### Resolved decisions (2026-06-12)
+- **Storage:** *both, project-default* — `<repo>/.cc-center/library/` (git-trackable)
+  **+** `~/.cc-center/library/` (global), precedence-merged with source badges.
+- **Storage shape:** real files on disk + a rolled-up `index.json` manifest
+  (title, tags, provenance, summary) — NOT a JSON-blob store (PDFs don't inline;
+  agents read files best).
+- **Agent access:** a `library` skill + normal file tools. MCP `library_*` tools
+  deferred until a remote/programmatic/server-validated need appears.
+
+### Scope guard (v1)
+`saved-store` stays as-is (frozen inbox snapshots); add a one-click "Save to
+library" bridge. New `'library'` `WorkspaceMode`; `LibraryView` = ExplorerView's
+tree + a format-switched preview (md→react-markdown, pdf→webview, image→`<img>`,
+code→Monaco). No versioning graph (date-stamped names). Scheduled-run deposits
+write the manifest inline (see `scheduled-runs-no-background-agents` memory).
+
+### Phases (detail in document-library-plan.md)
+1. **Store, no UI** — types; `library-store.ts` (fork template-store + saved-store);
+   manifest reconciliation; IPC; tests. Hand-write JSON to test.
+2. **Browse UI** — `'library'` mode; `LibraryView.tsx`; format-switched preview;
+   tag filter; `fs.searchFiles` full-text.
+3. **Deposit paths** — "Save to library" from inbox/saved; `inbox_push docs:`
+   promotion; scheduled-run artifact → library.
+4. **Agent skill** — `library` skill (clone `saved-reports`): where / manifest /
+   search / fetch / store + minimal-valid-entry recipe + path-traversal caution.
+5. **Optional** — `library_search/fetch/store` MCP tools with traversal guard.
+
+### Entry points when resuming
+- Store to fork: `src/main/template-store.ts`, `src/main/saved-store.ts`.
+- File ops: `src/main/fs.ts`. Browse/preview: `src/renderer/components/{ExplorerView,PreviewPane,MermaidDiagram}.tsx`.
+- Workspace mode: `src/renderer/store.ts:50`, `:429-492`.
+- Skill precedent: `resources/saved-reports-skill.md`, `src/main/skill-installer.ts`.
+
+---
+
 ## Live Agent Status Awareness
 
 **Status:** planned (designed 2026-06-10 via Zana arch council)

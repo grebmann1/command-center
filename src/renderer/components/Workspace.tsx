@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { TerminalSquare, FolderTree, GitBranch, Columns2, Rows2, LayoutGrid, Square, Globe } from 'lucide-react';
+import { TerminalSquare, FolderTree, GitBranch, Columns2, Rows2, LayoutGrid, Square, Globe, Library } from 'lucide-react';
 import type { SplitLayout, WorkspaceMode } from '../store';
 import { useData, useUi, visibleTerminals, backgroundTerminals } from '../store';
 import { TabBar } from './TabBar';
@@ -13,12 +13,15 @@ import { PreviewPane } from './PreviewPane';
 // `RegistryImpl` singleton — if both modules ever evaluate in the same
 // renderer the second one throws "Assertion failed: There is already an
 // extension with this id". Lazy-loading guarantees only the user's chosen
-// surface is imported.
+// surface is imported. LibraryView also imports monaco so it's lazy-loaded too.
 const ExplorerView = lazy(() =>
   import('./ExplorerView').then((m) => ({ default: m.ExplorerView }))
 );
 const WorkbenchView = lazy(() =>
   import('./WorkbenchView').then((m) => ({ default: m.WorkbenchView }))
+);
+const LibraryView = lazy(() =>
+  import('./LibraryView').then((m) => ({ default: m.LibraryView }))
 );
 import type { LaunchProfileId } from '@shared/types';
 
@@ -62,7 +65,8 @@ export function Workspace() {
     : 'terminals';
   const isExplorer = mode === 'explorer' && !!project;
   const isPreview = mode === 'preview' && !!project;
-  const isTerminals = !isExplorer && !isPreview;
+  const isLibrary = mode === 'library' && !!project;
+  const isTerminals = !isExplorer && !isPreview && !isLibrary;
   const splitLayout: SplitLayout = (project && splitLayoutMap[project.id]) || 'single';
   const splitTabIds = (project && splitTabIdsMap[project.id]) || [];
   const splitActive = splitLayout !== 'single';
@@ -188,6 +192,16 @@ export function Workspace() {
         <Globe size={13} />
         <span>Preview</span>
       </button>
+      <button
+        type="button"
+        className={isLibrary ? 'active' : ''}
+        onClick={() => setWorkspaceMode(project.id, 'library')}
+        title="Library documents"
+        aria-pressed={isLibrary}
+      >
+        <Library size={13} />
+        <span>Library</span>
+      </button>
     </div>
   );
 
@@ -241,6 +255,10 @@ export function Workspace() {
           <div className="explorer-topbar">
             <span className="explorer-topbar-label">Explorer</span>
           </div>
+        ) : isLibrary ? (
+          <div className="explorer-topbar">
+            <span className="explorer-topbar-label">Library</span>
+          </div>
         ) : (
           <div className="explorer-topbar">
             <span className="explorer-topbar-label">Preview</span>
@@ -283,6 +301,13 @@ export function Workspace() {
             ) : (
               <ExplorerView project={project} />
             )}
+          </Suspense>
+        )}
+        {isLibrary && project && (
+          <Suspense
+            fallback={<div className="workbench-status">Loading library…</div>}
+          >
+            <LibraryView project={project} />
           </Suspense>
         )}
         {isPreview && project && <PreviewPane projectId={project.id} />}

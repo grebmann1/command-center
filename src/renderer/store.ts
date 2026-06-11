@@ -8,6 +8,7 @@ import type {
   ClaudeSessionSummary,
   GitStatus,
   InboxEntry,
+  LibraryDoc,
   McpServerEntry,
   PluginEntry,
   SavedRecord,
@@ -47,7 +48,7 @@ export interface Toast {
   kind?: 'info' | 'error';
 }
 
-export type WorkspaceMode = 'terminals' | 'explorer' | 'preview';
+export type WorkspaceMode = 'terminals' | 'explorer' | 'preview' | 'library';
 
 export type SplitLayout = 'single' | 'vertical' | 'horizontal' | 'grid';
 
@@ -230,9 +231,9 @@ function persistWorkspaceModes() {
     const map = useUi.getState().workspaceMode;
     // 'preview' is intentionally not persisted — landing in an empty preview
     // pane after relaunch is jarring; restart should drop back to terminals.
-    const persisted: Record<string, 'terminals' | 'explorer'> = {};
+    const persisted: Record<string, 'terminals' | 'explorer' | 'library'> = {};
     for (const [k, v] of Object.entries(map)) {
-      if (v === 'terminals' || v === 'explorer') persisted[k] = v;
+      if (v === 'terminals' || v === 'explorer' || v === 'library') persisted[k] = v;
     }
     window.cc.config.set({ workspaceModes: persisted }).catch(() => {});
   }, 200);
@@ -846,6 +847,18 @@ export const useData = create<DataState>((set, get) => ({
     }
     window.cc.scheduler.onTemplatesChanged((templates) => {
       useScheduleTemplates.setState({ templates });
+    });
+
+    // Library: one-shot list + full-list push (like saved). Reconciled on read:
+    // manifest + on-disk, both scopes, newest-first.
+    try {
+      const docs = await window.cc.library.list();
+      useLibrary.setState({ docs, loading: false });
+    } catch {
+      useLibrary.setState({ loading: false });
+    }
+    window.cc.library.onChanged((docs) => {
+      useLibrary.setState({ docs, loading: false });
     });
 
     // Schedule groups: one-shot + push. Main seeds Personal/Work on first run
@@ -1823,6 +1836,22 @@ export const useSavedMark = create<SavedMarkState>()(
     { name: 'cc.inbox-saved.v1', version: 1 }
   )
 );
+
+/**
+ * Library docs — live mirror of both scopes (global + per-project). Full-list
+ * replacement on every `library:onChanged` push (low volume), like useScheduler.
+ * CRITICAL: expose the raw `docs` slice — do NOT add selectors that return fresh
+ * `?? []` / `.filter()` arrays (infinite-loop trap, see `zustand-selector-stable-ref`).
+ */
+interface LibraryLiveState {
+  docs: LibraryDoc[];
+  loading: boolean;
+}
+
+export const useLibrary = create<LibraryLiveState>(() => ({
+  docs: [],
+  loading: true
+}));
 
 /**
  * Per-inbox-entry "Keep" flag (star), persisted to localStorage like the other

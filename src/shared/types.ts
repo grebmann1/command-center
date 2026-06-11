@@ -129,6 +129,49 @@ export interface SavedRecord {
   tags?: string[];
 }
 
+/** Library document types. */
+export type LibraryDocKind = 'md' | 'pdf' | 'image' | 'code' | 'other';
+export type LibraryScope = 'project' | 'global';
+
+export interface LibraryDoc {
+  id: string;
+  relPath: string;            // posix, relative to its library dir
+  title: string;
+  summary?: string;
+  tags?: string[];
+  kind: LibraryDocKind;       // derived from ext
+  createdAt: number;
+  updatedAt: number;
+  bytes?: number;
+  source?: {
+    kind: 'agent' | 'user' | 'schedule' | 'inbox';
+    sessionId?: string;
+    scheduleId?: string;
+    projectId?: string;
+  };
+  // stamped at list() time, not persisted:
+  scope?: LibraryScope;
+  absPath?: string;
+  projectId?: string;         // owning project (for 'project' scope)
+  projectName?: string;
+}
+
+export interface LibraryManifest {
+  version: 1;
+  docs: LibraryDoc[];
+}
+
+export interface LibraryAddInput {
+  scope: LibraryScope;
+  projectId?: string;         // required when scope==='project'
+  relPath: string;
+  title: string;
+  content?: string;           // text write; omit if file already on disk
+  tags?: string[];
+  summary?: string;
+  source?: LibraryDoc['source'];
+}
+
 /** Input to SavedStore.save — the record minus the store-assigned id/savedAt. */
 export interface SavedRecordInput {
   sourceEntryId?: string;
@@ -208,7 +251,7 @@ export interface AppConfig {
    * session view. Persisted so focus survives relaunch, like lastProjectId.
    */
   focusedProjectId?: string | null;
-  workspaceModes?: Record<string, 'terminals' | 'explorer'>;
+  workspaceModes?: Record<string, 'terminals' | 'explorer' | 'library'>;
   listPaneWidth?: number;
   windowBounds?: { x?: number; y?: number; width: number; height: number };
   /** Global default model passed to claude CLI (absent = let claude decide). */
@@ -296,6 +339,13 @@ export interface FsReadResult {
 
 export interface FsWriteResult {
   ok: boolean;
+  bytes?: number;
+  message?: string;
+}
+
+export interface FsReadDataUrlResult {
+  ok: boolean;
+  dataUrl?: string;
   bytes?: number;
   message?: string;
 }
@@ -774,6 +824,7 @@ export interface CcApi {
     writeFile(path: string, content: string): Promise<FsWriteResult>;
     walkFiles(path: string): Promise<WalkedFile[]>;
     searchFiles(path: string, query: string, opts?: SearchOptions): Promise<SearchResult>;
+    readDataUrl(path: string): Promise<FsReadDataUrlResult>;
   };
   openers: {
     openIn(target: OpenTarget, path: string): Promise<OpenResult>;
@@ -845,6 +896,14 @@ export interface CcApi {
     list(): Promise<SavedRecord[]>;
     delete(id: string): Promise<boolean>;
     onChanged(cb: (records: SavedRecord[]) => void): () => void;
+  };
+  library: {
+    list(): Promise<LibraryDoc[]>;
+    add(input: LibraryAddInput): Promise<LibraryDoc | null>;
+    update(id: string, patch: Partial<Pick<LibraryDoc, 'title' | 'summary' | 'tags'>>): Promise<LibraryDoc | null>;
+    remove(id: string): Promise<boolean>;
+    reveal(scope: LibraryScope, projectId?: string): Promise<{ ok: boolean; path: string; message?: string }>;
+    onChanged(cb: (docs: LibraryDoc[]) => void): () => void;
   };
   mcp: {
     list(projectPath: string): Promise<McpServer[]>;
