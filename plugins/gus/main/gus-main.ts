@@ -57,6 +57,7 @@ interface RawWork {
   Scrum_Team__r?: { Name?: string } | null;
   Assignee__c?: string | null;
   Assignee__r?: { Name?: string } | null;
+  CreatedBy?: { Name?: string } | null;
   Product_Tag__r?: { Name?: string } | null;
   Epic__r?: { Name?: string } | null;
   LastModifiedDate?: string;
@@ -240,6 +241,7 @@ function mapWork(r: RawWork): GusWorkItem {
     teamName: r.Scrum_Team__r?.Name ?? undefined,
     assigneeId: r.Assignee__c ?? undefined,
     assignee: r.Assignee__r?.Name ?? undefined,
+    author: r.CreatedBy?.Name ?? undefined,
     productTag: r.Product_Tag__r?.Name ?? undefined,
     epicName: r.Epic__r?.Name ?? undefined,
     lastModified: r.LastModifiedDate
@@ -249,7 +251,7 @@ function mapWork(r: RawWork): GusWorkItem {
 const WORK_FIELDS =
   'Id, Name, Subject__c, Status__c, Priority__c, RecordType.Name, Story_Points__c, ' +
   'Sprint__c, Sprint__r.Name, Scrum_Team__c, Scrum_Team__r.Name, ' +
-  'Assignee__c, Assignee__r.Name, Product_Tag__r.Name, Epic__r.Name, LastModifiedDate';
+  'Assignee__c, Assignee__r.Name, CreatedBy.Name, Product_Tag__r.Name, Epic__r.Name, LastModifiedDate';
 
 /** Heavier field set for the single-record detail view. */
 const WORK_DETAIL_FIELDS =

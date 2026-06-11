@@ -908,9 +908,16 @@ function GusCard({
       >
         <div className="gus-card-subject gus-card-subject--lead">{item.subject}</div>
         <div className="gus-card-foot">
-          <span className={`gus-card-type gus-card-type--${typeClass}`}>
-            {typeIcon(item.type)}
-            <span>{item.name}</span>
+          <span className="gus-card-foot-lead">
+            <span className={`gus-card-type gus-card-type--${typeClass}`}>
+              {typeIcon(item.type)}
+              <span>{item.name}</span>
+            </span>
+            {item.author && (
+              <span className="gus-card-author" title={`Opened by ${item.author}`}>
+                {item.author}
+              </span>
+            )}
           </span>
           {age && (
             <span className="gus-card-age" title={`Last modified ${item.lastModified ?? ''}`}>
@@ -951,11 +958,16 @@ function GusCard({
         )}
       </div>
       <div className="gus-card-subject">{item.subject}</div>
-      {(item.sprintName || typeof item.storyPoints === 'number') && (
+      {(item.sprintName || typeof item.storyPoints === 'number' || item.author) && (
         <div className="gus-card-meta">
           {item.sprintName && <span className="gus-chip">{item.sprintName}</span>}
           {typeof item.storyPoints === 'number' && (
             <span className="gus-chip gus-chip--pts">{item.storyPoints} pts</span>
+          )}
+          {item.author && (
+            <span className="gus-chip gus-chip--author" title={`Opened by ${item.author}`}>
+              {item.author}
+            </span>
           )}
           <ExternalLink size={11} className="gus-card-open" aria-hidden />
         </div>

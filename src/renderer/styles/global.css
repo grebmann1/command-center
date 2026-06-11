@@ -7221,6 +7221,23 @@ body.resizing-col {
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
 }
+/* Footer left group: W-number/type + author. min-width:0 lets the author
+   truncate rather than shove the age off the row. */
+.gus-card-foot-lead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+/* Author (who opened the ticket) — quiet, truncates before crowding the age. */
+.gus-card-author {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 .gus-card-meta {
   display: flex;
   align-items: center;

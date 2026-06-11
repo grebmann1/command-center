@@ -25,6 +25,8 @@ export interface GusWorkItem {
   assigneeId?: string;
   /** Assignee display name. */
   assignee?: string;
+  /** Display name of who opened the work item (`CreatedBy.Name`). */
+  author?: string;
   productTag?: string;
   epicName?: string;
   lastModified?: string;
