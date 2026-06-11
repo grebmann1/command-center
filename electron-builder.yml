@@ -25,6 +25,8 @@ extraResources:
     to: cc-center-skill.md
   - from: resources/saved-reports-skill.md
     to: saved-reports-skill.md
+  - from: resources/brainstorm-skill.md
+    to: brainstorm-skill.md
 
 asar: true
 asarUnpack:

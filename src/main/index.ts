@@ -29,7 +29,11 @@ import { LibraryStore, type ILibraryStore } from './library-store.js';
 import type { LibraryDoc, LibraryAddInput, LibraryScope } from '../shared/types.js';
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import { ensureMcpConfigForProject } from './mcp-config.js';
-import { installCcCenterSkill, installSavedReportsSkill } from './skill-installer.js';
+import {
+  installCcCenterSkill,
+  installSavedReportsSkill,
+  installBrainstormSkill
+} from './skill-installer.js';
 import { listMcpServers, setMcpServerEnabled } from './mcp.js';
 import {
   listMcpServersAll,
@@ -1167,6 +1171,11 @@ app.whenReady().then(() => {
   // reports the user saved from the inbox (read-only JSON under ~/.cc-center/saved).
   installSavedReportsSkill(logMainError).catch((err) =>
     logMainError('installSavedReportsSkill', err)
+  );
+  // Deploy the bundled `brainstorm` skill so agents can run ideation sessions
+  // and capture ideas into the library (markdown + manifest under ~/.cc-center/library).
+  installBrainstormSkill(logMainError).catch((err) =>
+    logMainError('installBrainstormSkill', err)
   );
   // Boot app modules (plugins/*). Each module's setup() runs once; failures
   // are isolated per-module so a broken module never blocks app start.

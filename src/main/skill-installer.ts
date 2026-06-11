@@ -31,6 +31,9 @@ const SKILL_FILE = join(SKILL_DIR, 'SKILL.md');
 const SAVED_SKILL_DIR = join(homedir(), '.claude', 'skills', 'saved-reports');
 const SAVED_SKILL_FILE = join(SAVED_SKILL_DIR, 'SKILL.md');
 
+const BRAINSTORM_SKILL_DIR = join(homedir(), '.claude', 'skills', 'brainstorm');
+const BRAINSTORM_SKILL_FILE = join(BRAINSTORM_SKILL_DIR, 'SKILL.md');
+
 /**
  * Resolve a shipped resource file. In dev, electron-vite runs from the repo
  * root with `__dirname = out/main`, so the source is `../../resources`. Once
@@ -106,6 +109,19 @@ export async function installSavedReportsSkill(
     'saved-reports-skill.md',
     SAVED_SKILL_DIR,
     SAVED_SKILL_FILE,
+    log
+  );
+}
+
+/** Deploy the bundled `brainstorm` skill (ideate + capture ideas into the library). */
+export async function installBrainstormSkill(
+  log?: (context: string, err: unknown) => void
+): Promise<string | null> {
+  return installSkill(
+    'installBrainstormSkill',
+    'brainstorm-skill.md',
+    BRAINSTORM_SKILL_DIR,
+    BRAINSTORM_SKILL_FILE,
     log
   );
 }
