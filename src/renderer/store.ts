@@ -131,6 +131,11 @@ interface UiState {
   // space. Persisted in localStorage so it survives reloads.
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
+  // sidebar: when true, the Projects list hides projects that have no live
+  // (non-exited or background) sessions, so a long rail collapses to just the
+  // ones with running agents. Persisted in localStorage so it survives reloads.
+  hideIdleProjects: boolean;
+  toggleHideIdleProjects: () => void;
   // sidebar: per-section collapse state in the list rail (Scheduler/Settings),
   // keyed by a stable section id like 'scheduler:groups'. Collapsed sections
   // hide their rows so a long rail stays scannable. Persisted in localStorage
@@ -322,6 +327,19 @@ export const useUi = create<UiState>((set, get) => ({
         // ignore quota errors
       }
       return { sidebarCollapsed: next };
+    }),
+  hideIdleProjects:
+    typeof localStorage !== 'undefined' &&
+    localStorage.getItem('cc.hideIdleProjects') === '1',
+  toggleHideIdleProjects: () =>
+    set((s) => {
+      const next = !s.hideIdleProjects;
+      try {
+        localStorage.setItem('cc.hideIdleProjects', next ? '1' : '0');
+      } catch {
+        // ignore quota errors
+      }
+      return { hideIdleProjects: next };
     }),
   collapsedSections: readCollapsedSections(),
   toggleSection: (key) =>

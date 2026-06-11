@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, EyeOff, Layers, Settings, ChevronRight, ArrowLeft, RotateCcw } from 'lucide-react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, EyeOff, Layers, Settings, ChevronRight, ArrowLeft, RotateCcw, Activity } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
 import {
   useData,
@@ -120,6 +120,13 @@ function ProjectRollupDot({ projectId }: { projectId: string }) {
 
 const KNOWN_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
 
+/** Quick-launch profiles offered by the focus-view "+" dropdown, in order. */
+const FOCUS_NEW_PROFILES: { profile: LaunchProfileId; label: string }[] = [
+  { profile: 'claude', label: 'claude' },
+  { profile: 'claude-yolo', label: 'claude --yolo' },
+  { profile: 'shell', label: 'shell' }
+];
+
 /** First entry in defaultAgents wins for one-click "+" semantics, but only if
  *  it's a known profile id; otherwise default to 'claude'. Mirrors Workspace. */
 function projectDefaultProfile(project: Project): LaunchProfileId {
@@ -163,8 +170,11 @@ function ProjectFocusView({ project }: { project: Project }) {
   const activeTab = selectedId === project.id ? selectedTabId[project.id] : undefined;
   const totalSessions = (sessions ?? []).length;
 
-  const handleNew = () => {
-    const profile = projectDefaultProfile(project);
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
+  const newMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const handleNew = (profile: LaunchProfileId) => {
+    setNewMenuOpen(false);
     void createTerminal(project.id, profile, 80, 24).then((session) => {
       if (session) {
         selectProject(project.id);
@@ -172,6 +182,24 @@ function ProjectFocusView({ project }: { project: Project }) {
       }
     });
   };
+
+  // Close the "+" launch menu on any outside click or Escape.
+  useEffect(() => {
+    if (!newMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (newMenuRef.current?.contains(e.target as Node)) return;
+      setNewMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNewMenuOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [newMenuOpen]);
 
   return (
     <section className="list-pane">
@@ -195,15 +223,37 @@ function ProjectFocusView({ project }: { project: Project }) {
           {project.name}
         </span>
         <ProjectRollupDot projectId={project.id} />
-        <button
-          type="button"
-          className="focus-new-btn"
-          aria-label="New session"
-          title={`New ${projectDefaultProfile(project)} session`}
-          onClick={handleNew}
-        >
-          <Plus size={14} />
-        </button>
+        <div className="focus-new" ref={newMenuRef}>
+          <button
+            type="button"
+            className="focus-new-btn"
+            aria-label="New session"
+            aria-haspopup="menu"
+            aria-expanded={newMenuOpen}
+            title="New session"
+            onClick={() => setNewMenuOpen((v) => !v)}
+          >
+            <Plus size={14} />
+          </button>
+          {newMenuOpen && (
+            <div className="focus-new-menu" role="menu">
+              {FOCUS_NEW_PROFILES.map(({ profile, label }) => (
+                <button
+                  key={profile}
+                  type="button"
+                  role="menuitem"
+                  className="focus-new-menu-item"
+                  onClick={() => handleNew(profile)}
+                >
+                  <span className={`tab-profile-icon profile-${profile}`} aria-hidden="true">
+                    {profileIcon(profile)}
+                  </span>
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
       <div className="list-body">
         {totalSessions === 0 ? (
@@ -454,6 +504,8 @@ function ProjectsList() {
   const toggleProjectExpanded = useUi((s) => s.toggleProjectExpanded);
   const overviewOpen = useUi((s) => s.overviewOpen);
   const setOverviewOpen = useUi((s) => s.setOverviewOpen);
+  const hideIdleProjects = useUi((s) => s.hideIdleProjects);
+  const toggleHideIdleProjects = useUi((s) => s.toggleHideIdleProjects);
 
   const openIn = async (target: OpenTarget, path: string) => {
     try {
@@ -465,6 +517,7 @@ function ProjectsList() {
   };
   const [dropOver, setDropOver] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [filter, setFilter] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -498,10 +551,22 @@ function ProjectsList() {
     if (focusedProjectId && !focusedProject) exitProjectFocus();
   }, [focusedProjectId, focusedProject, exitProjectFocus]);
 
+  // A project is "active" when it has at least one live session — a non-exited
+  // visible terminal or one running in the background. Keeps the selected
+  // project visible regardless, so toggling the filter never hides the row the
+  // user is currently in.
+  const projectHasRunningAgents = (p: Project) =>
+    visibleTerminals(terminals[p.id]).some((t) => t.status !== 'exited') ||
+    backgroundTerminals(terminals[p.id]).length > 0;
+
   const visibleProjects = (() => {
+    let list = sortedProjects;
+    if (hideIdleProjects) {
+      list = list.filter((p) => p.id === selectedId || projectHasRunningAgents(p));
+    }
     const q = filter.trim().toLowerCase();
-    if (!q) return sortedProjects;
-    return sortedProjects.filter(
+    if (!q) return list;
+    return list.filter(
       (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q)
     );
   })();
@@ -532,6 +597,27 @@ function ProjectsList() {
       window.removeEventListener('mousedown', close);
       window.removeEventListener('keydown', close);
     };
+  }, [menu]);
+
+  // Clamp the context menu into the viewport. It's positioned at the raw click
+  // coordinates, so right-clicking low in the list would otherwise push the
+  // bottom items (Rename, Remove project) off-screen and out of reach.
+  useLayoutEffect(() => {
+    if (!menu) return;
+    const el = menuRef.current;
+    if (!el) return;
+    const PAD = 8;
+    const rect = el.getBoundingClientRect();
+    let left = menu.x;
+    let top = menu.y;
+    if (left + rect.width > window.innerWidth - PAD) {
+      left = Math.max(PAD, window.innerWidth - rect.width - PAD);
+    }
+    if (top + rect.height > window.innerHeight - PAD) {
+      top = Math.max(PAD, window.innerHeight - rect.height - PAD);
+    }
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
   }, [menu]);
 
   useEffect(() => {
@@ -623,6 +709,15 @@ function ProjectsList() {
       <header className="list-header">
         <h2>Projects</h2>
         <button
+          className={`icon-btn ${hideIdleProjects ? 'on' : ''}`}
+          aria-label={hideIdleProjects ? 'Show all projects' : 'Show only projects with running agents'}
+          aria-pressed={hideIdleProjects}
+          title={hideIdleProjects ? 'Showing only projects with running agents' : 'Hide projects without running agents'}
+          onClick={() => toggleHideIdleProjects()}
+        >
+          <Activity size={16} />
+        </button>
+        <button
           className="icon-btn"
           aria-label="Add remote project"
           title="Add remote (SSH) project"
@@ -670,7 +765,21 @@ function ProjectsList() {
             Click <strong>+</strong> or drop a folder here.
           </div>
         ) : visibleProjects.length === 0 ? (
-          <div className="list-empty">No projects match &ldquo;{filter}&rdquo;.</div>
+          filter.trim() ? (
+            <div className="list-empty">No projects match &ldquo;{filter}&rdquo;.</div>
+          ) : (
+            <div className="list-empty">
+              No projects with running agents.
+              <br />
+              <button
+                type="button"
+                className="list-empty-link"
+                onClick={() => toggleHideIdleProjects()}
+              >
+                Show all projects
+              </button>
+            </div>
+          )
         ) : (
           visibleProjects.map((p) => (
             <div key={p.id} className="project-group">
@@ -930,6 +1039,7 @@ function ProjectsList() {
         const p = projects.find((pr) => pr.id === menu.projectId);
         return (
         <div
+          ref={menuRef}
           className="project-menu"
           style={{ top: menu.y, left: menu.x }}
           onMouseDown={(e) => e.stopPropagation()}

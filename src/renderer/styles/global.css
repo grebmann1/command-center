@@ -482,6 +482,11 @@ body.resizing-col {
   color: var(--danger);
 }
 
+.icon-btn.on {
+  background: var(--bg-hover);
+  color: var(--accent-blue);
+}
+
 .icon-btn.project-delete-armed,
 .icon-btn.project-delete-armed:hover {
   background: var(--danger);
@@ -550,6 +555,16 @@ body.resizing-col {
   font-size: 12px;
   line-height: 1.6;
   text-align: center;
+}
+
+.list-empty-link {
+  color: var(--accent-blue);
+  font-size: 12px;
+  padding: 0;
+}
+
+.list-empty-link:hover {
+  text-decoration: underline;
 }
 
 .settings-scope-label {
@@ -897,6 +912,38 @@ body.resizing-col {
   background: var(--bg-hover);
   color: var(--text-primary);
   border-color: var(--border-strong);
+}
+
+/* "+" launch dropdown in the focus header — anchored to the button. */
+.focus-new {
+  position: relative;
+  flex: 0 0 auto;
+}
+.focus-new-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 150px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 60;
+}
+.focus-new-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+  text-align: left;
+}
+.focus-new-menu-item:hover {
+  background: var(--bg-hover);
 }
 
 /* Grouped status sections — reuse SectionHeader + .list-count-badge. The badge
