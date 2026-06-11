@@ -1,13 +1,16 @@
 {
   "name": "cc-terminal-center",
   "productName": "Claude Code Terminal Center",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Claude Code Terminal Command Center — multi-project terminal hub",
   "author": "grebmann",
   "homepage": "https://github.com/grebmann/claude-code-terminal-center",
   "main": "out/main/index.js",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "electron-vite dev",
     "start": "electron-vite dev",
