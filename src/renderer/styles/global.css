@@ -9178,12 +9178,31 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
+/* Shell launcher — a secondary action sitting left of Send. It skips the prompt
+   entirely, so it's styled quieter than the primary button. */
+.launch-shell-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.launch-shell-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
 .launch-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
 }
 
-.launch-actions .btn.primary {
+.launch-actions .btn {
   padding: 8px 16px;
 }
 

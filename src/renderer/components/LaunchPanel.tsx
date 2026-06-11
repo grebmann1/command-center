@@ -5,10 +5,9 @@ import { ClaudeSessionsList } from './ClaudeSessionsList';
 import { profileIcon } from '../util/profileIcon';
 
 /**
- * The rich "+" launcher. Replaces the old 4-item dropdown: the user types an
- * instruction, picks a profile (claude / claude --yolo / shell) plus model and
- * permission mode, and launches a tab seeded with that first prompt. Also lists
- * resumable prior conversations and any background sessions.
+ * The "+" launcher. The user types an instruction, picks a profile
+ * (claude / claude --yolo / shell), and launches a tab seeded with that first
+ * prompt. Also lists resumable prior conversations and any background sessions.
  *
  * Rendered in two variants from one component so the modal and the empty-project
  * state stay identical:
@@ -16,52 +15,23 @@ import { profileIcon } from '../util/profileIcon';
  *   - `inline` — fills the empty workspace when a project has no tabs.
  */
 
-type LauncherProfile = 'claude' | 'claude-yolo' | 'shell';
-type ModelChoice = 'default' | 'opus' | 'sonnet' | 'haiku';
-type PermissionChoice = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+type LauncherProfile = 'claude' | 'claude-yolo';
 
 /**
- * Built-in launch profiles, modelled as descriptors (not hard-coded buttons) so
- * a future source (e.g. Zana/persona profiles) can append entries without
- * restructuring. `buildArgs` turns the form state into CLI args; `seedsPrompt`
- * marks profiles that accept an initial instruction.
+ * The prompt-seeding Claude profiles shown in the segmented control. Shell is
+ * deliberately excluded — it never takes an instruction, so it lives as a
+ * standalone side button next to this segment (see `launchShell`).
  */
 interface ProfileDescriptor {
   id: LauncherProfile;
   /** The actual pty launch profile to spawn. */
   profile: LaunchProfileId;
   label: string;
-  /** Whether model + permission-mode selectors apply. */
-  hasClaudeOptions: boolean;
-  /** Whether an initial instruction is passed to the session. */
-  seedsPrompt: boolean;
 }
 
 const PROFILES: ProfileDescriptor[] = [
-  { id: 'claude', profile: 'claude', label: 'claude', hasClaudeOptions: true, seedsPrompt: true },
-  {
-    id: 'claude-yolo',
-    profile: 'claude-yolo',
-    label: 'claude --yolo',
-    // --dangerously-skip-permissions takes precedence; permission mode is moot.
-    hasClaudeOptions: true,
-    seedsPrompt: true
-  },
-  { id: 'shell', profile: 'shell', label: 'shell', hasClaudeOptions: false, seedsPrompt: false }
-];
-
-const MODELS: Array<{ id: ModelChoice; label: string }> = [
-  { id: 'default', label: 'Default' },
-  { id: 'opus', label: 'Opus' },
-  { id: 'sonnet', label: 'Sonnet' },
-  { id: 'haiku', label: 'Haiku' }
-];
-
-const PERMISSION_MODES: Array<{ id: PermissionChoice; label: string }> = [
-  { id: 'default', label: 'Default' },
-  { id: 'acceptEdits', label: 'Accept edits' },
-  { id: 'plan', label: 'Plan' },
-  { id: 'bypassPermissions', label: 'Bypass' }
+  { id: 'claude', profile: 'claude', label: 'claude' },
+  { id: 'claude-yolo', profile: 'claude-yolo', label: 'claude --yolo' }
 ];
 
 /** Derive a short, meaningful tab title from the instruction. */
@@ -102,8 +72,6 @@ export function LaunchPanel({
 }: Props) {
   const [prompt, setPrompt] = useState('');
   const [profileId, setProfileId] = useState<LauncherProfile>('claude');
-  const [model, setModel] = useState<ModelChoice>('default');
-  const [permissionMode, setPermissionMode] = useState<PermissionChoice>('default');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -153,29 +121,29 @@ export function LaunchPanel({
 
   const launch = () => {
     const extraArgs: string[] = [];
-    if (descriptor.hasClaudeOptions && model !== 'default') {
-      extraArgs.push('--model', model);
-    }
-    // Permission mode is ignored for --yolo (it already skips permissions).
-    if (descriptor.profile === 'claude' && permissionMode !== 'default') {
-      extraArgs.push('--permission-mode', permissionMode);
-    }
     const body = prompt.trim();
     // Seed the prompt as the LAST positional argv element — `claude [options]
     // [prompt]` picks it up as the first user turn (same mechanism the scheduler
-    // uses, see scheduler.ts). Shell ignores it (it would be run as a command).
+    // uses, see scheduler.ts).
     // A prompt that begins with a dash would otherwise be parsed as a flag, so
     // we precede it with `--` (end-of-options) to force it to be treated as the
     // positional prompt.
-    if (descriptor.seedsPrompt && body) {
+    if (body) {
       if (body.startsWith('-')) extraArgs.push('--');
       extraArgs.push(body);
     }
-    const title = descriptor.seedsPrompt && body ? titleFromPrompt(body) : descriptor.label;
+    const title = body ? titleFromPrompt(body) : descriptor.label;
     onLaunch(descriptor.profile, {
       extraArgs: extraArgs.length > 0 ? extraArgs : undefined,
       title: title || undefined
     });
+    onClose?.();
+  };
+
+  // Shell sits outside the prompt flow — it never takes an instruction, so it
+  // launches straight into an interactive terminal.
+  const launchShell = () => {
+    onLaunch('shell', { title: 'shell' });
     onClose?.();
   };
 
@@ -199,16 +167,11 @@ export function LaunchPanel({
       <textarea
         ref={textareaRef}
         className="launch-instruction"
-        placeholder={
-          descriptor.seedsPrompt
-            ? 'Describe the task… (⌘↵ to launch). Leave empty to open an interactive session.'
-            : 'Shell session — instructions are ignored.'
-        }
+        placeholder="Describe the task… (⌘↵ to launch). Leave empty to open an interactive session."
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={onTextareaKeyDown}
         rows={3}
-        disabled={!descriptor.seedsPrompt}
       />
 
       <div className="launch-row">
@@ -231,48 +194,21 @@ export function LaunchPanel({
         </div>
       </div>
 
-      {descriptor.hasClaudeOptions && (
-        <div className="launch-row">
-          <span className="launch-row-label">Model</span>
-          <div className="launch-segmented" role="group" aria-label="Model">
-            {MODELS.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                className={model === m.id ? 'active' : ''}
-                onClick={() => setModel(m.id)}
-                aria-pressed={model === m.id}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {descriptor.profile === 'claude' && (
-        <div className="launch-row">
-          <span className="launch-row-label">Permissions</span>
-          <div className="launch-segmented" role="group" aria-label="Permission mode">
-            {PERMISSION_MODES.map((pm) => (
-              <button
-                key={pm.id}
-                type="button"
-                className={permissionMode === pm.id ? 'active' : ''}
-                onClick={() => setPermissionMode(pm.id)}
-                aria-pressed={permissionMode === pm.id}
-              >
-                {pm.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="launch-actions">
+        <button
+          type="button"
+          className="btn launch-shell-btn"
+          onClick={launchShell}
+          title="Open a shell session"
+        >
+          <span className="tab-profile-icon profile-shell" aria-hidden="true">
+            {profileIcon('shell')}
+          </span>
+          shell
+        </button>
         <button className="btn primary" onClick={launch}>
           <TerminalIcon size={14} />
-          Launch {descriptor.label}
+          Send
         </button>
       </div>
 

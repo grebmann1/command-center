@@ -772,6 +772,10 @@ function ProjectsList() {
                   </div>
                 )}
               </div>
+              {/* Live agent rollup: the most-urgent state across the project's
+               *  sessions (blocked → working → done → idle). Sits before the
+               *  run-count badge so "needs you" reads at a glance. */}
+              <ProjectRollupDot projectId={p.id} />
               {(() => {
                 const list = visibleTerminals(terminals[p.id]);
                 const background = backgroundTerminals(terminals[p.id]);
@@ -850,6 +854,7 @@ function ProjectsList() {
                         {profileIcon(t.profile)}
                       </span>
                       <span className="project-terminal-name">{t.title}</span>
+                      <AgentStatusDot sessionId={t.id} />
                       {bad && (
                         <span className="project-terminal-exit-bad" aria-label={`Exit code ${t.exitCode}`}>
                           ✗{t.exitCode}
