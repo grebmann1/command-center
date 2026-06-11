@@ -25,6 +25,9 @@ export interface SessionSnapshot {
   extraArgs?: string[];
   cwd?: string;
   pinned?: boolean;
+  /** Preserve a manual rename across relaunch so the restored tab keeps its
+   *  user-chosen name and the OSC auto-rename stays suppressed. */
+  titleLocked?: boolean;
 }
 
 /** Per-project map of remembered tabs, in tab order. */
@@ -50,7 +53,8 @@ export function snapshotTabs(tabs: TerminalSession[]): SessionSnapshot[] {
       title: t.title,
       extraArgs: t.extraArgs,
       cwd: t.cwd,
-      pinned: t.pinned
+      pinned: t.pinned,
+      titleLocked: t.titleLocked
     }));
 }
 
@@ -96,6 +100,8 @@ export interface RestorePlanItem {
   title: string;
   cwd?: string;
   pinned?: boolean;
+  /** Preserved manual-rename lock; re-applied so the restored tab keeps its name. */
+  titleLocked?: boolean;
   /** extraArgs with `--continue` already folded in for claude profiles. */
   extraArgs?: string[];
 }
@@ -133,6 +139,7 @@ export function planRestore(
         title: tab.title,
         cwd: tab.cwd,
         pinned: tab.pinned,
+        titleLocked: tab.titleLocked,
         extraArgs: withResumeArgs(tab.profile, tab.extraArgs)
       });
     }

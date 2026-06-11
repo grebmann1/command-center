@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   classifyOscTitle,
   extractLastOscTitle,
+  stripTitleGlyph,
   AgentStatusTracker
 } from '../agent-status.js';
 
@@ -24,6 +25,29 @@ describe('classifyOscTitle', () => {
     expect(classifyOscTitle('~/code/my-project')).toBeNull();
     expect(classifyOscTitle('zsh')).toBeNull();
     expect(classifyOscTitle('')).toBeNull();
+  });
+});
+
+describe('stripTitleGlyph', () => {
+  it('strips a leading braille spinner glyph + space', () => {
+    expect(stripTitleGlyph('⠹ Cooking…')).toBe('Cooking…');
+  });
+
+  it('strips a leading ✳ idle marker + space', () => {
+    expect(stripTitleGlyph('✳ Fix the login bug')).toBe('Fix the login bug');
+  });
+
+  it('tolerates leading whitespace before the glyph', () => {
+    expect(stripTitleGlyph('  ✳ Task title')).toBe('Task title');
+  });
+
+  it('returns the trimmed text unchanged when there is no glyph', () => {
+    expect(stripTitleGlyph('~/code/my-project')).toBe('~/code/my-project');
+  });
+
+  it('returns empty when the title is only a glyph', () => {
+    expect(stripTitleGlyph('✳')).toBe('');
+    expect(stripTitleGlyph('⠹ ')).toBe('');
   });
 });
 
@@ -114,6 +138,35 @@ describe('AgentStatusTracker (debounced emits)', () => {
 
     expect(seen).toEqual([]);
     expect(tracker.get('s1')).toBe('unknown');
+  });
+
+  it('emits a title event from an idle OSC title (the auto-rename source)', () => {
+    const tracker = new AgentStatusTracker();
+    const titles: Array<[string, string]> = [];
+    tracker.on('title', (id, title) => titles.push([id, title]));
+
+    tracker.observeData('s1', '\x1b]2;✳ Fix the login bug\x07');
+    expect(titles).toEqual([['s1', 'Fix the login bug']]);
+  });
+
+  it('does NOT emit a title from a working spinner title', () => {
+    const tracker = new AgentStatusTracker();
+    const titles: string[] = [];
+    tracker.on('title', (_id, title) => titles.push(title));
+
+    tracker.observeData('s1', '\x1b]2;⠹ Cooking…\x07');
+    expect(titles).toEqual([]);
+  });
+
+  it('emits a title only when the idle summary changes', () => {
+    const tracker = new AgentStatusTracker();
+    const titles: string[] = [];
+    tracker.on('title', (_id, title) => titles.push(title));
+
+    tracker.observeData('s1', '\x1b]2;✳ Same task\x07');
+    tracker.observeData('s1', '\x1b]2;✳ Same task\x07'); // re-emitted each idle frame
+    tracker.observeData('s1', '\x1b]2;✳ New task\x07');
+    expect(titles).toEqual(['Same task', 'New task']);
   });
 
   it('ignores data chunks with no agent signal', () => {

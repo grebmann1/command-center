@@ -76,6 +76,8 @@ interface UiState {
   quickOpenOpen: boolean;
   shortcutsOpen: boolean;
   resumeOpen: boolean;
+  /** The rich "+" launcher modal (instruction + profile/model/mode + resume). */
+  launcherOpen: boolean;
   searchOpen: boolean;
   findOpen: boolean;
   toasts: Toast[];
@@ -152,6 +154,7 @@ interface UiState {
   setQuickOpenOpen: (open: boolean) => void;
   setShortcutsOpen: (open: boolean) => void;
   setResumeOpen: (open: boolean) => void;
+  setLauncherOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setFindOpen: (open: boolean) => void;
   /** Which tab is active in the Settings panel. */
@@ -271,6 +274,7 @@ export const useUi = create<UiState>((set, get) => ({
   quickOpenOpen: false,
   shortcutsOpen: false,
   resumeOpen: false,
+  launcherOpen: false,
   searchOpen: false,
   findOpen: false,
   settingsTab: 'global',
@@ -381,6 +385,7 @@ export const useUi = create<UiState>((set, get) => ({
   setQuickOpenOpen: (quickOpenOpen) => set({ quickOpenOpen }),
   setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
   setResumeOpen: (resumeOpen) => set({ resumeOpen }),
+  setLauncherOpen: (launcherOpen) => set({ launcherOpen }),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setFindOpen: (findOpen) => set({ findOpen }),
   setSettingsTab: (settingsTab) => set({ settingsTab }),
@@ -645,6 +650,13 @@ interface DataState {
   restartTerminal: (sessionId: string, projectId: string) => Promise<TerminalSession | null>;
   reorderTerminal: (projectId: string, fromId: string, toId: string) => void;
   renameTerminal: (projectId: string, sessionId: string, title: string) => void;
+  /**
+   * Adopt Claude's auto-generated task summary (from the OSC title) as the tab
+   * name. No-op when the user has manually renamed the tab (`titleLocked`) or
+   * when the title is unchanged. Distinct from `renameTerminal`, which is the
+   * explicit user action and sets the lock.
+   */
+  autoTitleTerminal: (sessionId: string, title: string) => void;
   setPinned: (projectId: string, sessionId: string, pinned: boolean) => void;
   markExited: (sessionId: string, exitCode?: number) => void;
 }
@@ -901,6 +913,13 @@ export const useData = create<DataState>((set, get) => ({
       if (!projectId) return;
       useAgentStatus.getState().apply(sessionId, projectId, state);
     });
+
+    // Tab auto-rename: Claude writes a task summary into its idle OSC title;
+    // main parses it and pushes it here. Adopt it as the tab name unless the
+    // user has manually renamed the tab.
+    window.cc.terminals.onTitle((sessionId, title) => {
+      get().autoTitleTerminal(sessionId, title);
+    });
   },
 
   async loadProjects() {
@@ -1132,6 +1151,18 @@ export const useData = create<DataState>((set, get) => ({
         });
         if (created && item.pinned) {
           get().setPinned(item.projectId, created.id, true);
+        }
+        // Re-apply a manual-rename lock so the restored tab keeps its
+        // user-chosen name and the OSC auto-rename stays suppressed.
+        if (created && item.titleLocked) {
+          set((s) => ({
+            terminals: {
+              ...s.terminals,
+              [item.projectId]: (s.terminals[item.projectId] ?? []).map((t) =>
+                t.id === created.id ? { ...t, titleLocked: true } : t
+              )
+            }
+          }));
         }
       }
     } finally {
@@ -1443,10 +1474,33 @@ export const useData = create<DataState>((set, get) => ({
       return {
         terminals: {
           ...s.terminals,
-          [projectId]: list.map((t) => (t.id === sessionId ? { ...t, title } : t))
+          // A manual rename pins the title: titleLocked stops the OSC-title
+          // auto-rename from overwriting the user's explicit name.
+          [projectId]: list.map((t) =>
+            t.id === sessionId ? { ...t, title, titleLocked: true } : t
+          )
         }
       };
     });
+    get().persistOpenSessions();
+  },
+
+  autoTitleTerminal(sessionId, title) {
+    const next = title.trim();
+    if (!next) return;
+    const projectId = findProjectIdForSession(sessionId);
+    if (!projectId) return;
+    const tab = (get().terminals[projectId] ?? []).find((t) => t.id === sessionId);
+    // Respect a manual rename (titleLocked), and skip a no-op title.
+    if (!tab || tab.titleLocked || tab.title === next) return;
+    set((s) => ({
+      terminals: {
+        ...s.terminals,
+        [projectId]: (s.terminals[projectId] ?? []).map((t) =>
+          t.id === sessionId ? { ...t, title: next } : t
+        )
+      }
+    }));
     get().persistOpenSessions();
   },
 

@@ -377,6 +377,15 @@ function createWindow() {
   });
   agentStatus.on('status', (sessionId: string, state) => {
     safeSend(IPC.terminals.onAgentStatus, sessionId, state);
+    // Diagnostic: the debounced state actually pushed to the renderer (drives
+    // the dot + Agents tray). Pairs with [notify-hook] to show the full chain.
+    console.log(`[agent-status] session=${sessionId.slice(0, 8)} → ${state}`);
+  });
+  // Claude's auto-generated task summary (parsed from the idle OSC title) —
+  // the renderer adopts it as the tab name unless the user has manually
+  // renamed the tab.
+  agentStatus.on('title', (sessionId: string, title: string) => {
+    safeSend(IPC.terminals.onTitle, sessionId, title);
   });
 }
 
@@ -1126,6 +1135,10 @@ app.whenReady().then(() => {
     onNotifyHook: (_projectId: string, sessionId: string, action) => {
       if (action === 'blocked') agentStatus.markBlocked(sessionId);
       else agentStatus.clearBlocked(sessionId);
+      // Diagnostic: confirms the hook reached the main process. The emit to the
+      // renderer is debounced (~250ms), so the red/grey dot is the real proof
+      // the state landed — this line just proves the curl callback arrived.
+      console.log(`[notify-hook] session=${sessionId.slice(0, 8)} action=${action}`);
     },
     // A scheduled agent filed a run report via schedule_report. Attach it to
     // the matching run by sessionId (projectId is implied by the session).

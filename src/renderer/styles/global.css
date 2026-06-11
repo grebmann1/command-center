@@ -9064,3 +9064,173 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
 .scheduler-icon-swatch.is-active {
   background: var(--bg-elevated);
 }
+
+/* ── Launcher (the rich "+" panel: instruction + profile/model/mode + resume) ── */
+/* Modal variant: a touch wider than the palette and scrollable, since it stacks
+   the instruction box, several option rows, and the resume list. */
+.palette.launch-modal {
+  width: min(560px, 92vw);
+  max-height: 82vh;
+  padding: 18px;
+  overflow-y: auto;
+}
+
+/* Inline variant lives inside .empty-inner; constrain width so it reads as a
+   centered card rather than a full-bleed form. */
+.empty-inner .launch-panel {
+  width: min(520px, 100%);
+  text-align: left;
+}
+
+.launch-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.launch-header h3 {
+  margin: 0 0 2px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.launch-header p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.launch-instruction {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 64px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+}
+
+.launch-instruction:focus {
+  border-color: var(--accent-blue);
+}
+
+.launch-instruction::placeholder {
+  color: var(--text-dim);
+}
+
+.launch-instruction:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.launch-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.launch-row-label {
+  flex: 0 0 84px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.launch-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.launch-segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.launch-segmented button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.launch-segmented button.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.launch-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.launch-actions .btn.primary {
+  padding: 8px 16px;
+}
+
+.launch-background {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.launch-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.launch-bg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.launch-bg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.launch-bg-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.launch-bg-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -165,6 +165,13 @@ export interface TerminalSession {
   extraArgs?: string[];
   pinned?: boolean;
   /**
+   * Set once the user manually renames the tab. Suppresses the OSC-title
+   * auto-rename (Claude's generated task summary) so an explicit name is never
+   * overwritten. Renderer-only — titles are renderer-authoritative after the
+   * session is created.
+   */
+  titleLocked?: boolean;
+  /**
    * Headless sessions are hidden from the tab strip but their pty keeps
    * running. The user produces them by clicking the tab's X — we intentionally
    * don't kill the pty so background work survives. Restore via the new-tab

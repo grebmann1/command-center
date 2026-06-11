@@ -4,9 +4,8 @@ import type { SplitLayout, WorkspaceMode } from '../store';
 import { useData, useUi, visibleTerminals, backgroundTerminals } from '../store';
 import { TabBar } from './TabBar';
 import { TerminalSurface } from './TerminalSurface';
-import { ClaudeSessionsList } from './ClaudeSessionsList';
+import { LaunchPanel } from './LaunchPanel';
 import { FindBar } from './FindBar';
-import { OpenerButtons } from './OpenerButtons';
 import { PreviewPane } from './PreviewPane';
 
 // Lazy-load both editor surfaces. monaco-editor (legacy) and monaco-vscode-api
@@ -30,6 +29,8 @@ export function Workspace() {
   const selectedTabId = useUi((s) => s.selectedTabId);
   const selectTab = useUi((s) => s.selectTab);
   const findOpen = useUi((s) => s.findOpen);
+  const launcherOpen = useUi((s) => s.launcherOpen);
+  const setLauncherOpen = useUi((s) => s.setLauncherOpen);
   const workspaceModeMap = useUi((s) => s.workspaceMode);
   const setWorkspaceMode = useUi((s) => s.setWorkspaceMode);
   const workbenchEnabled = useUi((s) => s.workbenchEnabled);
@@ -90,6 +91,15 @@ export function Workspace() {
     const session = await createTerminal(project.id, profile, 80, 24, opts);
     if (session) selectTab(project.id, session.id);
   };
+
+  // Resume a prior Claude conversation from the launcher's session list:
+  // `--resume <id>` continues that exact transcript (same mechanism as the
+  // standalone ResumePicker).
+  const handleResume = (sessionId: string) =>
+    handleNewTab('claude', {
+      extraArgs: ['--resume', sessionId],
+      title: `claude --resume · ${sessionId.slice(0, 7)}`
+    });
 
   // First entry in defaultAgents wins for one-click "+" semantics. We trust
   // the value as a LaunchProfileId only if it matches the known set; an
@@ -198,6 +208,7 @@ export function Workspace() {
             onKillBackground={(id) => project && closeTerminal(id, project.id)}
             onKillAllBackground={() => project && void closeAllBackground(project.id)}
             onNew={handleNewTab}
+            onOpenLauncher={() => setLauncherOpen(true)}
             onReorder={(from, to) => project && reorderTerminal(project.id, from, to)}
             onRename={(id, title) => project && renameTerminal(project.id, id, title)}
             onDuplicate={(id) => {
@@ -253,39 +264,14 @@ export function Workspace() {
               </div>
             </div>
           ) : tabs.length === 0 ? (
-            <div className="empty-workspace overlay">
-              <div className="empty-inner">
-                <h3>{project.name}</h3>
-                <p>Start a session:</p>
-                <div className="empty-actions">
-                  <button className="btn primary" onClick={() => handleNewTab('claude')}>
-                    claude
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={() => handleNewTab('claude-yolo')}
-                    title="claude --dangerously-skip-permissions"
-                  >
-                    claude --yolo
-                  </button>
-                  <button className="btn" onClick={() => handleNewTab('shell')}>
-                    shell
-                  </button>
-                </div>
-                <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
-                  <OpenerButtons path={project.path} size={16} />
-                </div>
-                <ClaudeSessionsList
-                  projectId={project.id}
-                  onResume={(s) =>
-                    handleNewTab('claude', {
-                      extraArgs: ['--resume', s.id],
-                      title: `claude --resume · ${s.id.slice(0, 7)}`
-                    })
-                  }
-                />
-              </div>
-            </div>
+            <LaunchPanel
+              project={project}
+              variant="inline"
+              onLaunch={handleNewTab}
+              onResume={(s) => handleResume(s.id)}
+              backgroundTabs={backgroundTabs}
+              onResumeBackground={(id) => restoreTerminal(id, project.id)}
+            />
           ) : null}
         </div>
         {isExplorer && project && (
@@ -328,6 +314,17 @@ export function Workspace() {
           </>
         )}
       </div>
+      {launcherOpen && project && (
+        <LaunchPanel
+          project={project}
+          variant="modal"
+          onLaunch={handleNewTab}
+          onResume={(s) => handleResume(s.id)}
+          backgroundTabs={backgroundTabs}
+          onResumeBackground={(id) => restoreTerminal(id, project.id)}
+          onClose={() => setLauncherOpen(false)}
+        />
+      )}
     </main>
   );
 }

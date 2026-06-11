@@ -56,6 +56,23 @@ export function classifyOscTitle(title: string): AgentState | null {
   return null;
 }
 
+/**
+ * Strip the leading agent-status glyph (a braille spinner U+2800–U+28FF, or the
+ * `✳` U+2733 idle marker) and surrounding whitespace from an OSC title, leaving
+ * just the human-readable summary text Claude writes after it (e.g.
+ * `✳ Fix the login bug` → `Fix the login bug`). Returns the trimmed remainder,
+ * or '' when the title is only a glyph / empty. Pure; exported for tests.
+ */
+export function stripTitleGlyph(title: string): string {
+  const trimmed = title.trimStart();
+  const ch = trimmed.codePointAt(0);
+  if (ch !== undefined && ((ch >= 0x2800 && ch <= 0x28ff) || ch === 0x2733)) {
+    // Drop the glyph (a single code point, which may be >1 UTF-16 unit).
+    return trimmed.slice(String.fromCodePoint(ch).length).trim();
+  }
+  return trimmed.trim();
+}
+
 const OSC_TITLE_RE =
   // OSC 0 (icon+title) or 2 (title), terminated by BEL (\x07) or ST (\x1b\\).
   /\x1b\][02];([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
@@ -92,6 +109,13 @@ interface Entry {
    */
   blocked: boolean;
   timer: NodeJS.Timeout | null;
+  /**
+   * The last task-summary title we emitted on the `title` event for this
+   * session, so a repeated idle title (Claude re-emits the same `✳ summary`
+   * on every idle frame) doesn't fire a redundant rename. Undefined until the
+   * first idle title is seen.
+   */
+  emittedTitle?: string;
 }
 
 /**
@@ -141,6 +165,22 @@ export class AgentStatusTracker extends EventEmitter {
     if (title === null) return;
     const state = classifyOscTitle(title);
     if (state === null) return;
+    // When idle, the text after the `✳` glyph is Claude's auto-generated task
+    // summary (stable for the duration of idle). Surface it as a `title` event
+    // so the renderer can self-label the tab. We only adopt the IDLE title —
+    // the working spinner's text is a transient verb ("Cooking…") that would
+    // flicker the tab. Emit only on change (Claude re-sends the same idle title
+    // each frame).
+    if (state === 'idle') {
+      const summary = stripTitleGlyph(title);
+      if (summary) {
+        const entry = this.entry(sessionId);
+        if (entry.emittedTitle !== summary) {
+          entry.emittedTitle = summary;
+          this.emit('title', sessionId, summary);
+        }
+      }
+    }
     this.report(sessionId, state);
   }
 

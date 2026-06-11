@@ -72,6 +72,9 @@ interface Props {
   /** Kill ALL background sessions for this project (bulk cleanup). */
   onKillAllBackground?: () => void;
   onNew: (profile: LaunchProfileId) => void;
+  /** Open the rich launcher (instruction + profile/model/mode + resume). The
+   *  "+" button routes here; the old inline profile dropdown is gone. */
+  onOpenLauncher?: () => void;
   onReorder?: (fromId: string, toId: string) => void;
   onRename?: (id: string, title: string) => void;
   onDuplicate?: (id: string) => void;
@@ -98,9 +101,8 @@ interface TabContextMenu {
   y: number;
 }
 
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgroundTabs, onResumeBackground, onKillBackground, onKillAllBackground, onNew, onReorder, onRename, onDuplicate, onRestart, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
+export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgroundTabs, onResumeBackground, onKillBackground, onKillAllBackground, onNew, onOpenLauncher, onReorder, onRename, onDuplicate, onRestart, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
   const splitSet = new Set((splitTabIds ?? []).filter((x): x is string => !!x));
-  const [menuOpen, setMenuOpen] = useState(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -138,13 +140,6 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
     }
     setRenamingId(null);
   };
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = () => setMenuOpen(false);
-    window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
-  }, [menuOpen]);
 
   useEffect(() => {
     if (!tabMenu) return;
@@ -423,24 +418,21 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
       <button
         ref={anchor}
         className="tab-add"
-        aria-label="New tab"
-        title={defaultProfile ? `New ${defaultProfile} tab (hold ⌥/⌘ or right-click for picker)` : 'New tab'}
+        aria-label="New session"
+        title="New session — opens the launcher (⌘T quick-launches the default)"
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          setMenuOpen((v) => !v);
+          // Right-click is a fast path: spawn the project's default profile
+          // directly (or claude) without opening the launcher.
+          onNew(defaultProfile ?? 'claude');
         }}
         onClick={(e) => {
           e.stopPropagation();
-          // One-click default: if the project has a configured default agent
-          // and the user clicked plainly (no modifier), spawn that profile
-          // directly. Modifier-click or right-click falls through to the
-          // picker so users can still pick a different profile.
-          if (defaultProfile && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-            onNew(defaultProfile);
-            return;
-          }
-          setMenuOpen((v) => !v);
+          // The "+" opens the rich launcher (instruction + profile/model/mode +
+          // resume). The old inline profile dropdown is gone.
+          if (onOpenLauncher) onOpenLauncher();
+          else onNew(defaultProfile ?? 'claude');
         }}
       >
         <Plus size={14} />
@@ -583,104 +575,6 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
           </div>
         );
       })()}
-      {menuOpen && (
-        <div
-          className="tab-menu"
-          style={{ top: 'var(--tab-h)', left: 'calc(var(--col-nav) + var(--col-list) + 6px)' }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={() => {
-              setMenuOpen(false);
-              onNew('claude');
-            }}
-          >
-            claude
-          </button>
-          <button
-            onClick={() => {
-              setMenuOpen(false);
-              onNew('claude-resume');
-            }}
-          >
-            claude --resume
-          </button>
-          <button
-            onClick={() => {
-              setMenuOpen(false);
-              onNew('claude-yolo');
-            }}
-            title="claude --dangerously-skip-permissions"
-          >
-            claude --yolo
-          </button>
-          <button
-            onClick={() => {
-              setMenuOpen(false);
-              onNew('shell');
-            }}
-          >
-            shell
-          </button>
-          {backgroundTabs && backgroundTabs.length > 0 && onResumeBackground && (
-            <>
-              <div className="tab-context-sep" />
-              <div className="tab-menu-section-label">
-                Background ({backgroundTabs.length}) · running
-              </div>
-              {backgroundTabs.map((t) => (
-                <div key={t.id} className="tab-menu-bg-row">
-                  <button
-                    className="tab-menu-hidden"
-                    title={`Resume ${t.title} · ${t.profile}`}
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onResumeBackground(t.id);
-                    }}
-                  >
-                    <span className={`tab-profile-icon profile-${t.profile}`} aria-hidden>
-                      {profileIcon(t.profile)}
-                    </span>
-                    <span className="tab-menu-hidden-title">{t.title}</span>
-                  </button>
-                  {onKillBackground && (
-                    <button
-                      className="tab-menu-bg-kill"
-                      aria-label={`Close ${t.title}`}
-                      title="Terminate this background session"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onKillBackground(t.id);
-                      }}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  )}
-                </div>
-              ))}
-              {onKillAllBackground && backgroundTabs.length > 1 && (
-                <button
-                  className="tab-menu-bg-killall"
-                  title={`Terminate all ${backgroundTabs.length} background sessions`}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `Terminate all ${backgroundTabs.length} background sessions? Their processes will be ended.`
-                      )
-                    ) {
-                      setMenuOpen(false);
-                      onKillAllBackground();
-                    }
-                  }}
-                >
-                  <Trash2 size={12} aria-hidden />
-                  <span>Close all background</span>
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      )}
     </div>
   );
 }
