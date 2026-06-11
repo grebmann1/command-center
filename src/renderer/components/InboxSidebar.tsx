@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef } from 'react';
-import { useData, useInbox, useInboxRead, useInboxSelection } from '../store';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { CalendarClock, ChevronRight, Star } from 'lucide-react';
+import { useData, useInbox, useInboxKeep, useInboxRead, useInboxSelection } from '../store';
 import type { InboxEntry } from '@shared/types';
-import { groupByBucketThenProject, flattenVisible } from '../util/inboxGrouping';
+import { groupByBucketThenProject, flattenVisible, subGroupKey } from '../util/inboxGrouping';
 
 /**
  * Inbox sidebar list — port of OpenAlice's InboxSidebar.tsx.
@@ -31,6 +32,7 @@ export function InboxSidebar({
   const selectedId = useInboxSelection((s) => s.selectedEntryId);
   const select = useInboxSelection((s) => s.select);
   const readIds = useInboxRead((s) => s.readIds);
+  const keptIds = useInboxKeep((s) => s.keptIds);
   const markRead = useInboxRead((s) => s.markRead);
   const projects = useData((s) => s.projects);
 
@@ -53,10 +55,26 @@ export function InboxSidebar({
   }, [entries, query, unreadOnly, readIds]);
 
   const groups = useMemo(() => groupByBucketThenProject(filtered), [filtered]);
-  // Render order (bucket → project → entry), flattened to entry ids. j/k and
-  // default-select MUST walk this, not `filtered` — the two diverge once a
-  // project's entries are interleaved with another's in the same bucket.
-  const visibleIds = useMemo(() => flattenVisible(groups), [groups]);
+
+  // Which (bucket, project) scheduled sections are expanded. Collapsed by
+  // default so recurring jobs stay folded; toggled by clicking the header.
+  const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(new Set());
+  const toggleScheduled = (key: string) =>
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // Render order (bucket → project → entry → expanded scheduled), flattened to
+  // entry ids. j/k and default-select MUST walk this, not `filtered` — the two
+  // diverge once a project's entries interleave, and collapsed scheduled rows
+  // are intentionally excluded so nav can't land on a hidden row.
+  const visibleIds = useMemo(
+    () => flattenVisible(groups, expandedKeys),
+    [groups, expandedKeys]
+  );
   const projectsById = useMemo(
     () => new Map(projects.map((p) => [p.id, p])),
     [projects]
@@ -125,6 +143,12 @@ export function InboxSidebar({
             const project = projectsById.get(sg.projectId) ?? null;
             const name = project?.name ?? sg.fallbackLabel;
             const color = project?.color;
+            const schedKey = subGroupKey(bucket, sg.projectId);
+            const schedExpanded = expandedKeys.has(schedKey);
+            const schedCount = sg.scheduledEntries.length;
+            const schedUnread = sg.scheduledEntries.filter((e) => !readIds[e.id]).length;
+            // Total count shown on the project header includes scheduled.
+            const totalCount = sg.entries.length + schedCount;
             return (
               <div key={sg.projectId} className="inbox-project-group">
                 <div className="inbox-project-subhead">
@@ -136,7 +160,7 @@ export function InboxSidebar({
                   <span className={`inbox-project-name ${project ? '' : 'tombstoned'}`}>
                     {name}
                   </span>
-                  <span className="inbox-project-count">{sg.entries.length}</span>
+                  <span className="inbox-project-count">{totalCount}</span>
                 </div>
                 {sg.entries.map((entry) => (
                   <InboxRow
@@ -144,9 +168,43 @@ export function InboxSidebar({
                     entry={entry}
                     active={entry.id === selectedId}
                     unread={!readIds[entry.id]}
+                    kept={!!keptIds[entry.id]}
                     onClick={() => selectAndRead(entry.id)}
                   />
                 ))}
+                {schedCount > 0 && (
+                  <div className="inbox-scheduled-group">
+                    <button
+                      type="button"
+                      className={`inbox-scheduled-head ${schedExpanded ? 'expanded' : ''}`}
+                      onClick={() => toggleScheduled(schedKey)}
+                      aria-expanded={schedExpanded}
+                    >
+                      <ChevronRight
+                        size={12}
+                        className="inbox-scheduled-chevron"
+                        aria-hidden
+                      />
+                      <CalendarClock size={12} aria-hidden />
+                      <span className="inbox-scheduled-label">Scheduled</span>
+                      <span className="inbox-scheduled-count">
+                        {schedUnread > 0 ? `${schedUnread} new · ${schedCount}` : schedCount}
+                      </span>
+                    </button>
+                    {schedExpanded &&
+                      sg.scheduledEntries.map((entry) => (
+                        <InboxRow
+                          key={entry.id}
+                          entry={entry}
+                          active={entry.id === selectedId}
+                          unread={!readIds[entry.id]}
+                          kept={!!keptIds[entry.id]}
+                          onClick={() => selectAndRead(entry.id)}
+                          indented
+                        />
+                      ))}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -160,12 +218,18 @@ function InboxRow({
   entry,
   active,
   unread,
-  onClick
+  kept = false,
+  onClick,
+  indented = false
 }: {
   entry: InboxEntry;
   active: boolean;
   unread: boolean;
+  /** Flagged "Keep" — shows a star and is protected from Clear inbox. */
+  kept?: boolean;
   onClick: () => void;
+  /** Extra left padding for rows nested under the Scheduled section. */
+  indented?: boolean;
 }) {
   return (
     <div
@@ -178,11 +242,20 @@ function InboxRow({
           onClick();
         }
       }}
-      className={`inbox-row ${active ? 'active' : ''} ${unread ? 'unread' : ''}`}
+      className={`inbox-row ${active ? 'active' : ''} ${unread ? 'unread' : ''} ${indented ? 'indented' : ''} ${kept ? 'kept' : ''}`}
     >
       <div className="inbox-row-line1">
         <span aria-hidden className={`inbox-row-dot ${unread ? 'on' : ''}`} />
         <span className="inbox-row-preview-inline">{previewFor(entry)}</span>
+        {kept && (
+          <Star
+            size={11}
+            className="inbox-row-keep-star"
+            fill="currentColor"
+            strokeWidth={0}
+            aria-label="Kept"
+          />
+        )}
         <span className="inbox-row-ts">{formatRelative(entry.ts)}</span>
       </div>
     </div>

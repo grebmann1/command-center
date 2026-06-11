@@ -555,7 +555,10 @@ export class SchedulerManager extends EventEmitter {
         projectId: project.id,
         projectLabel: project.name,
         comments: body,
-        sessionId: run.sessionId
+        sessionId: run.sessionId,
+        // This is the scheduler's own run-complete notice — always a
+        // scheduled (background) entry, so the sidebar groups it.
+        scheduled: true
       });
     } catch (err) {
       this.log(`notifyInbox ${task.id}`, err);

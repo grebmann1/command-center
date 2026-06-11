@@ -94,6 +94,7 @@ const api: CcApi = {
   inbox: {
     history: (opts) => ipcRenderer.invoke(IPC.inbox.history, opts),
     delete: (id) => ipcRenderer.invoke(IPC.inbox.delete, id),
+    deleteMany: (ids) => ipcRenderer.invoke(IPC.inbox.deleteMany, ids),
     exportPdf: (input) => ipcRenderer.invoke(IPC.inbox.exportPdf, input),
     onAppended: (cb) => {
       const handler = (_e: unknown, entry: InboxEntry) => cb(entry);

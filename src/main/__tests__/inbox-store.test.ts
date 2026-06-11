@@ -125,6 +125,32 @@ describe('InboxStore (in-memory)', () => {
     expect(await store.delete(a.id)).toBe(false);
   });
 
+  it('deleteMany removes the listed ids, keeps the rest, returns the count', async () => {
+    const a = await store.append({ projectId: 'p', comments: 'a' });
+    const b = await store.append({ projectId: 'p', comments: 'b' });
+    const c = await store.append({ projectId: 'p', comments: 'c' });
+    const removed = await store.deleteMany([a.id, c.id]);
+    expect(removed).toBe(2);
+    const { entries } = await store.read();
+    expect(entries.map((e) => e.id)).toEqual([b.id]);
+  });
+
+  it('deleteMany ignores unknown ids and returns 0 for an empty list', async () => {
+    const a = await store.append({ projectId: 'p', comments: 'a' });
+    expect(await store.deleteMany([])).toBe(0);
+    expect(await store.deleteMany(['nope'])).toBe(0);
+    expect(await store.deleteMany([a.id, 'nope'])).toBe(1);
+  });
+
+  it('deleteMany fires onRemoved once per actually-removed id', async () => {
+    const seen: string[] = [];
+    store.onRemoved((id) => seen.push(id));
+    const a = await store.append({ projectId: 'p', comments: 'a' });
+    const b = await store.append({ projectId: 'p', comments: 'b' });
+    await store.deleteMany([a.id, b.id, 'ghost']);
+    expect(seen.sort()).toEqual([a.id, b.id].sort());
+  });
+
   it('onRemoved fires on successful delete, dispose stops further notifications', async () => {
     const seen: string[] = [];
     const dispose = store.onRemoved((id) => seen.push(id));
@@ -210,6 +236,19 @@ describe('InboxStore (JSONL persistence)', () => {
     const entries = await readdir(dir);
     expect(entries).toContain('entries.jsonl');
     expect(entries).not.toContain('entries.jsonl.tmp');
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('deleteMany rewrites the JSONL atomically, keeping only un-listed entries', async () => {
+    const a = await store.append({ projectId: 'p', comments: 'a' });
+    const b = await store.append({ projectId: 'p', comments: 'b' });
+    const c = await store.append({ projectId: 'p', comments: 'c' });
+    expect(await store.deleteMany([a.id, c.id])).toBe(2);
+    const fresh = createInboxStore({ filePath: path });
+    const { entries } = await fresh.read();
+    expect(entries.map((e) => e.id)).toEqual([b.id]);
+    const onDisk = await readdir(dir);
+    expect(onDisk).not.toContain('entries.jsonl.tmp');
     await rm(dir, { recursive: true, force: true });
   });
 

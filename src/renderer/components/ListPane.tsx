@@ -7,6 +7,8 @@ import {
   useAgentStatus,
   useInbox,
   useInboxRead,
+  useInboxKeep,
+  clearInbox,
   useScheduler,
   useScheduleGroups,
   sortProjectsForDisplay,
@@ -343,9 +345,23 @@ function InboxPane() {
   const entries = useInbox((s) => s.entries);
   const readIds = useInboxRead((s) => s.readIds);
   const markAllRead = useInboxRead((s) => s.markAllRead);
+  const keptIds = useInboxKeep((s) => s.keptIds);
   const [query, setQuery] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
   const unreadCount = entries.reduce((n, e) => (readIds[e.id] ? n : n + 1), 0);
+  // How many would a Clear remove (everything not flagged Keep).
+  const clearableCount = entries.reduce((n, e) => (keptIds[e.id] ? n : n + 1), 0);
+  const keptCount = entries.length - clearableCount;
+
+  const onClear = () => {
+    if (clearableCount === 0) return;
+    const keepNote = keptCount > 0 ? ` ${keptCount} kept ${keptCount === 1 ? 'entry' : 'entries'} will remain.` : '';
+    const ok = window.confirm(
+      `Clear ${clearableCount} inbox ${clearableCount === 1 ? 'message' : 'messages'}?${keepNote} This can't be undone.`
+    );
+    if (ok) void clearInbox();
+  };
+
   return (
     <section className="list-pane inbox-list-pane">
       <header className="list-header">
@@ -370,6 +386,19 @@ function InboxPane() {
               <Check size={14} />
             </button>
           )}
+          <button
+            type="button"
+            className="icon-btn inbox-clear-all"
+            title={
+              clearableCount === 0
+                ? 'Nothing to clear (all kept or empty)'
+                : `Clear ${clearableCount} ${clearableCount === 1 ? 'message' : 'messages'}${keptCount > 0 ? ` (keeps ${keptCount})` : ''}`
+            }
+            onClick={onClear}
+            disabled={clearableCount === 0}
+          >
+            <Trash2 size={14} />
+          </button>
         </div>
       </header>
       <div className="inbox-filter-row">

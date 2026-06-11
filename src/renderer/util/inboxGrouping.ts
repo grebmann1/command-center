@@ -20,8 +20,22 @@ export interface ProjectSubGroup {
    * project still exists; for a tombstoned project this is all we have.
    */
   fallbackLabel: string;
-  /** Entries for this project within the bucket, newest-first (input order). */
+  /**
+   * Non-scheduled entries for this project within the bucket, newest-first.
+   * These render inline as normal rows.
+   */
   entries: InboxEntry[];
+  /**
+   * Scheduled (background-run) entries, newest-first. Split out so the render
+   * layer can collapse them into a single expandable "Scheduled" section —
+   * recurring jobs would otherwise flood the per-project list.
+   */
+  scheduledEntries: InboxEntry[];
+}
+
+/** Stable key for a (bucket, project) sub-group — used for collapse state. */
+export function subGroupKey(bucket: Bucket, projectId: string): string {
+  return `${bucket}::${projectId}`;
 }
 
 const BUCKET_ORDER: Bucket[] = ['Today', 'Yesterday', 'This week', 'Older'];
@@ -67,11 +81,13 @@ export function groupByBucketThenProject(
       sg = {
         projectId: e.projectId,
         fallbackLabel: e.projectLabel ?? e.projectId,
-        entries: []
+        entries: [],
+        scheduledEntries: []
       };
       groups.set(e.projectId, sg);
     }
-    sg.entries.push(e);
+    if (e.scheduled) sg.scheduledEntries.push(e);
+    else sg.entries.push(e);
   }
 
   const result: Array<[Bucket, ProjectSubGroup[]]> = [];
@@ -85,12 +101,25 @@ export function groupByBucketThenProject(
 
 /**
  * Flatten grouped output to the entry-id sequence in *render* order
- * (bucket → project sub-group → entry). j/k navigation and default-select
- * must walk this, NOT the raw newest-first list — the two diverge once a
- * project's entries are interleaved with another's in the same bucket.
+ * (bucket → project sub-group → regular entries → expanded scheduled). j/k
+ * navigation and default-select must walk this, NOT the raw newest-first
+ * list — the two diverge once a project's entries are interleaved with
+ * another's in the same bucket.
+ *
+ * `expandedKeys` (from {@link subGroupKey}) gates the scheduled entries: a
+ * collapsed scheduled section is hidden, so keyboard nav skips it rather
+ * than selecting a row the user can't see. Omit to treat all as collapsed.
  */
-export function flattenVisible(groups: Array<[Bucket, ProjectSubGroup[]]>): string[] {
-  return groups.flatMap(([, subgroups]) =>
-    subgroups.flatMap((sg) => sg.entries.map((e) => e.id))
+export function flattenVisible(
+  groups: Array<[Bucket, ProjectSubGroup[]]>,
+  expandedKeys?: ReadonlySet<string>
+): string[] {
+  return groups.flatMap(([bucket, subgroups]) =>
+    subgroups.flatMap((sg) => {
+      const ids = sg.entries.map((e) => e.id);
+      const expanded = expandedKeys?.has(subGroupKey(bucket, sg.projectId)) ?? false;
+      if (expanded) ids.push(...sg.scheduledEntries.map((e) => e.id));
+      return ids;
+    })
   );
 }

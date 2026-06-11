@@ -3,6 +3,7 @@ import type { InboxEntry } from '../../../shared/types.js';
 import {
   groupByBucketThenProject,
   flattenVisible,
+  subGroupKey,
   type Bucket
 } from '../inboxGrouping.js';
 
@@ -73,6 +74,19 @@ describe('groupByBucketThenProject', () => {
     ]);
   });
 
+  it('splits scheduled entries out of the inline entries list', () => {
+    const entries: InboxEntry[] = [
+      entry({ id: 'a1', projectId: 'A', ts: NOW - 1000 }),
+      entry({ id: 's1', projectId: 'A', ts: NOW - 2000, scheduled: true }),
+      entry({ id: 's2', projectId: 'A', ts: NOW - 3000, scheduled: true }),
+      entry({ id: 'a2', projectId: 'A', ts: NOW - 4000 })
+    ];
+    const groups = groupByBucketThenProject(entries, NOW);
+    const [, sgs] = groups[0];
+    expect(sgs[0].entries.map((e) => e.id)).toEqual(['a1', 'a2']);
+    expect(sgs[0].scheduledEntries.map((e) => e.id)).toEqual(['s1', 's2']);
+  });
+
   it('uses projectLabel as fallbackLabel, else projectId', () => {
     const entries: InboxEntry[] = [
       entry({ id: 'a', projectId: 'P-with-label', projectLabel: 'My Project', ts: NOW - 1000 }),
@@ -100,5 +114,25 @@ describe('flattenVisible', () => {
 
   it('returns [] for empty groups', () => {
     expect(flattenVisible([])).toEqual([]);
+  });
+
+  it('excludes scheduled entries when their section is collapsed', () => {
+    const entries: InboxEntry[] = [
+      entry({ id: 'a1', projectId: 'A', ts: NOW - 1000 }),
+      entry({ id: 's1', projectId: 'A', ts: NOW - 2000, scheduled: true })
+    ];
+    const groups = groupByBucketThenProject(entries, NOW);
+    // No expanded set → collapsed → scheduled id absent.
+    expect(flattenVisible(groups)).toEqual(['a1']);
+  });
+
+  it('includes scheduled entries when their section is expanded', () => {
+    const entries: InboxEntry[] = [
+      entry({ id: 'a1', projectId: 'A', ts: NOW - 1000 }),
+      entry({ id: 's1', projectId: 'A', ts: NOW - 2000, scheduled: true })
+    ];
+    const groups = groupByBucketThenProject(entries, NOW);
+    const expanded = new Set([subGroupKey('Today', 'A')]);
+    expect(flattenVisible(groups, expanded)).toEqual(['a1', 's1']);
   });
 });

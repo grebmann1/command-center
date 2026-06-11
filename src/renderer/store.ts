@@ -1598,6 +1598,8 @@ interface InboxLiveState {
   prepend: (entry: InboxEntry) => void;
   /** Remove an entry from local state (optimistic delete or push echo). */
   removeLocal: (id: string) => void;
+  /** Remove many entries at once (optimistic bulk clear). */
+  removeManyLocal: (ids: string[]) => void;
 }
 
 export const useInbox = create<InboxLiveState>((set) => ({
@@ -1614,6 +1616,13 @@ export const useInbox = create<InboxLiveState>((set) => ({
     set((s) => {
       if (!s.entries.some((e) => e.id === id)) return s;
       return { entries: s.entries.filter((e) => e.id !== id) };
+    }),
+  removeManyLocal: (ids) =>
+    set((s) => {
+      if (ids.length === 0) return s;
+      const drop = new Set(ids);
+      const next = s.entries.filter((e) => !drop.has(e.id));
+      return next.length === s.entries.length ? s : { entries: next };
     })
 }));
 
@@ -1815,6 +1824,47 @@ export const useSavedMark = create<SavedMarkState>()(
   )
 );
 
+/**
+ * Per-inbox-entry "Keep" flag (star), persisted to localStorage like the other
+ * inbox marker stores. A kept entry is protected from "Clear inbox" — it's the
+ * user's explicit "don't sweep this away" signal, independent of read/answered/
+ * saved. Toggleable (unlike the one-way markers) since keep is a user decision
+ * they may reverse.
+ */
+interface InboxKeepState {
+  keptIds: Record<string, true>;
+  toggleKeep: (entryId: string) => void;
+  /** Drop keep flags for ids no longer present (housekeeping after a clear). */
+  pruneKeep: (presentIds: string[]) => void;
+}
+
+export const useInboxKeep = create<InboxKeepState>()(
+  persist(
+    (set) => ({
+      keptIds: {},
+      toggleKeep: (entryId) =>
+        set((s) => {
+          const next = { ...s.keptIds };
+          if (next[entryId]) delete next[entryId];
+          else next[entryId] = true;
+          return { keptIds: next };
+        }),
+      pruneKeep: (presentIds) =>
+        set((s) => {
+          const present = new Set(presentIds);
+          const next: Record<string, true> = {};
+          let changed = false;
+          for (const id of Object.keys(s.keptIds)) {
+            if (present.has(id)) next[id] = true;
+            else changed = true;
+          }
+          return changed ? { keptIds: next } : s;
+        })
+    }),
+    { name: 'cc.inbox-keep.v1', version: 1 }
+  )
+);
+
 interface ScheduleTemplatesState {
   templates: ScheduleTemplate[];
   loading: boolean;
@@ -1914,6 +1964,39 @@ export async function deleteInboxEntry(id: string): Promise<void> {
   } catch (err) {
     pushErrorToast(errorMessage(err, 'Failed to delete inbox entry'));
   }
+}
+
+/**
+ * Clear the inbox, preserving entries the user has flagged "Keep" (star).
+ *
+ * We compute the explicit list of ids to REMOVE from the current visible
+ * entries minus the kept set — never "keep only these" — so the main store
+ * deletes exactly what the user saw, and any entry appended after this call
+ * survives. Optimistic local removal first, then one bulk IPC. Returns the
+ * number removed (0 when there was nothing to clear).
+ */
+export async function clearInbox(): Promise<number> {
+  const { entries, removeManyLocal } = useInbox.getState();
+  const { keptIds } = useInboxKeep.getState();
+  const toRemove = entries.filter((e) => !keptIds[e.id]).map((e) => e.id);
+  if (toRemove.length === 0) return 0;
+
+  removeManyLocal(toRemove);
+  try {
+    await window.cc.inbox.deleteMany(toRemove);
+    useUi.getState().pushToast(
+      `Cleared ${toRemove.length} ${toRemove.length === 1 ? 'message' : 'messages'}`,
+      'info'
+    );
+  } catch (err) {
+    pushErrorToast(errorMessage(err, 'Failed to clear inbox'));
+  }
+  return toRemove.length;
+}
+
+/** Toggle the "Keep" flag on an entry (protects it from Clear inbox). */
+export function toggleInboxKeep(entryId: string): void {
+  useInboxKeep.getState().toggleKeep(entryId);
 }
 
 /**

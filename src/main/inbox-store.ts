@@ -42,6 +42,8 @@ export interface InboxInput {
   comments?: string;
   /** Originating terminal session, when known. Persisted as-is on the entry. */
   sessionId?: string;
+  /** True when the push came from a scheduled (background) run. */
+  scheduled?: boolean;
 }
 
 export interface InboxReadOpts {
@@ -58,6 +60,13 @@ export interface IInboxStore {
    * entry matched. JSONL rewrites are atomic (tmp + rename).
    */
   delete(id: string): Promise<boolean>;
+  /**
+   * Hard-delete many entries in a single atomic rewrite. Takes an explicit
+   * id list (the entries to REMOVE) — never "keep only these" — so an entry
+   * appended concurrently with a clear can't be deleted by accident. Emits
+   * one `removed` event per deleted id. Returns the count removed.
+   */
+  deleteMany(ids: string[]): Promise<number>;
   onAppended(listener: (entry: InboxEntry) => void): () => void;
   /** Subscribe to live removals. Returns a dispose function. */
   onRemoved(listener: (id: string) => void): () => void;
@@ -184,6 +193,44 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
     return true;
   }
 
+  async function deleteMany(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const remove = new Set(ids);
+    let raw: string;
+    try {
+      raw = await readFile(filePath, 'utf-8');
+    } catch (err: unknown) {
+      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return 0;
+      }
+      throw err;
+    }
+    const lines = raw.split('\n').filter((l) => l.trim());
+    const removedIds: string[] = [];
+    const kept: string[] = [];
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as InboxEntry;
+        if (remove.has(entry.id)) {
+          removedIds.push(entry.id);
+          continue;
+        }
+        kept.push(line);
+      } catch {
+        // Preserve unparseable lines — a malformed entry can't be targeted.
+        kept.push(line);
+      }
+    }
+    if (removedIds.length === 0) return 0;
+
+    const tmp = `${filePath}.tmp`;
+    const body = kept.length > 0 ? kept.join('\n') + '\n' : '';
+    await writeFile(tmp, body, 'utf-8');
+    await rename(tmp, filePath);
+    for (const id of removedIds) emitter.emit('removed', id);
+    return removedIds.length;
+  }
+
   function onAppended(listener: (entry: InboxEntry) => void): () => void {
     emitter.on('appended', listener);
     return () => {
@@ -198,7 +245,7 @@ export function createInboxStore(opts: InboxStoreOptions = {}): IInboxStore {
     };
   }
 
-  return { append, read, delete: deleteEntry, onAppended, onRemoved };
+  return { append, read, delete: deleteEntry, deleteMany, onAppended, onRemoved };
 }
 
 // ==================== In-memory store (tests) ====================
@@ -239,6 +286,18 @@ export function createMemoryInboxStore(): IInboxStore {
     return true;
   }
 
+  async function deleteMany(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const remove = new Set(ids);
+    const removedIds = entries.filter((e) => remove.has(e.id)).map((e) => e.id);
+    if (removedIds.length === 0) return 0;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (remove.has(entries[i].id)) entries.splice(i, 1);
+    }
+    for (const id of removedIds) emitter.emit('removed', id);
+    return removedIds.length;
+  }
+
   function onAppended(listener: (entry: InboxEntry) => void): () => void {
     emitter.on('appended', listener);
     return () => {
@@ -253,5 +312,5 @@ export function createMemoryInboxStore(): IInboxStore {
     };
   }
 
-  return { append, read, delete: deleteEntry, onAppended, onRemoved };
+  return { append, read, delete: deleteEntry, deleteMany, onAppended, onRemoved };
 }

@@ -413,6 +413,10 @@ input {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* Grid items default to min-height: auto, which lets the pane grow to fit
+     its content and starves the inner `.list-body` overflow of a bounded
+     height (so the inbox list couldn't scroll). Pin it to the grid track. */
+  min-height: 0;
   position: relative;
 }
 
@@ -3473,6 +3477,18 @@ body.resizing-col {
   color: var(--text-primary);
 }
 
+/* Clear inbox: destructive, so it reds on hover. Dimmed + non-interactive
+   when there's nothing clearable (empty, or everything is kept). */
+.inbox-clear-all:hover:not(:disabled) {
+  color: var(--danger);
+  background: rgba(248, 81, 73, 0.1);
+}
+
+.inbox-clear-all:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .inbox-filter-row {
   display: flex;
   align-items: center;
@@ -3598,6 +3614,48 @@ body.resizing-col {
   font-variant-numeric: tabular-nums;
 }
 
+/* Collapsible "Scheduled" section: folds recurring background-run entries
+   under one toggle so they don't flood the per-project list. */
+.inbox-scheduled-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 12px 4px 26px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: left;
+  outline: none;
+}
+
+.inbox-scheduled-head:hover {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+.inbox-scheduled-chevron {
+  flex-shrink: 0;
+  transition: transform 0.12s ease;
+}
+
+.inbox-scheduled-head.expanded .inbox-scheduled-chevron {
+  transform: rotate(90deg);
+}
+
+.inbox-scheduled-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.inbox-scheduled-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 .inbox-row {
   display: flex;
   flex-direction: column;
@@ -3607,6 +3665,11 @@ body.resizing-col {
   outline: none;
   transition: background-color 0.1s ease;
   border-left: 2px solid transparent;
+}
+
+/* Rows nested under the Scheduled toggle get extra left inset. */
+.inbox-row.indented {
+  padding-left: 26px;
 }
 
 .inbox-row:hover {
@@ -3661,6 +3724,12 @@ body.resizing-col {
   font-size: 10px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+}
+
+/* "Keep" marker on a row — small amber star before the timestamp. */
+.inbox-row-keep-star {
+  flex-shrink: 0;
+  color: #e3b341;
 }
 
 /* Rows sit under their project sub-head — indent so the hierarchy reads. */
@@ -3804,6 +3873,7 @@ body.resizing-col {
 
 .inbox-detail-trash,
 .inbox-detail-download,
+.inbox-detail-keep,
 .inbox-detail-save {
   padding: 4px;
   border-radius: 4px;
@@ -3819,9 +3889,17 @@ body.resizing-col {
 }
 
 .inbox-detail-download:hover,
+.inbox-detail-keep:hover,
 .inbox-detail-save:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
+}
+
+/* Kept state: keep the star lit (amber) regardless of hover. Toggleable, so
+   no disabled/dimmed treatment — unlike the one-way "saved" bookmark. */
+.inbox-detail-keep.is-kept,
+.inbox-detail-keep.is-kept:hover {
+  color: #e3b341;
 }
 
 .inbox-detail-download:disabled {

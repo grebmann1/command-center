@@ -82,6 +82,14 @@ export interface InboxEntry {
    * project's last active tab."
    */
   sessionId?: string;
+  /**
+   * True when the originating session was a scheduled (background) run.
+   * Stamped at write time — the originating session is often dead by the
+   * time the renderer reads the entry, so this can't be inferred client-side.
+   * The sidebar collapses scheduled entries into a single group so recurring
+   * jobs don't flood the per-project list.
+   */
+  scheduled?: boolean;
 }
 
 /** A frozen snapshot of an inbox doc, captured at save time. */
@@ -816,6 +824,11 @@ export interface CcApi {
       projectId?: string;
     }): Promise<{ entries: InboxEntry[]; hasMore: boolean }>;
     delete(id: string): Promise<boolean>;
+    /**
+     * Bulk-delete entries by explicit id list (the entries to REMOVE). Used by
+     * "Clear inbox", which passes every non-kept id. Resolves the count removed.
+     */
+    deleteMany(ids: string[]): Promise<number>;
     /**
      * Render a standalone HTML document (the inbox detail, already rendered
      * in the renderer — mermaid SVGs and highlighted code included) to a PDF

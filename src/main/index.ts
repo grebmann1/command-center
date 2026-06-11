@@ -587,6 +587,11 @@ function registerIpc() {
     () => false
   );
   safeHandle(
+    IPC.inbox.deleteMany,
+    (ids: string[]) => inboxStore.deleteMany(ids),
+    () => 0
+  );
+  safeHandle(
     IPC.inbox.exportPdf,
     (input: InboxPdfExport) => exportInboxPdf(win, input),
     (err) => ({ ok: false, message: err instanceof Error ? err.message : String(err) })
@@ -1144,7 +1149,10 @@ app.whenReady().then(() => {
     // the matching run by sessionId (projectId is implied by the session).
     onReport: (_projectId: string, sessionId: string, summary: string, status) => {
       scheduler.attachReport(sessionId, summary, status);
-    }
+    },
+    // Lets inbox_push stamp `scheduled` so the sidebar groups background-run
+    // entries instead of flooding the per-project list with them.
+    isSessionScheduled: (sessionId: string) => ptys.getSession(sessionId)?.scheduled ?? false
   })
     .then(async (handle) => {
       mcpServer = handle;

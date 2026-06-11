@@ -79,6 +79,8 @@ export interface RegisterInboxPushOpts {
    * the agent connects on the project-scoped legacy route.
    */
   sessionId?: string;
+  /** True when the originating session is a scheduled (background) run. */
+  scheduled?: boolean;
   inboxStore: IInboxStore;
 }
 
@@ -89,7 +91,7 @@ export interface RegisterInboxPushOpts {
  * deleted-then-recreated project doesn't bleed identity across requests.
  */
 export function registerInboxPushTool(server: McpServer, opts: RegisterInboxPushOpts): void {
-  const { projectId, projectLabel, sessionId, inboxStore } = opts;
+  const { projectId, projectLabel, sessionId, scheduled, inboxStore } = opts;
 
   server.registerTool(
     'inbox_push',
@@ -104,7 +106,8 @@ export function registerInboxPushTool(server: McpServer, opts: RegisterInboxPush
           projectLabel,
           docs,
           comments,
-          sessionId
+          sessionId,
+          scheduled
         });
         return {
           content: [

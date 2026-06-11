@@ -1,5 +1,5 @@
 import { isValidElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowRight, Bookmark, BookmarkCheck, CornerDownLeft, Download, ExternalLink, MessageSquare, Send, Trash2 } from 'lucide-react';
+import { ArrowRight, Bookmark, BookmarkCheck, CornerDownLeft, Download, ExternalLink, MessageSquare, Send, Star, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -9,9 +9,11 @@ import {
   deleteInboxEntry,
   replyToInboxEntry,
   saveInboxEntry,
+  toggleInboxKeep,
   useData,
   useInbox,
   useInboxAnswered,
+  useInboxKeep,
   useInboxRead,
   useInboxSelection,
   useSavedMark,
@@ -186,6 +188,7 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
   // doc's current content) under ~/.cc-center/saved/. Docs are re-read fresh on
   // click so the snapshot is current; the saved-state marker is per-entry.
   const alreadySaved = useSavedMark((s) => !!s.savedEntryIds[entry.id]);
+  const kept = useInboxKeep((s) => !!s.keptIds[entry.id]);
   const [saving, setSaving] = useState(false);
   const onSave = async () => {
     if (saving || alreadySaved) return;
@@ -257,6 +260,16 @@ function Detail({ entry, onDelete }: { entry: InboxEntry; onDelete: () => void }
           <span className="inbox-detail-ts-sep">·</span>
           {formatRelative(entry.ts)}
         </span>
+        <button
+          type="button"
+          onClick={() => toggleInboxKeep(entry.id)}
+          className={`inbox-detail-keep ${kept ? 'is-kept' : ''}`}
+          title={kept ? 'Kept — protected from Clear inbox' : 'Keep (protect from Clear inbox)'}
+          aria-label={kept ? 'Remove keep flag' : 'Keep this entry'}
+          aria-pressed={kept}
+        >
+          <Star size={14} strokeWidth={1.75} fill={kept ? 'currentColor' : 'none'} />
+        </button>
         {canExport && (
           <button
             type="button"

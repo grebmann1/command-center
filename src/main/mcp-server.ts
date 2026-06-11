@@ -66,6 +66,12 @@ export interface McpServerOptions {
     summary: string,
     status?: 'success' | 'partial' | 'failure'
   ) => void;
+  /**
+   * Resolve whether a session is a scheduled (background) run. Used to stamp
+   * `scheduled` on `inbox_push` entries so the sidebar can group recurring
+   * jobs. Returns false when the session is unknown / not scheduled.
+   */
+  isSessionScheduled?: (sessionId: string) => boolean;
 }
 
 export interface McpServerHandle {
@@ -89,9 +95,13 @@ function buildProjectMcpServer(opts: {
   sessionId?: string;
   inboxStore: IInboxStore;
   onReport?: McpServerOptions['onReport'];
+  isSessionScheduled?: McpServerOptions['isSessionScheduled'];
 }): McpServer {
   const mcp = new McpServer({ name: 'cc-inbox', version: '0.1.0' });
-  registerInboxPushTool(mcp, opts);
+  // Resolve scheduled-ness once at build time so inbox_push entries from a
+  // background run carry the flag for sidebar grouping.
+  const scheduled = !!(opts.sessionId && opts.isSessionScheduled?.(opts.sessionId));
+  registerInboxPushTool(mcp, { ...opts, scheduled });
   // schedule_report attaches an agent-authored summary to the originating
   // scheduled run. It needs a session to attach to, so we only register it on
   // the session-scoped route — otherwise the agent would see a tool in its
@@ -274,7 +284,8 @@ async function handleRequest(
     projectLabel,
     sessionId,
     inboxStore: opts.inboxStore,
-    onReport: opts.onReport
+    onReport: opts.onReport,
+    isSessionScheduled: opts.isSessionScheduled
   });
 
   // Ensure transport + mcp tear down once the response finishes, even on

@@ -100,6 +100,11 @@ export class PtyManager extends EventEmitter {
       .map((l) => l.session);
   }
 
+  /** Look up a single live session by id, or null if it isn't running. */
+  getSession(sessionId: string): TerminalSession | null {
+    return this.live.get(sessionId)?.session ?? null;
+  }
+
   /** Count of live ptys still running (used for the quit-confirmation prompt). */
   liveCount(): number {
     return this.live.size;
