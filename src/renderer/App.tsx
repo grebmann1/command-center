@@ -166,16 +166,14 @@ export function App() {
           if (!activeId) return;
           const tab = (data.terminals[projectId] ?? []).find((t) => t.id === activeId);
           if (tab?.pinned) return;
-          // ⌘W closes (terminates) the active tab, matching peer tools. Confirm
-          // for a live session; ⌘⇧T reopens. Detach is ⌘⇧W.
-          if (
-            tab &&
-            tab.status !== 'exited' &&
-            !window.confirm(`Close “${tab.title}”? The process will be terminated.`)
-          ) {
-            return;
+          // ⌘W hides the active tab (does NOT kill the process): a live session
+          // detaches to the background, an exited tombstone is dismissed.
+          // Terminating is only via the tab's right-click → Delete. ⌘⇧T reopens.
+          if (tab && tab.status !== 'exited') {
+            data.hideTerminal(activeId, projectId);
+          } else {
+            data.closeTerminal(activeId, projectId);
           }
-          data.closeTerminal(activeId, projectId);
           return;
         }
       }

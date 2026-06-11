@@ -7,3 +7,4 @@ dist
 .env.local
 *.pre-vscode-bak
 .claude/settings.local.json
+.zana/

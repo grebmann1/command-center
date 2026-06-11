@@ -235,6 +235,121 @@ input {
   background: var(--success);
 }
 
+.nav-badge--blocked {
+  background: var(--danger);
+}
+
+/* --- Agent tray (bottom of sidebar) --- */
+
+/* margin-top:auto pins the tray to the bottom of the flex-column rail, below
+ * the nav list. A top border separates it from the nav above. */
+.agent-tray {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  /* Cap the list and let it scroll so a burst of agents can't push the rail
+   * past the viewport. */
+  max-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.agent-tray-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-right: 10px;
+}
+
+.agent-tray-label {
+  padding-bottom: 4px;
+}
+
+.agent-tray-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.agent-tray-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+}
+
+.agent-tray-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+
+.agent-tray-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.agent-tray-row .tab-agent-dot {
+  margin-right: 0;
+}
+
+.agent-tray-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+  line-height: 1.25;
+}
+
+.agent-tray-row-title {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-tray-row-meta {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-tray-needs-you {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--danger);
+  flex-shrink: 0;
+}
+
+/* Collapsed rail: just the activity button + count badge, centered like the
+ * other rail icons. Reuses .nav-item geometry via the markup. */
+.agent-tray.collapsed {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  max-height: none;
+}
+
+.sidebar.collapsed .agent-tray-rail-btn {
+  position: relative;
+}
+
+.sidebar.collapsed .agent-tray-rail-btn .nav-badge {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+}
+
 /* The expanded rail already shows the count badge, so the dot is redundant
  * there — keep it only on the collapsed rail. */
 .sidebar:not(.collapsed) .nav-running-dot {

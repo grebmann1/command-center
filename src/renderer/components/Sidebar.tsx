@@ -20,6 +20,7 @@ import {
   type NavId
 } from '../store';
 import { APP_MODULES } from '../modules';
+import { AgentTray } from './AgentTray';
 
 interface NavEntry {
   id: NavId;
@@ -145,6 +146,10 @@ export function Sidebar() {
 
         {renderNavItem(settingsNavItem)}
       </div>
+
+      {/* Running / needs-you agents, pinned to the bottom of the rail. Renders
+       * nothing when no agent is active, so it never takes space idle. */}
+      <AgentTray />
     </aside>
   );
 }

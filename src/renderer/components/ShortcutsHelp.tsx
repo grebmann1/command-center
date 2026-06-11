@@ -70,12 +70,13 @@ const SECTIONS: Section[] = [
   {
     title: 'Tab actions (right-click)',
     rows: [
-      { keys: ['Middle-click'], label: 'Close tab (ends the process)' },
+      { keys: ['Middle-click'], label: 'Hide tab (process keeps running)' },
       { keys: ['Rename'], label: 'Or double-click tab title' },
       { keys: ['Duplicate'], label: 'Spawn another tab with same profile' },
-      { keys: ['Send to background'], label: 'Detach: hide tab, keep process running' },
-      { keys: ['Close others'], label: 'Close every other tab' },
-      { keys: ['Close to right'], label: 'Close all tabs after this one' },
+      { keys: ['Hide'], label: 'Detach: hide tab, keep process running' },
+      { keys: ['Hide others'], label: 'Hide every other tab (processes keep running)' },
+      { keys: ['Hide to right'], label: 'Hide all tabs after this one' },
+      { keys: ['Delete'], label: 'Terminate the process and remove the tab' },
       { keys: ['Dismiss exited'], label: 'Clean up dead tabs' }
     ]
   }

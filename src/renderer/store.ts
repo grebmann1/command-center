@@ -638,9 +638,11 @@ let restoringSessions = false;
 /**
  * Filter out hidden (headless) terminals from a project's tab strip. Hidden
  * sessions still have a live pty — they're just not shown in the UI. The
- * scheduler creates them this way; the user also produces them by detaching
- * a tab ("Send to background" / ⌘⇧W → `hideTerminal`). The tab's X button
- * closes (terminates) instead — see `closeTerminal`.
+ * scheduler creates them this way; the user also produces them by hiding a
+ * tab — the tab's X button, ⌘W, ⌘⇧W, and middle-click all route to
+ * `hideTerminal`. Terminating a process (and removing the tab) happens only
+ * via the tab's right-click → Delete or the project-list row's X — see
+ * `closeTerminal`.
  */
 export function visibleTerminals(list: TerminalSession[] | undefined): TerminalSession[] {
   return (list ?? []).filter((t) => !t.headless);
@@ -1400,7 +1402,11 @@ export const useData = create<DataState>((set, get) => ({
         // otherwise linger forever as a dead record in the Background list —
         // its pty is already gone, so it can be neither resumed nor killed.
         // Drop it outright and surface the exit so the user isn't surprised.
-        if (tab.headless) {
+        // Scheduled (background-job) sessions are reaped the same way even when
+        // visible: a scheduled run promoted to a tab (e.g. opened from the
+        // inbox) should clean up its tab when the job ends, not leave a
+        // "[session exited]" tombstone behind. User-opened tabs keep theirs.
+        if (tab.headless || tab.scheduled) {
           terminals[pid] = terminals[pid].filter((t) => t.id !== sessionId);
           detachedStack[pid] = (detachedStack[pid] || []).filter((id) => id !== sessionId);
           const code = exitCode ?? tab.exitCode;

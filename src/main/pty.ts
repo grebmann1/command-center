@@ -31,9 +31,16 @@ const INBOX_USAGE_GUIDANCE = [
   '- You hit an unexpected error you cannot recover from on your own.',
   '- You completed a multi-step plan and want to summarise the outcome.',
   '',
-  'Do NOT call inbox_push for routine acknowledgements, partial progress,',
-  'or anything you could just answer in the chat. Push only when leaving',
-  'the conversation or when the user is likely away from this tab.',
+  'The user is NOT watching your terminal scrollback. Assume any of the',
+  'four triggers above is, by default, something they would miss unless',
+  'you push it — do not talk yourself out of a push by reasoning that you',
+  '"could just answer in the chat" or that they "might still be looking".',
+  'When a trigger fires, push; the chat reply and the inbox entry are not',
+  'redundant — the chat is only seen if they happen to be on this tab.',
+  '',
+  'The ONE thing not to push is genuine noise: routine acknowledgements',
+  '("ok, done"), mid-task progress with nothing for the user to act on, or',
+  'a clarifying question you are about to answer yourself in the same turn.',
   '',
   'If you are asking a QUESTION and need an answer to continue, push it via',
   '`comments` and then WAIT for input on this same session rather than',
@@ -252,7 +259,8 @@ export class PtyManager extends EventEmitter {
       status: 'running',
       createdAt: Date.now(),
       extraArgs: opts.extraArgs,
-      headless: opts.headless || undefined
+      headless: opts.headless || undefined,
+      scheduled: opts.scheduled || undefined
     };
 
     this.live.set(session.id, { session, proc });
@@ -302,6 +310,7 @@ export class PtyManager extends EventEmitter {
     title?: string;
     remote: ProjectRemote;
     headless?: boolean;
+    scheduled?: boolean;
   }): TerminalSession {
     const { remote } = opts;
     // Defense in depth: addRemoteProject already rejects leading-dash values,
@@ -334,7 +343,8 @@ export class PtyManager extends EventEmitter {
       status: 'running',
       createdAt: Date.now(),
       extraArgs: opts.extraArgs,
-      headless: opts.headless || undefined
+      headless: opts.headless || undefined,
+      scheduled: opts.scheduled || undefined
     };
 
     this.live.set(session.id, { session, proc });
@@ -361,16 +371,27 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
-   * Send a line of input to a session — the text plus a carriage return, as
+   * Send a line of input to a session — the text, then a carriage return, as
    * if the user typed it and hit Enter. Backs `terminals.reply`, used by the
    * inbox to answer a question an agent pushed via `inbox_push` without
    * leaving the inbox. Returns false when no live pty matches (e.g. the
    * session exited), so callers can surface a "session ended" message.
+   *
+   * The CR is sent as a SEPARATE, deferred write rather than appended to the
+   * body. Claude Code's TUI watches for input that arrives as one fast burst
+   * and treats it as a paste — buffering the whole chunk (trailing CR
+   * included) as literal text instead of submitting. That's why an inbox
+   * reply would land in the prompt box but never run. Writing the CR on its
+   * own, a tick later, makes the TUI register it as a discrete Enter keypress.
    */
   reply(id: string, text: string): boolean {
     const live = this.live.get(id);
     if (!live) return false;
-    live.proc.write(text + '\r');
+    live.proc.write(text);
+    setTimeout(() => {
+      // Re-resolve: the session may have exited during the delay.
+      this.live.get(id)?.proc.write('\r');
+    }, 50);
     return true;
   }
 

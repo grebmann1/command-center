@@ -123,6 +123,14 @@ export interface TerminalSession {
    * popover's "Hidden" section.
    */
   headless?: boolean;
+  /**
+   * Spawned by the scheduler — a background job, not a tab the user opened.
+   * Persisted on the session so the renderer can treat it as background work
+   * even after it's been promoted to a visible tab (e.g. opened from the
+   * inbox): when its process exits, its tab is auto-removed rather than left
+   * as a tombstone. User-opened tabs keep their exited tombstone.
+   */
+  scheduled?: boolean;
 }
 
 export interface AppConfig {

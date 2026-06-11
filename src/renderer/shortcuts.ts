@@ -217,22 +217,20 @@ export function installShortcuts(): () => void {
       data.hideTerminal(activeTabId, projectId).catch(() => {});
       return;
     }
-    // cmd+w — close current tab (terminates the process), like every peer
-    // terminal/editor. Confirm for live sessions so a stray chord can't kill a
-    // running agent; exited tabs dismiss without a prompt. ⌘⇧T reopens.
+    // cmd+w — hide the current tab (does NOT kill the process). A live session
+    // detaches to the background, resumable from the + menu or ⌘⇧T; an exited
+    // tombstone is just dismissed. Terminating a process is only ever via the
+    // tab's right-click → Delete. Non-destructive, so no confirm.
     if (e.key === 'w' && !e.shiftKey) {
       if (!projectId || !activeTabId) return;
       e.preventDefault();
       const active = tabs.find((t) => t.id === activeTabId);
       if (active?.pinned) return;
-      if (
-        active &&
-        active.status !== 'exited' &&
-        !window.confirm(`Close “${active.title}”? The process will be terminated.`)
-      ) {
-        return;
+      if (active && active.status !== 'exited') {
+        data.hideTerminal(activeTabId, projectId).catch(() => {});
+      } else {
+        data.closeTerminal(activeTabId, projectId).catch(() => {});
       }
-      data.closeTerminal(activeTabId, projectId).catch(() => {});
       return;
     }
     // cmd+1..9 (or cmd+shift+1..9) — switch tab / project.

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, X, Pin, EyeOff, Trash2, ChevronLeft, Moon } from 'lucide-react';
+import { Plus, X, Pin, Trash2, ChevronLeft, Moon } from 'lucide-react';
 import type { LaunchProfileId, TerminalSession } from '@shared/types';
 import { useUi, useAgentStatus } from '../store';
 import { getTerminal } from '../util/findRegistry';
@@ -46,18 +46,18 @@ interface Props {
   activeTabId: string | undefined;
   onSelect: (id: string) => void;
   /**
-   * Close (terminate) a session: kills the pty and removes the tab, exactly
-   * like the close affordance in iTerm/VSCode/browsers. A restorable snapshot
-   * is kept so ⌘⇧T can reopen. The X button, middle-click, ⌘W, and the
-   * context-menu "Close" items all route here. Confirmation for live sessions
-   * is handled here in the TabBar (exited tabs dismiss without a prompt).
+   * Terminate a session: kills the pty and removes the tab. A restorable
+   * snapshot is kept so ⌘⇧T can reopen. Only the context-menu "Delete" item
+   * routes here for live sessions (with a confirm); exited tombstones also
+   * route here from the X button / middle-click to dismiss without friction.
    */
   onClose: (id: string) => void;
   /**
    * Send a session to the background without killing it (detach). The pty
    * keeps running headless and is surfaced by the Background (N) list, from
-   * which it can be resumed (re-attaching the same live pty). This is the
-   * explicit, separately-named alternative to closing.
+   * which it can be resumed (re-attaching the same live pty). This is what the
+   * X button, middle-click, ⌘W, and the context-menu "Hide" items do for live
+   * sessions — closing is non-destructive; only "Delete" terminates.
    */
   onDetach?: (id: string) => void;
   /**
@@ -157,34 +157,40 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
     };
   }, [tabMenu]);
 
-  // Close one tab. Live (non-exited) sessions get a confirm so a stray click
-  // can't silently terminate a running agent mid-task; exited tabs are just
-  // dead corpses, so they dismiss without friction. Reopen (⌘⇧T) is the undo.
-  const confirmClose = (t: TerminalSession): boolean => {
-    if (t.status === 'exited') return true;
-    return window.confirm(`Close “${t.title}”? The process will be terminated.`);
-  };
+  // Close one tab = HIDE it, not destroy it. A live session detaches to the
+  // background (its pty keeps running, resumable from the Background list); an
+  // exited tab has no process left, so it's just dismissed. The process is
+  // only ever terminated via the context-menu "Delete" or the project-list
+  // row's X — see `deleteOne`. No confirm here: hiding is non-destructive.
   const closeOne = (t: TerminalSession) => {
-    if (confirmClose(t)) onClose(t.id);
-  };
-
-  // Bulk close: one confirm covering however many LIVE sessions are in the
-  // batch (exited ones never prompt). Browsers' "close others/right" behave
-  // this way — a single deliberate gesture, not N modal dialogs.
-  const bulkClose = (targets: TerminalSession[]) => {
-    const victims = targets.filter((t) => !t.pinned);
-    if (victims.length === 0) return;
-    const live = victims.filter((t) => t.status !== 'exited').length;
-    if (
-      live > 0 &&
-      !window.confirm(
-        `Close ${victims.length} tab${victims.length > 1 ? 's' : ''}` +
-          ` (${live} still running)? Their processes will be terminated.`
-      )
-    ) {
+    if (t.status === 'exited' || !onDetach) {
+      onClose(t.id); // dead tombstone (or no detach wired) — just remove it
       return;
     }
-    for (const t of victims) onClose(t.id);
+    onDetach(t.id); // live — send to background, keep the process alive
+  };
+
+  // Destroy one tab: terminate the process and remove the tab. Live sessions
+  // get a confirm so a stray Delete can't silently kill a running agent;
+  // exited tabs are already dead, so they drop without friction. ⌘⇧T reopens.
+  const deleteOne = (t: TerminalSession) => {
+    if (
+      t.status === 'exited' ||
+      window.confirm(`Delete “${t.title}”? The process will be terminated.`)
+    ) {
+      onClose(t.id);
+    }
+  };
+
+  // Bulk close = bulk hide: detach every live, non-pinned target to the
+  // background and dismiss any exited tombstones. Non-destructive, so no
+  // confirm — matches the single-tab close gesture.
+  const bulkClose = (targets: TerminalSession[]) => {
+    for (const t of targets) {
+      if (t.pinned) continue;
+      if (t.status === 'exited' || !onDetach) onClose(t.id);
+      else onDetach(t.id);
+    }
   };
 
   const closeOthers = (id: string) => bulkClose(tabs.filter((t) => t.id !== id));
@@ -309,11 +315,11 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
             <button
               type="button"
               className="tab-close"
-              aria-label={t.status === 'exited' ? `Dismiss ${t.title}` : `Close ${t.title}`}
+              aria-label={t.status === 'exited' ? `Dismiss ${t.title}` : `Hide ${t.title}`}
               title={
                 t.status === 'exited'
                   ? 'Dismiss tab'
-                  : 'Close tab (ends the process) — right-click to send to background'
+                  : 'Hide tab — keeps the process running in the background. Right-click → Delete to end it.'
               }
               onClick={(e) => {
                 e.stopPropagation();
@@ -513,39 +519,36 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
                 Close split (single pane)
               </button>
             )}
-            {onDetach && (
-              <>
-                <div className="tab-context-sep" />
-                <button
-                  onClick={() => { setTabMenu(null); onDetach(t.id); }}
-                  disabled={!!t.pinned || t.status === 'exited'}
-                  title="Hide the tab but keep the process running in the background. Resume it later from the + menu."
-                >
-                  <EyeOff size={13} />
-                  Send to background
-                </button>
-              </>
-            )}
             <div className="tab-context-sep" />
             <button
-              className="tab-context-danger"
               onClick={() => { setTabMenu(null); closeOne(t); }}
               disabled={!!t.pinned}
-              title="Terminate this session. Reopen with ⌘⇧T."
+              title="Hide this tab. The process keeps running in the background; resume it from the + menu or with ⌘⇧T."
             >
-              {t.status === 'exited' ? 'Dismiss' : 'Close'}
+              {t.status === 'exited' ? 'Dismiss' : 'Hide'}
             </button>
             <button
               onClick={() => { setTabMenu(null); closeOthers(t.id); }}
               disabled={!hasOthers}
+              title="Hide all other tabs (their processes keep running in the background)."
             >
-              Close others
+              Hide others
             </button>
             <button
               onClick={() => { setTabMenu(null); closeToRight(t.id); }}
               disabled={!hasRight}
+              title="Hide tabs to the right (their processes keep running in the background)."
             >
-              Close to the right
+              Hide to the right
+            </button>
+            <div className="tab-context-sep" />
+            <button
+              className="tab-context-danger"
+              onClick={() => { setTabMenu(null); deleteOne(t); }}
+              disabled={!!t.pinned}
+              title="Terminate this session and remove the tab. Reopen with ⌘⇧T."
+            >
+              {t.status === 'exited' ? 'Dismiss' : 'Delete'}
             </button>
             <button
               onClick={() => { setTabMenu(null); dismissExited(); }}

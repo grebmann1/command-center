@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 interface FakeProc {
   pid: number;
   writes: string[];
+  exitCb?: (e: { exitCode: number }) => void;
   write: (data: string) => void;
   onData: (cb: (d: string) => void) => void;
   onExit: (cb: (e: { exitCode: number }) => void) => void;
@@ -26,11 +27,15 @@ vi.mock('node-pty', () => ({
       onData() {
         // no-op; reply tests don't exercise the data stream
       },
-      onExit() {
-        // no-op; reply tests don't exercise exit
+      onExit(cb: (e: { exitCode: number }) => void) {
+        // Record the handler so kill() can drive the exit path, which is what
+        // removes the session from PtyManager's live map.
+        this.exitCb = cb;
       },
       resize() {},
-      kill() {}
+      kill() {
+        this.exitCb?.({ exitCode: 0 });
+      }
     };
     spawned.push(proc);
     return proc;
@@ -72,25 +77,59 @@ describe('PtyManager.reply', () => {
     spawned.length = 0;
   });
 
-  it('writes the text followed by a carriage return', () => {
-    const mgr = new PtyManager();
-    const session = makeSession(mgr);
-    const proc = spawned[0];
+  it('writes the body first, then the carriage return as a deferred write', () => {
+    vi.useFakeTimers();
+    try {
+      const mgr = new PtyManager();
+      const session = makeSession(mgr);
+      const proc = spawned[0];
 
-    const ok = mgr.reply(session.id, 'yes, proceed');
+      const ok = mgr.reply(session.id, 'yes, proceed');
 
-    expect(ok).toBe(true);
-    expect(proc.writes).toEqual(['yes, proceed\r']);
+      // Body lands synchronously; the CR is held back so the TUI doesn't
+      // coalesce it into the paste buffer and swallow the submit.
+      expect(ok).toBe(true);
+      expect(proc.writes).toEqual(['yes, proceed']);
+
+      vi.runAllTimers();
+      expect(proc.writes).toEqual(['yes, proceed', '\r']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('preserves multi-line reply bodies, with a single trailing CR', () => {
-    const mgr = new PtyManager();
-    const session = makeSession(mgr);
-    const proc = spawned[0];
+    vi.useFakeTimers();
+    try {
+      const mgr = new PtyManager();
+      const session = makeSession(mgr);
+      const proc = spawned[0];
 
-    mgr.reply(session.id, 'line one\nline two');
+      mgr.reply(session.id, 'line one\nline two');
+      vi.runAllTimers();
 
-    expect(proc.writes).toEqual(['line one\nline two\r']);
+      expect(proc.writes).toEqual(['line one\nline two', '\r']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips the deferred CR when the session exits during the delay', () => {
+    vi.useFakeTimers();
+    try {
+      const mgr = new PtyManager();
+      const session = makeSession(mgr);
+      const proc = spawned[0];
+
+      mgr.reply(session.id, 'too late');
+      mgr.close(session.id);
+      vi.runAllTimers();
+
+      // Body was written, but the CR is dropped because the pty is gone.
+      expect(proc.writes).toEqual(['too late']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('returns false and writes nothing when the session is unknown', () => {

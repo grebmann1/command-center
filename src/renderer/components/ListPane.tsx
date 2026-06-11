@@ -590,17 +590,18 @@ function ProjectsList() {
                       <button
                         type="button"
                         className="project-terminal-close"
-                        aria-label={exited ? `Dismiss ${t.title}` : `Close ${t.title}`}
-                        title={exited ? 'Dismiss' : 'Close (ends the process)'}
+                        aria-label={exited ? `Dismiss ${t.title}` : `Delete ${t.title}`}
+                        title={exited ? 'Dismiss' : 'Delete (ends the process)'}
                         onClick={(e) => {
                           e.stopPropagation();
-                          // Match the tab strip's X: confirm before killing a
-                          // live process so a stray click can't terminate a
-                          // running agent. Exited tabs dismiss without a prompt.
+                          // This is the explicit DELETE path (unlike the tab
+                          // strip's X, which now hides). Confirm before killing
+                          // a live process so a stray click can't terminate a
+                          // running agent; exited tabs dismiss without a prompt.
                           if (
                             !exited &&
                             !window.confirm(
-                              `Close “${t.title}”? The process will be terminated.`
+                              `Delete “${t.title}”? The process will be terminated.`
                             )
                           ) {
                             return;
