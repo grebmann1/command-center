@@ -15,8 +15,15 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["src/shared/*"]
+      "@shared/*": ["src/shared/*"],
+      "@cctc/extension-sdk": ["packages/extension-sdk/src/index.ts"],
+      "@cctc/extension-sdk/*": ["packages/extension-sdk/src/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "electron.vite.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "packages/extension-sdk/src/**/*.ts",
+    "electron.vite.config.ts"
+  ]
 }

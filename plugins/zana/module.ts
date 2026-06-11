@@ -3,12 +3,14 @@
  * core's renderer registry imports this and wires it into the sidebar + shell.
  */
 
-import type { AppModule } from '../../src/shared/module-api';
+import type { AppModule } from '@cctc/extension-sdk/renderer';
 import ZanaPanel from './renderer/ZanaPanel';
 
 export const zanaModule: AppModule = {
   id: 'zana',
   title: 'Zana',
   icon: 'LayoutDashboard',
-  panel: ZanaPanel
+  panel: ZanaPanel,
+  // Declared, not yet enforced (curated-trust phase). See AppModule.permissions.
+  permissions: ['storage', 'projects:read', 'projects:select', 'session:launch', 'inbox:push']
 };

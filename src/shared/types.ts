@@ -957,6 +957,15 @@ export interface CcApi {
     call(moduleId: string, capability: string, args: unknown[]): Promise<unknown>;
     storageGet(moduleId: string, key: string): Promise<unknown>;
     storageSet(moduleId: string, key: string, value: unknown): Promise<void>;
+    /**
+     * Append an entry to the user's inbox on the module's behalf. `moduleId`
+     * is threaded for future per-extension attribution/permission checks. The
+     * inbox store requires `projectId` and at least one of `comments`/`docs`.
+     */
+    pushInbox(
+      moduleId: string,
+      msg: { projectId: string; comments?: string; docs?: Array<{ path: string }> }
+    ): Promise<{ id: string }>;
   };
 }
 

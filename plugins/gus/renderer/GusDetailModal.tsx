@@ -21,7 +21,7 @@ import {
   Image as ImageIcon,
   Film
 } from 'lucide-react';
-import type { ModuleHost } from '../../../src/shared/module-api';
+import type { ModuleHost } from '@cctc/extension-sdk/renderer';
 import type { GusAttachment, GusChatterPost, GusWorkDetail, GusWorkItem } from '../shared/types';
 import { renderRichText } from './renderRichText';
 

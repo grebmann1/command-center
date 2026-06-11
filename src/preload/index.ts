@@ -225,7 +225,8 @@ const api: CcApi = {
       ipcRenderer.invoke(IPC.modules.call, moduleId, capability, args),
     storageGet: (moduleId, key) => ipcRenderer.invoke(IPC.modules.storageGet, moduleId, key),
     storageSet: (moduleId, key, value) =>
-      ipcRenderer.invoke(IPC.modules.storageSet, moduleId, key, value)
+      ipcRenderer.invoke(IPC.modules.storageSet, moduleId, key, value),
+    pushInbox: (moduleId, msg) => ipcRenderer.invoke(IPC.modules.pushInbox, moduleId, msg)
   },
   app: {
     onMenuEvent: (cb: (event: string) => void) => {

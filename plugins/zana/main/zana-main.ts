@@ -36,7 +36,7 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import type { MainModule, MainModuleContext } from '../../../src/shared/module-main.js';
+import type { MainModule, MainModuleContext } from '@cctc/extension-sdk/main';
 import {
   type ZanaArtifact,
   type ZanaAuditEntry,

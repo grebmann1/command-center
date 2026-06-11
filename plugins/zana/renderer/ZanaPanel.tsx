@@ -37,7 +37,7 @@ import {
   Folder,
   User
 } from 'lucide-react';
-import type { ModuleHost } from '../../../src/shared/module-api';
+import type { ModuleHost } from '@cctc/extension-sdk/renderer';
 import type {
   ZanaArtifact,
   ZanaProfile,

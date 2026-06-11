@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ModuleHost } from '../../../src/shared/module-api';
+import type { ModuleHost } from '@cctc/extension-sdk/renderer';
 import type {
   ZanaArtifact,
   ZanaAuditEntry,
@@ -41,7 +41,7 @@ import type {
   ZanaTicket,
   ZanaTicketDetail
 } from '../shared/types';
-import { unwrapBareFence } from '../../../src/renderer/util/markdown';
+import { unwrapBareFence } from '@cctc/extension-sdk/helpers';
 import { AssignMenu, profileLabel, type AssignChoice, type ProfileMap } from './ZanaAssign';
 
 /** Either kind of record the modal can show, tagged by `kind`. */

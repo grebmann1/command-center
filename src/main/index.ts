@@ -930,6 +930,27 @@ function registerIpc() {
     },
     () => undefined
   );
+  // Inbox push on a module's behalf. `inboxStore.append` validates projectId +
+  // (docs|comments) and throws on a malformed push; re-throw so the module
+  // panel's call() rejects with the real message. `moduleId` is currently
+  // unused server-side but is threaded for future per-extension attribution.
+  safeHandle(
+    IPC.modules.pushInbox,
+    async (
+      _moduleId: string,
+      msg: { projectId: string; comments?: string; docs?: Array<{ path: string }> }
+    ) => {
+      const entry = await inboxStore.append({
+        projectId: msg.projectId,
+        comments: msg.comments,
+        docs: msg.docs
+      });
+      return { id: entry.id };
+    },
+    (err) => {
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  );
 }
 
 function buildAppMenu() {

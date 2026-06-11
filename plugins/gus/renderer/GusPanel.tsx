@@ -26,7 +26,7 @@ import {
   UserCheck,
   X
 } from 'lucide-react';
-import type { ModuleHost } from '../../../src/shared/module-api';
+import type { ModuleHost } from '@cctc/extension-sdk/renderer';
 import { GusDetailModal } from './GusDetailModal';
 import {
   BOARD_COLUMNS,

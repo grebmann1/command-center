@@ -18,7 +18,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import type { MainModule, MainModuleContext } from '../../../src/shared/module-main.js';
+import type { MainModule, MainModuleContext } from '@cctc/extension-sdk/main';
 import {
   type GusIdentity,
   type GusSprint,

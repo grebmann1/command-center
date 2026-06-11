@@ -124,7 +124,8 @@ export const IPC = {
   modules: {
     call: 'modules:call',
     storageGet: 'modules:storageGet',
-    storageSet: 'modules:storageSet'
+    storageSet: 'modules:storageSet',
+    pushInbox: 'modules:pushInbox'
   },
   scheduler: {
     list: 'scheduler:list',

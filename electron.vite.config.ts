@@ -4,6 +4,21 @@ import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import type { Plugin } from 'vite';
 
+// Resolve the extension SDK (`@cctc/extension-sdk` + subpaths) to its source
+// in all three bundles. The SDK is the canonical extension contract; core and
+// plugins both consume it. Subpaths (`/renderer`, `/main`, `/helpers`) map to
+// the matching source file; the bare specifier maps to the package entry.
+const sdkAlias = [
+  {
+    find: /^@cctc\/extension-sdk$/,
+    replacement: resolve(__dirname, 'packages/extension-sdk/src/index.ts')
+  },
+  {
+    find: /^@cctc\/extension-sdk\/(.*)$/,
+    replacement: resolve(__dirname, 'packages/extension-sdk/src/$1.ts')
+  }
+];
+
 // Vite/Rollup's own resolver doesn't fully understand the `./*` subpath
 // pattern in monaco-vscode-api's package.json `exports` map (it strips file
 // extensions in the parent module then can't find the leaf .js). Fall back
@@ -41,6 +56,7 @@ function codingameResolver(): Plugin {
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    resolve: { alias: sdkAlias },
     build: {
       // In `dev`, watch app-module sources under `plugins/` as well as `src/`.
       // A module's main side (e.g. plugins/zana/main) is pulled into the main
@@ -55,6 +71,7 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
+    resolve: { alias: sdkAlias },
     build: {
       watch: { include: ['src/**', 'plugins/**'] },
       rollupOptions: {
@@ -66,6 +83,7 @@ export default defineConfig({
     root: resolve(__dirname, 'src/renderer'),
     resolve: {
       alias: [
+        ...sdkAlias,
         { find: '@shared', replacement: resolve(__dirname, 'src/shared') },
         // monaco-vscode-api expects bare-specifier `vscode` to resolve to its
         // companion shim package (per upstream docs). Use a strict regex so we

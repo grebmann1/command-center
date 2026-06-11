@@ -20,10 +20,13 @@ export function createModuleHost(moduleId: string): ModuleHost {
     openExternal: (url: string) => {
       void window.cc.openers.openIn('browser', url);
     },
-    pushInbox: async () => {
-      // Inbox push is agent-driven (MCP); a renderer module pushing directly
-      // isn't wired yet. Kept on the contract so the capability is stable.
-      throw new Error('pushInbox is not available to renderer modules yet');
+    pushInbox: async (msg) => {
+      // Default to the shell's active project, mirroring getActiveProject().
+      const projectId = msg.projectId ?? useUi.getState().selectedProjectId;
+      if (!projectId) {
+        throw new Error('pushInbox: no projectId and no active project');
+      }
+      return window.cc.modules.pushInbox(moduleId, { ...msg, projectId });
     },
     toast: (message: string, kind?: 'info' | 'error') => {
       useUi.getState().pushToast(message, kind);

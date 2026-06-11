@@ -1,0 +1,29 @@
+{
+  "name": "@cctc/extension-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SDK contract for Claude Code Terminal Center extensions — the only core surface an extension may import.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts"
+    },
+    "./renderer": {
+      "types": "./src/renderer.ts"
+    },
+    "./main": {
+      "types": "./src/main.ts"
+    },
+    "./helpers": {
+      "types": "./src/helpers.ts"
+    }
+  },
+  "peerDependencies": {
+    "react": "^18",
+    "react-dom": "^18"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true },
+    "react-dom": { "optional": true }
+  }
+}
