@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, isValidElement, type ReactNode } from 'react';
-import { FileText, Trash2, ExternalLink, X, Search } from 'lucide-react';
+import { FileText, Trash2, ExternalLink, X, Search, Plus, Pencil, Eye, Save } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Editor, { loader } from '@monaco-editor/react';
@@ -41,6 +41,11 @@ export function LibraryView({ project }: Props) {
   const [selectedDoc, setSelectedDoc] = useState<LibraryDoc | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  // After creating a new idea we don't yet have the doc in `docs` (it arrives
+  // on the next library.onChanged push). Stash its id so the select-effect can
+  // jump to it — and `startEditing` to open it straight in edit mode.
+  const [pendingSelectId, setPendingSelectId] = useState<string | null>(null);
+  const [startEditing, setStartEditing] = useState(false);
 
   // Collect all unique tags from docs (useMemo for stable ref)
   const allTags = useMemo(() => {
@@ -77,14 +82,28 @@ export function LibraryView({ project }: Props) {
     return [...filtered].sort((a, b) => b.updatedAt - a.updatedAt);
   }, [docs, searchQuery, selectedTags]);
 
-  // Auto-select first doc if none selected
+  // A freshly-created idea arrives via the onChanged push, not from add()'s
+  // return value — once it shows up in docs, select it (and it opens in edit
+  // mode via startEditing, consumed by DocPreview's key/prop below).
   useEffect(() => {
+    if (!pendingSelectId) return;
+    const match = docs.find((d) => d.id === pendingSelectId);
+    if (match) {
+      setSelectedDoc(match);
+      setPendingSelectId(null);
+    }
+  }, [docs, pendingSelectId]);
+
+  // Auto-select first doc if none selected. Skipped while a new idea is
+  // pending so we don't briefly land on the wrong doc.
+  useEffect(() => {
+    if (pendingSelectId) return;
     if (!selectedDoc && filteredDocs.length > 0) {
       setSelectedDoc(filteredDocs[0]);
     } else if (selectedDoc && !filteredDocs.find((d) => d.id === selectedDoc.id)) {
       setSelectedDoc(filteredDocs[0] ?? null);
     }
-  }, [filteredDocs, selectedDoc]);
+  }, [filteredDocs, selectedDoc, pendingSelectId]);
 
   const handleDelete = async (doc: LibraryDoc) => {
     if (doc.id === '') {
@@ -122,6 +141,38 @@ export function LibraryView({ project }: Props) {
     }
   };
 
+  // Quick-capture: create a dated idea note (global scope, tagged `idea`) and
+  // open it straight in edit mode. Electron disables window.prompt, so the
+  // title isn't asked up front — it's derived from the first heading on save.
+  const handleNewIdea = async () => {
+    const now = new Date();
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+      now.getDate()
+    ).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(
+      now.getMinutes()
+    ).padStart(2, '0')}`;
+    try {
+      const created = await window.cc.library.add({
+        scope: 'global',
+        relPath: `ideas/${stamp}.md`,
+        title: 'Untitled idea',
+        content: '# Untitled idea\n\n',
+        tags: ['idea'],
+        source: { kind: 'user' }
+      });
+      if (created) {
+        setSearchQuery('');
+        setSelectedTags(new Set());
+        setStartEditing(true);
+        setPendingSelectId(created.id);
+      } else {
+        pushToast('Failed to create idea', 'error');
+      }
+    } catch (err) {
+      pushToast(`Create failed: ${err}`, 'error');
+    }
+  };
+
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) => {
       const next = new Set(prev);
@@ -140,6 +191,15 @@ export function LibraryView({ project }: Props) {
       <div className="explorer-tree">
         <div className="explorer-tree-header">
           <h3 className="explorer-tree-title">Documents</h3>
+          <button
+            type="button"
+            className="library-new-idea"
+            onClick={handleNewIdea}
+            title="New idea — a dated, editable markdown note"
+          >
+            <Plus size={13} />
+            <span>New idea</span>
+          </button>
         </div>
 
         {/* Search box */}
@@ -274,7 +334,12 @@ export function LibraryView({ project }: Props) {
               </div>
             )}
 
-            <DocPreview doc={selectedDoc} />
+            <DocPreview
+              key={selectedDoc.id || selectedDoc.relPath}
+              doc={selectedDoc}
+              autoEdit={startEditing}
+              onAutoEditConsumed={() => setStartEditing(false)}
+            />
           </>
         )}
       </div>
@@ -284,13 +349,23 @@ export function LibraryView({ project }: Props) {
 
 interface DocPreviewProps {
   doc: LibraryDoc;
+  /** Open straight into edit mode (used right after "New idea"). */
+  autoEdit?: boolean;
+  onAutoEditConsumed?: () => void;
 }
 
-function DocPreview({ doc }: DocPreviewProps) {
+function DocPreview({ doc, autoEdit, onAutoEditConsumed }: DocPreviewProps) {
+  const pushToast = useUi((s) => s.pushToast);
   const [content, setContent] = useState<string | null>(null);
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Markdown editing: only `md` docs are editable. `draft` holds unsaved
+  // keystrokes; null ⇒ not editing (preview mode).
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const editable = doc.kind === 'md' && doc.id !== '' && !!doc.absPath;
 
   useEffect(() => {
     if (!doc.absPath) {
@@ -302,6 +377,7 @@ function DocPreview({ doc }: DocPreviewProps) {
     setError(null);
     setContent(null);
     setDataUrl(null);
+    setEditing(false);
 
     if (doc.kind === 'md' || doc.kind === 'code') {
       // Read as text
@@ -335,6 +411,49 @@ function DocPreview({ doc }: DocPreviewProps) {
     }
   }, [doc.absPath, doc.kind]);
 
+  // Honor "open in edit mode" once the content has loaded (new idea flow).
+  useEffect(() => {
+    if (autoEdit && editable && content !== null) {
+      setDraft(content);
+      setEditing(true);
+      onAutoEditConsumed?.();
+    }
+  }, [autoEdit, editable, content, onAutoEditConsumed]);
+
+  const beginEdit = () => {
+    setDraft(content ?? '');
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (!doc.absPath) return;
+    setSaving(true);
+    try {
+      const res = await window.cc.fs.writeFile(doc.absPath, draft);
+      if (!res.ok) {
+        pushToast(res.message ?? 'Save failed', 'error');
+        return;
+      }
+      setContent(draft);
+      setEditing(false);
+      // Keep the manifest title in step with the note's first heading so the
+      // list label tracks what the idea is actually about. Best-effort.
+      const heading = firstHeading(draft);
+      if (heading && heading !== doc.title) {
+        try {
+          await window.cc.library.update(doc.id, { title: heading });
+        } catch {
+          /* title sync is best-effort; the file is already saved */
+        }
+      }
+      pushToast('Saved');
+    } catch (err) {
+      pushToast(`Save failed: ${err}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (loading) {
     return <div className="explorer-viewer-empty">Loading…</div>;
   }
@@ -347,24 +466,82 @@ function DocPreview({ doc }: DocPreviewProps) {
     );
   }
 
-  // Markdown preview
+  // Markdown: editable (preview ⇄ edit toggle) for tracked idea/notes.
   if (doc.kind === 'md' && content !== null) {
     return (
-      <div className="explorer-md-preview">
-        <div className="inbox-md">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              pre: (props) => {
-                const mermaid = extractMermaid(props.children);
-                if (mermaid !== null) return <MermaidDiagram code={mermaid} />;
-                return <pre {...props} />;
-              }
-            }}
-          >
-            {content}
-          </ReactMarkdown>
+      <div className="library-md-pane">
+        <div className="library-edit-bar">
+          {editing ? (
+            <>
+              <button
+                type="button"
+                className="library-edit-btn primary"
+                onClick={saveEdit}
+                disabled={saving}
+                title="Save (writes the file)"
+              >
+                <Save size={13} />
+                <span>{saving ? 'Saving…' : 'Save'}</span>
+              </button>
+              <button
+                type="button"
+                className="library-edit-btn"
+                onClick={() => setEditing(false)}
+                disabled={saving}
+                title="Discard changes and return to preview"
+              >
+                <Eye size={13} />
+                <span>Preview</span>
+              </button>
+            </>
+          ) : (
+            editable && (
+              <button
+                type="button"
+                className="library-edit-btn"
+                onClick={beginEdit}
+                title="Edit this note"
+              >
+                <Pencil size={13} />
+                <span>Edit</span>
+              </button>
+            )
+          )}
         </div>
+        {editing ? (
+          <div className="explorer-viewer-monaco">
+            <Editor
+              value={draft}
+              language="markdown"
+              theme="vs-dark"
+              onChange={(v) => setDraft(v ?? '')}
+              options={{
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+                fontSize: 13,
+                lineNumbers: 'on',
+                wordWrap: 'on'
+              }}
+            />
+          </div>
+        ) : (
+          <div className="explorer-md-preview">
+            <div className="inbox-md">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  pre: (props) => {
+                    const mermaid = extractMermaid(props.children);
+                    if (mermaid !== null) return <MermaidDiagram code={mermaid} />;
+                    return <pre {...props} />;
+                  }
+                }}
+              >
+                {content}
+              </ReactMarkdown>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -440,6 +617,18 @@ function extractMermaid(children: ReactNode): string | null {
   if (!/(^|\s)language-mermaid(\s|$)/.test(className)) return null;
   const source = props.children;
   return typeof source === 'string' ? source.replace(/\n$/, '') : null;
+}
+
+/**
+ * First markdown heading of a note (a `#` line), trimmed, or null. Used to keep
+ * a note's manifest title in step with its content on save.
+ */
+function firstHeading(text: string): string | null {
+  for (const line of text.split('\n')) {
+    const m = /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line.trim());
+    if (m) return m[1].trim();
+  }
+  return null;
 }
 
 /**

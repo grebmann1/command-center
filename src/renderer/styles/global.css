@@ -9712,3 +9712,69 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   height: 100%;
   border: none;
 }
+
+/* "New idea" button — sits at the right edge of the Documents header. */
+.library-new-idea {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.library-new-idea:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+/* Editable markdown pane: a thin action bar above the preview/editor. */
+.library-md-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.library-edit-bar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.library-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.library-edit-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.library-edit-btn.primary {
+  background: var(--accent, #2f81f7);
+  border-color: var(--accent, #2f81f7);
+  color: #fff;
+}
+
+.library-edit-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
