@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { ChevronRight, ChevronDown, Folder, FileText, RefreshCw, GitCompare, GitBranch, ListTree, Save, Undo2, Eye, Pencil } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import Editor, { DiffEditor, loader } from '@monaco-editor/react';
+import Editor, { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
@@ -25,6 +25,7 @@ import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 loader.config({ monaco });
 import type { FsEntry, GitFileCode, GitShowResult, OpenTarget, FsReadResult, Project } from '@shared/types';
 import { useData, useUi } from '../store';
+import { DiffViewer } from './DiffViewer';
 import { OpenerButtons } from './OpenerButtons';
 import { posixQuote } from '../util/quote';
 
@@ -666,24 +667,11 @@ export function ExplorerView({ project }: Props) {
                     <p>HEAD blob is binary; cannot diff as text.</p>
                   </div>
                 ) : (
-                  <DiffEditor
-                    height="100%"
-                    width="100%"
-                    theme="vs-dark"
+                  <DiffViewer
+                    path={explorerFile}
                     language={languageFromPath(explorerFile)}
                     original={headResult.content ?? ''}
                     modified={fileResult.content ?? ''}
-                    originalModelPath={`head://${explorerFile}`}
-                    modifiedModelPath={explorerFile}
-                    options={{
-                      readOnly: true,
-                      renderSideBySide: true,
-                      minimap: { enabled: false },
-                      fontSize: 13,
-                      scrollBeyondLastLine: false,
-                      automaticLayout: true,
-                      wordWrap: 'off'
-                    }}
                   />
                 )
               ) : (
