@@ -71,7 +71,15 @@ const SCHEDULE_REPORT_GUIDANCE = [
   'report = always-on per-run record; inbox = only when you need the user to',
   'act. If this session auto-closes when you finish, you MUST call',
   '`schedule_report` BEFORE ending your turn — the session is killed the',
-  'moment you stop, so a report left for "later" never gets sent.'
+  'moment you stop, so a report left for "later" never gets sent.',
+  '',
+  'Do ALL of your work INLINE, within this single turn. Do NOT dispatch',
+  'background / run_in_background agents and do NOT hand work off to "finish',
+  'later": this session is torn down the instant your turn ends, which kills',
+  'the entire process tree and orphans any background agent mid-flight — its',
+  'work is lost and never lands. If a task would normally be delegated to a',
+  'background agent, perform it yourself and wait for the result before you',
+  'call `schedule_report` and stop.'
 ].join(' ');
 
 export class PtyManager extends EventEmitter {
@@ -211,7 +219,16 @@ export class PtyManager extends EventEmitter {
     const claudeWithCallback = isClaudeProfile(opts.profile) && !!this.mcpBaseUrl;
     const autoClose = !!opts.autoCloseOnFinish && claudeWithCallback;
     const wantsStopHook = claudeWithCallback && (autoClose || !!opts.scheduled);
-    const hookArgs = wantsStopHook ? ['--settings', buildStopHookSettings()] : [];
+    // Notification hook: light a "blocked — needs you" status when the agent
+    // is waiting on the user (permission prompt / interactive question). This
+    // is the ONLY reliable signal for that — the OSC title shows the same `✳`
+    // glyph whether idle or blocked. Wanted for EVERY interactive claude tab,
+    // not just scheduled ones, so it rides on claudeWithCallback alone.
+    const wantsNotifyHook = claudeWithCallback;
+    const hookArgs =
+      wantsStopHook || wantsNotifyHook
+        ? ['--settings', buildHookSettings({ stop: wantsStopHook, notify: wantsNotifyHook })]
+        : [];
     // Pre-approve the inbox push tool so the agent can use it without
     // prompting. We merge into the allowedTools list (rather than emit a
     // second --allowedTools flag) because some claude-cli versions take
@@ -240,6 +257,12 @@ export class PtyManager extends EventEmitter {
       // The Stop hook command reads this — full URL with identity baked in,
       // so the agent never sees (or could forge) the session id in a schema.
       env.CC_HOOK_URL = `${this.mcpBaseUrl}/hook/stop/${opts.projectId}/${sessionId}`;
+    }
+    if (wantsNotifyHook) {
+      // The Notification/UserPromptSubmit hooks POST here. Same identity-in-URL
+      // pattern as the stop hook; the path's trailing segment selects the
+      // event (`blocked` vs `unblocked`) so one base URL serves both.
+      env.CC_NOTIFY_URL = `${this.mcpBaseUrl}/hook/notify/${opts.projectId}/${sessionId}`;
     }
     const proc = pty.spawn(command, fullArgs, {
       name: 'xterm-256color',
@@ -597,39 +620,98 @@ function buildRemoteCmd(opts: {
 }
 
 /**
- * Build the inline `--settings` JSON that registers a Stop hook for an
- * auto-closing scheduled session. The hook command:
- *   - reads the Stop event JSON on stdin,
- *   - bails if `stop_hook_active` is true (Claude re-fires Stop after a
- *     blocking hook; we never block, but guarding is cheap insurance against
- *     a re-entrant fire racing the kill),
- *   - POSTs to `$CC_HOOK_URL` (injected per-session into the spawn env),
- *   - always exits 0 so it stays fire-and-forget and never blocks the agent.
+ * Build the inline `--settings` JSON that registers our per-session hooks.
+ * `--settings` MERGES with the user's settings files, so this adds hooks
+ * without disturbing their config. Every command relies only on `sh` + `curl`
+ * (both present on macOS) and exits 0 so it stays fire-and-forget — a hook
+ * must never block the agent.
  *
- * `--settings` MERGES with the user's settings files, so this adds the hook
- * without disturbing their config. The command relies only on `sh` + `curl`,
- * both present on macOS; if curl is missing the `|| true` keeps it silent.
+ *  - `stop` (opt-in): a Stop hook that POSTs to `$CC_HOOK_URL` so the scheduler
+ *    learns the turn ended (and, for auto-close tasks, the pty gets killed).
+ *    Guards on `stop_hook_active` so a re-entrant Stop fire can't race the kill.
+ *  - `notify` (opt-in): the live-status hooks that let the UI show
+ *    "blocked — needs you". Two independent producers cover the two ways a
+ *    Claude turn can stop for the user:
+ *      · Notification → POST `/blocked`, but ONLY for the notification types
+ *        that mean "waiting on the user" (permission_prompt / elicitation_dialog).
+ *        idle_prompt / auth_success / elicitation_complete are skipped — idle is
+ *        already covered by the OSC title, and treating it as blocked would make
+ *        every finished turn look stuck.
+ *      · PreToolUse/PostToolUse matched to `AskUserQuestion` → POST
+ *        `/blocked` and `/unblocked`. AskUserQuestion is the built-in
+ *        interactive multi-choice prompt (a TOOL, not a notification — it
+ *        doesn't reliably fire Notification), so the tool boundary is the
+ *        dependable signal: Pre fires as the prompt opens, Post when answered.
+ *    Both are cleared by UserPromptSubmit / Stop → POST `/unblocked`, so the
+ *    overlay drops the moment the user answers or the turn ends.
  */
-function buildStopHookSettings(): string {
-  // Single-quoted for the eventual argv element; node-pty passes argv without
-  // a shell, so no shell-escaping of this whole string is needed — but the
-  // command itself runs under `sh -c`, hence the inner quoting care.
-  const command =
-    'CC_IN=$(cat); ' +
-    'case "$CC_IN" in *\'"stop_hook_active":true\'*) exit 0;; esac; ' +
-    'if [ -n "$CC_HOOK_URL" ]; then ' +
-    'curl -s -m 5 -X POST "$CC_HOOK_URL" >/dev/null 2>&1 || true; ' +
-    'fi; exit 0';
-  return JSON.stringify({
-    hooks: {
-      Stop: [
-        {
-          matcher: '',
-          hooks: [{ type: 'command', command }]
-        }
-      ]
+function buildHookSettings(opts: { stop: boolean; notify: boolean }): string {
+  // node-pty passes argv without a shell, so the whole JSON needs no shell
+  // escaping — but each command itself runs under `sh -c`, hence the inner
+  // quoting care (single-quoted literals embedded in a single-quoted argv).
+  const hooks: Record<string, unknown[]> = {};
+
+  if (opts.stop) {
+    const stopCmd =
+      'CC_IN=$(cat); ' +
+      'case "$CC_IN" in *\'"stop_hook_active":true\'*) exit 0;; esac; ' +
+      'if [ -n "$CC_HOOK_URL" ]; then ' +
+      'curl -s -m 5 -X POST "$CC_HOOK_URL" >/dev/null 2>&1 || true; ' +
+      'fi; exit 0';
+    hooks.Stop = [{ matcher: '', hooks: [{ type: 'command', command: stopCmd }] }];
+  }
+
+  if (opts.notify) {
+    // POST /blocked. Reads (and discards) the event JSON on stdin first so the
+    // hook stays well-behaved, then pings the callback.
+    const postBlocked =
+      'cat >/dev/null 2>&1; ' +
+      '[ -n "$CC_NOTIFY_URL" ] && ' +
+      'curl -s -m 5 -X POST "$CC_NOTIFY_URL/blocked" >/dev/null 2>&1 || true; exit 0';
+    // POST /unblocked — the user answered / the turn ended.
+    const postUnblocked =
+      'cat >/dev/null 2>&1; ' +
+      '[ -n "$CC_NOTIFY_URL" ] && ' +
+      'curl -s -m 5 -X POST "$CC_NOTIFY_URL/unblocked" >/dev/null 2>&1 || true; exit 0';
+    // Notification: only the types that mean "waiting on the user". We match
+    // notification_type substrings (no jq dependency) and deliberately list
+    // them explicitly rather than match-all — elicitation_complete /
+    // elicitation_response / idle_prompt / auth_success are NOT blocked states,
+    // so a match-all would produce false reds.
+    const notifyBlocked =
+      'CC_IN=$(cat); ' +
+      'case "$CC_IN" in ' +
+      '*\'"permission_prompt"\'*|*\'"elicitation_dialog"\'*) ' +
+      '[ -n "$CC_NOTIFY_URL" ] && ' +
+      'curl -s -m 5 -X POST "$CC_NOTIFY_URL/blocked" >/dev/null 2>&1 || true;; ' +
+      'esac; exit 0';
+
+    hooks.Notification = [{ matcher: '', hooks: [{ type: 'command', command: notifyBlocked }] }];
+    // AskUserQuestion is a built-in TOOL (the interactive multi-choice prompt),
+    // not a notification — so we catch it at the tool boundary, which is the
+    // reliable signal: PreToolUse fires just before the prompt is shown, and
+    // PostToolUse fires once the user picks. The matcher scopes these to that
+    // one tool, so no other tool call is touched.
+    hooks.PreToolUse = [
+      { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: postBlocked }] }
+    ];
+    hooks.PostToolUse = [
+      { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: postUnblocked }] }
+    ];
+    // Submitting a prompt, and the turn ending, both mean we're no longer
+    // waiting on the user.
+    hooks.UserPromptSubmit = [
+      { matcher: '', hooks: [{ type: 'command', command: postUnblocked }] }
+    ];
+    const stopUnblock = { type: 'command', command: postUnblocked };
+    if (Array.isArray(hooks.Stop)) {
+      (hooks.Stop[0] as { hooks: unknown[] }).hooks.push(stopUnblock);
+    } else {
+      hooks.Stop = [{ matcher: '', hooks: [stopUnblock] }];
     }
-  });
+  }
+
+  return JSON.stringify({ hooks });
 }
 
 function titleFor(profile: LaunchProfileId): string {
