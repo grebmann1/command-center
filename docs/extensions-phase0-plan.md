@@ -188,3 +188,18 @@ pushInbox: async (msg) => {
 
 ## Sequencing
 A (package + shims + alias) → B (repoint + leak + permissions) → C (pushInbox). A must land first; B and C are independent after A.
+
+---
+
+## Phase 1 — DONE (runtime loading + DX scaffold)
+
+Phase 1 (runtime disk loading of first-party-trusted extensions) is implemented on `feat/extensions-phase1`:
+
+- **Runtime load contract (P1-A/B/C):** disk discovery at `~/.cc-center/extensions/<id>/`, main-side `import()`, renderer blob-import + `activate({ React, host })`, `MainModule.teardown()`, version gate via `checkApiCompat`. Manifest is `extension.json` matching `ExtensionManifest` (`icon` = lucide-react name; `entry.renderer`/`entry.main` optional; `permissions` declared-not-enforced).
+- **Developer scaffold (P1-D):** [`tools/create-cctc-extension`](../tools/create-cctc-extension) — a complete Vite library-mode template (`extension.json`, `src/renderer/panel.tsx` exporting a `RendererEntry`, optional `src/main/index.ts`, `vite.config.ts` with the right externals, `tsconfig.json`, `package.json`, `README.md`) plus a dependency-light generator (`index.js`).
+- **Worked sample (P1-D):** [`examples/extensions/hello`](../examples/extensions/hello) — the already-built on-disk artifact (`extension.json` + `renderer.js`) QA can copy straight into `~/.cc-center/extensions/hello/`. Renders `host.listProjects()` and a `host.toast()` button. Maintainable source at [`tools/create-cctc-extension/sample-hello`](../tools/create-cctc-extension/sample-hello).
+- **Authoring docs (P1-D):** [`extensions-authoring.md`](./extensions-authoring.md) — manifest fields, the activate factory + why React is injected, build externals, install path, enable/disable + relaunch caveat, declared-not-enforced permissions.
+
+> The scaffold and sample are **separate projects** (own tsconfig) and are kept out of the root `tsconfig.json` `include` (which scopes to `src/**` + `packages/extension-sdk/src/**`), so the root typecheck stays green.
+
+**Still trusted-only:** Phase 1 extensions are loadable but run with full trust. The trust boundary (isolation, capability broker, CSP, consent) remains deferred to Phase 3.

@@ -1,0 +1,12 @@
+{
+  "id": "hello",
+  "title": "Hello",
+  "icon": "Sparkles",
+  "entry": {
+    "renderer": "renderer.js"
+  },
+  "engines": {
+    "cctcApi": "^1.0.0"
+  },
+  "permissions": ["projects:read"]
+}
