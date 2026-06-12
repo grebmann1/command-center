@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, isValidElement, type ReactNode } from 'react';
-import { FileText, Trash2, ExternalLink, X, Search, Plus, Pencil, Eye, Save } from 'lucide-react';
+import { FileText, Trash2, ExternalLink, X, Search, Plus, Pencil, Eye, Save, AtSign } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Editor, { loader } from '@monaco-editor/react';
@@ -197,6 +197,20 @@ export function LibraryView({ project }: Props) {
     }
   };
 
+  // Copy a Claude-ready reference to the doc so it can be pasted straight into
+  // a terminal / Claude session. We copy the absolute path as an `@`-mention
+  // (Claude Code reads the file from it); fall back to the plain path if no
+  // absPath is known.
+  const handleCopyReference = async (doc: LibraryDoc) => {
+    const ref = doc.absPath ? `@${doc.absPath}` : doc.relPath;
+    try {
+      await navigator.clipboard.writeText(ref);
+      pushToast('Reference copied');
+    } catch (err) {
+      pushToast(`Copy failed: ${err}`, 'error');
+    }
+  };
+
   // Quick-capture: create a dated idea note (global scope, tagged `idea`) and
   // open it straight in edit mode. Electron disables window.prompt, so the
   // title isn't asked up front — it's derived from the first heading on save.
@@ -373,6 +387,14 @@ export function LibraryView({ project }: Props) {
                 </span>
               </div>
               <div className="explorer-viewer-actions">
+                <button
+                  type="button"
+                  onClick={() => handleCopyReference(selectedDoc)}
+                  title="Copy reference (@path) for use in a terminal / Claude session"
+                  aria-label="Copy reference"
+                >
+                  <AtSign size={14} />
+                </button>
                 <button
                   type="button"
                   onClick={() => handleReveal(selectedDoc)}
