@@ -7,7 +7,7 @@ import type {
   ClaudeSettingsScope,
   ClaudeSettingsResult
 } from '@shared/types';
-import { applyTheme, useData, useUi } from '../store';
+import { applyTheme, useData, useUi, useUpdates } from '../store';
 
 export function SettingsPanel() {
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -270,7 +270,83 @@ function GlobalTab({
           onChange={setWorkbenchEnabled}
         />
       </Section>
+
+      <AboutSection />
     </>
+  );
+}
+
+/** Human-readable line for the current update status. */
+function updateStatusLabel(
+  status: import('@shared/types').UpdateStatus,
+  progress: import('@shared/types').UpdateProgress | null
+): string {
+  switch (status.kind) {
+    case 'idle':
+      return 'Up to date.';
+    case 'disabled':
+      return 'Auto-update is only available in the packaged app.';
+    case 'checking':
+      return 'Checking for updates…';
+    case 'available':
+      return `Update${status.version ? ` v${status.version}` : ''} found — downloading…`;
+    case 'not-available':
+      return 'You’re on the latest version.';
+    case 'downloading':
+      return progress
+        ? `Downloading… ${Math.round(progress.percent)}%`
+        : 'Downloading…';
+    case 'downloaded':
+      return `Update${status.version ? ` v${status.version}` : ''} ready — installs when you quit.`;
+    case 'error':
+      return `Update check failed: ${status.message ?? 'unknown error'}`;
+  }
+}
+
+/** App version + "Check for updates" affordance. Wired to the main-process
+ *  electron-updater via window.cc.updates / useUpdates. */
+function AboutSection() {
+  const [version, setVersion] = useState<string>('');
+  const status = useUpdates((s) => s.status);
+  const progress = useUpdates((s) => s.progress);
+
+  useEffect(() => {
+    window.cc.app.version().then(setVersion).catch(() => {});
+  }, []);
+
+  const checking = status.kind === 'checking';
+  const downloaded = status.kind === 'downloaded';
+
+  return (
+    <Section title="About" help="App version and updates.">
+      <Field label="Version">
+        <input type="text" value={version || '…'} readOnly spellCheck={false} />
+      </Field>
+      <p className="settings-help">{updateStatusLabel(status, progress)}</p>
+      <div className="settings-btn-row">
+        <button
+          type="button"
+          className="settings-btn"
+          disabled={checking || status.kind === 'disabled'}
+          onClick={() => {
+            void window.cc.updates.check();
+          }}
+        >
+          {checking ? 'Checking…' : 'Check for updates'}
+        </button>
+        {downloaded && (
+          <button
+            type="button"
+            className="settings-btn"
+            onClick={() => {
+              void window.cc.updates.quitAndInstall();
+            }}
+          >
+            Restart &amp; install now
+          </button>
+        )}
+      </div>
+    </Section>
   );
 }
 

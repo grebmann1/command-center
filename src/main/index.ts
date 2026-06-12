@@ -56,8 +56,16 @@ import { listSshHosts, syncWorkspaceHosts } from './ssh-config.js';
 import { ensureProcessPath } from './env.js';
 import { SchedulerManager } from './scheduler.js';
 import { TrayController } from './tray.js';
+import { createUpdater, type Updater } from './updater.js';
 import { TemplateStore } from './template-store.js';
 import { MainModuleHost } from './modules/registry.js';
+import { loadExtensions } from './extensions/loader.js';
+import {
+  setExtensionEnabled,
+  readRendererEntry,
+  extensionDir
+} from './extensions/discovery.js';
+import type { ExtensionEntry } from '../shared/types.js';
 import { MAIN_MODULES } from './modules/index.js';
 import { homedir } from 'node:os';
 import type {
@@ -119,6 +127,23 @@ async function emitPluginsChanged() {
     safeSend(IPC.plugins.onChanged, entries);
   } catch (err) {
     logMainError('emit plugins changed', err);
+  }
+}
+
+/**
+ * Re-discover runtime extensions and push the fresh list to the renderer.
+ * Used after an enable/disable so the panel reflects the new state. Does NOT
+ * re-run setupAll — enabling an extension that wasn't loaded at boot requires
+ * a relaunch (matching the plugins model); disabling tears down live in the
+ * handler below.
+ */
+async function emitExtensionsChanged() {
+  try {
+    const { entries } = await loadExtensions(logMainError);
+    extensionEntries = entries;
+    safeSend(IPC.extensions.onChanged, extensionEntries);
+  } catch (err) {
+    logMainError('emit extensions changed', err);
   }
 }
 
@@ -222,8 +247,13 @@ const savedStore: ISavedStore = createSavedStore();
 const libraryStore: ILibraryStore = new LibraryStore(() => store.listProjects());
 const scheduler = new SchedulerManager();
 let tray: TrayController | null = null;
+// Created in whenReady (needs `app` ready); a no-op shim in dev. Module-level
+// so the IPC handlers can reach it.
+let updater: Updater | null = null;
 const templates = new TemplateStore(() => store.listProjects());
 const moduleHost = new MainModuleHost({ log: logMainError });
+/** Latest discovered runtime extensions; refreshed on boot + enable/disable. */
+let extensionEntries: ExtensionEntry[] = [];
 const skillBundles = new SkillBundlesStore();
 const scheduleGroups = new ScheduleGroupsStore();
 const skillWatchers: FSWatcher[] = [];
@@ -727,6 +757,50 @@ function registerIpc() {
     })
   );
 
+  // Runtime extensions (~/.cc-center/extensions/<id>/). Mirrors the plugins
+  // handlers. `list` returns the cached boot scan; `setEnabled` flips the
+  // enabled-map and, on disable, tears down the live main module.
+  safeHandle(IPC.extensions.list, () => extensionEntries, () => []);
+  safeHandle(
+    IPC.extensions.setEnabled,
+    async (id: string, enabled: boolean): Promise<Result<true>> => {
+      const res = await setExtensionEnabled(id, enabled);
+      if (res.ok) {
+        // Disable → tear the live module down now (await teardown, drop caps).
+        // Enable of a not-yet-loaded extension takes effect on next relaunch.
+        if (!enabled) await moduleHost.teardown(id);
+        void emitExtensionsChanged();
+      }
+      return res;
+    },
+    (err): Result<true> => ({
+      ok: false,
+      code: 'WRITE_FAILED',
+      message: err instanceof Error ? err.message : String(err)
+    })
+  );
+  safeHandle(
+    IPC.extensions.reveal,
+    async (id: string): Promise<Result<true>> => {
+      const dir = extensionDir(id);
+      if (!existsSync(dir)) {
+        return { ok: false, code: 'NOT_FOUND', message: `Extension not found: ${id}` };
+      }
+      await shell.openPath(dir);
+      return { ok: true, value: true };
+    },
+    (err): Result<true> => ({
+      ok: false,
+      code: 'REVEAL_FAILED',
+      message: err instanceof Error ? err.message : String(err)
+    })
+  );
+  safeHandle(
+    IPC.extensions.readRendererEntry,
+    (id: string) => readRendererEntry(id, logMainError),
+    () => null
+  );
+
   safeHandle(
     IPC.claudeSettings.read,
     (projectPath: string, scope: ClaudeSettingsScope) =>
@@ -797,6 +871,25 @@ function registerIpc() {
     safeSend(IPC.skills.bundles.onChanged, bundles);
   });
   safeHandle(IPC.app.homedir, () => homedir(), () => '');
+  safeHandle(IPC.app.version, () => app.getVersion(), () => '');
+
+  // Auto-update. `updater` is null until whenReady wires it; check/install
+  // no-op gracefully before then and in dev (the updater shim reports
+  // `disabled`).
+  safeHandle(
+    IPC.updates.check,
+    async () => {
+      await updater?.checkForUpdates();
+    },
+    () => undefined
+  );
+  safeHandle(
+    IPC.updates.quitAndInstall,
+    () => {
+      updater?.quitAndInstall();
+    },
+    () => undefined
+  );
 
   safeHandle(IPC.scheduler.list, () => scheduler.list(), () => []);
   ipcMain.handle(
@@ -1115,7 +1208,7 @@ app.whenReady().then(() => {
     applicationVersion: app.getVersion(),
     version: app.getVersion(),
     copyright: '© 2026 grebmann',
-    website: 'https://github.com/grebmann/claude-code-terminal-center',
+    website: 'https://github.com/grebmann1/command-center',
     iconPath: iconPath ?? undefined
   });
   buildAppMenu();
@@ -1177,9 +1270,24 @@ app.whenReady().then(() => {
   installBrainstormSkill(logMainError).catch((err) =>
     logMainError('installBrainstormSkill', err)
   );
-  // Boot app modules (plugins/*). Each module's setup() runs once; failures
-  // are isolated per-module so a broken module never blocks app start.
-  moduleHost.setupAll(MAIN_MODULES).catch((err) => logMainError('moduleHost.setupAll', err));
+  // Boot app modules (built-in plugins/* + runtime extensions). Discover the
+  // runtime extensions under ~/.cc-center/extensions first, then MERGE their
+  // main modules with the static MAIN_MODULES and run setupAll once. Each
+  // module's setup() runs once; failures are isolated per-module (and per-
+  // extension at import time) so a broken one never blocks app start.
+  loadExtensions(logMainError)
+    .then(async ({ entries, modules }) => {
+      extensionEntries = entries;
+      await moduleHost.setupAll([...MAIN_MODULES, ...modules]);
+      safeSend(IPC.extensions.onChanged, extensionEntries);
+    })
+    .catch(async (err) => {
+      logMainError('loadExtensions', err);
+      // Extensions failed wholesale — still boot the built-in modules.
+      await moduleHost.setupAll(MAIN_MODULES).catch((e) =>
+        logMainError('moduleHost.setupAll', e)
+      );
+    });
   // Boot the local MCP server, then plumb its URL into PtyManager so any
   // claude-family terminal spawns get `CC_MCP_URL` injected. Errors here
   // are logged but non-fatal — the app still works without inbox push.
@@ -1241,6 +1349,12 @@ app.whenReady().then(() => {
     })
     .catch((err) => logMainError('startMcpServer', err));
   createWindow();
+  // Auto-update: build the updater (a no-op shim in dev) and kick one check on
+  // boot. Background download + install-on-quit are configured inside; the
+  // renderer surfaces status via IPC.updates.onStatus. Best-effort — a failed
+  // check never blocks boot.
+  updater = createUpdater({ safeSend, log: logMainError });
+  updater.checkForUpdates().catch((err) => logMainError('updater.checkForUpdates', err));
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -1265,6 +1379,11 @@ app.on('before-quit', (event) => {
   // a deliberate choice instead of silently killing in-flight agents and
   // background sessions (the previous behavior). Sessions aren't persisted, so
   // quitting really does end them.
+  //
+  // Auto-update interaction: a downloaded update installs on quit
+  // (`autoInstallOnAppQuit`). Squirrel's quit hook runs *after* this handler, so
+  // preventing the quit here (user clicks Cancel on the live-sessions prompt)
+  // also cancels the install — the update simply applies on the next real quit.
   if (!quitConfirmed) {
     const live = ptys.liveCount();
     if (live > 0) {

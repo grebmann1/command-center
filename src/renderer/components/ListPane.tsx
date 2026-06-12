@@ -21,7 +21,7 @@ import {
 import { groupIcon, GROUP_FALLBACK_COLOR } from './scheduleGroupMeta';
 import { ScheduleGroupsModal } from './ScheduleGroupsModal';
 import type { OpenTarget, LaunchProfileId, Project, AgentState } from '@shared/types';
-import { MODULE_IDS } from '../modules';
+import { useMergedModules } from '../modules';
 import { InboxSidebar } from './InboxSidebar';
 import { AddRemoteProjectDialog } from './AddRemoteProjectDialog';
 import { profileIcon } from '../util/profileIcon';
@@ -379,6 +379,7 @@ function ProjectFocusView({ project }: { project: Project }) {
 
 export function ListPane() {
   const nav = useUi((s) => s.nav);
+  const modules = useMergedModules();
 
   if (nav === 'settings') return <SettingsPane />;
   if (nav === 'scheduler') return <SchedulerPane />;
@@ -386,9 +387,9 @@ export function ListPane() {
   if (nav === 'skills' || nav === 'mcp' || nav === 'plugins') {
     return <CataloguePane nav={nav as 'skills' | 'mcp' | 'plugins'} />;
   }
-  // App modules (plugins/*) own the whole content area and bring their own
-  // filter rail — they don't want the Projects list column.
-  if (MODULE_IDS.includes(nav)) return null;
+  // App modules (built-ins + runtime extensions) own the whole content area and
+  // bring their own filter rail — they don't want the Projects list column.
+  if (modules.some((m) => m.id === nav)) return null;
   return <ProjectsList />;
 }
 

@@ -4,12 +4,15 @@ import type {
   AgentState,
   CcApi,
   CreateTerminalRequest,
+  ExtensionEntry,
   InboxEntry,
   LibraryDoc,
   McpServerEntry,
   PluginEntry,
   SavedRecord,
-  TerminalSession
+  TerminalSession,
+  UpdateProgress,
+  UpdateStatus
 } from '../shared/types.js';
 
 const api: CcApi = {
@@ -155,6 +158,17 @@ const api: CcApi = {
       return () => ipcRenderer.off(IPC.plugins.onChanged, handler);
     }
   },
+  extensions: {
+    list: () => ipcRenderer.invoke(IPC.extensions.list),
+    setEnabled: (id, enabled) => ipcRenderer.invoke(IPC.extensions.setEnabled, id, enabled),
+    reveal: (id) => ipcRenderer.invoke(IPC.extensions.reveal, id),
+    readRendererEntry: (id) => ipcRenderer.invoke(IPC.extensions.readRendererEntry, id),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, entries: ExtensionEntry[]) => cb(entries);
+      ipcRenderer.on(IPC.extensions.onChanged, handler);
+      return () => ipcRenderer.off(IPC.extensions.onChanged, handler);
+    }
+  },
   claudeSettings: {
     read: (projectPath, scope) => ipcRenderer.invoke(IPC.claudeSettings.read, projectPath, scope),
     write: (projectPath, scope, patch) =>
@@ -249,6 +263,7 @@ const api: CcApi = {
       };
     },
     homedir: () => ipcRenderer.invoke(IPC.app.homedir),
+    version: () => ipcRenderer.invoke(IPC.app.version),
     onFocusSession: (cb: (sessionId: string, projectId: string) => void) => {
       const handler = (_e: unknown, sessionId: string, projectId: string) =>
         cb(sessionId, projectId);
@@ -259,6 +274,20 @@ const api: CcApi = {
       const handler = (_e: unknown, taskId?: string) => cb(taskId);
       ipcRenderer.on('app:openScheduler', handler);
       return () => ipcRenderer.off('app:openScheduler', handler);
+    }
+  },
+  updates: {
+    check: () => ipcRenderer.invoke(IPC.updates.check),
+    quitAndInstall: () => ipcRenderer.invoke(IPC.updates.quitAndInstall),
+    onStatus: (cb: (status: UpdateStatus) => void) => {
+      const handler = (_e: unknown, status: UpdateStatus) => cb(status);
+      ipcRenderer.on(IPC.updates.onStatus, handler);
+      return () => ipcRenderer.off(IPC.updates.onStatus, handler);
+    },
+    onProgress: (cb: (progress: UpdateProgress) => void) => {
+      const handler = (_e: unknown, progress: UpdateProgress) => cb(progress);
+      ipcRenderer.on(IPC.updates.onProgress, handler);
+      return () => ipcRenderer.off(IPC.updates.onProgress, handler);
     }
   }
 };

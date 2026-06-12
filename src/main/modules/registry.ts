@@ -51,6 +51,8 @@ export interface ModuleHostDeps {
 export class MainModuleHost {
   private readonly caps = new Map<string, Record<string, ModuleCapability>>();
   private readonly stores = new Map<string, ModuleStorage>();
+  /** Keep the module instances so `teardown(id)` can call their `teardown?()`. */
+  private readonly modules = new Map<string, MainModule>();
   private readonly storageDir: string;
 
   constructor(private readonly deps: ModuleHostDeps) {
@@ -81,11 +83,35 @@ export class MainModuleHost {
       try {
         const caps = await mod.setup(ctx);
         this.caps.set(mod.id, caps);
+        this.modules.set(mod.id, mod);
       } catch (err) {
         this.deps.log(`module setup failed: ${mod.id}`, err);
         this.caps.set(mod.id, {});
+        // Still track the module so a later teardown can attempt cleanup of
+        // anything `setup` half-acquired before it threw.
+        this.modules.set(mod.id, mod);
       }
     }
+  }
+
+  /**
+   * Tear down one module: call its `teardown?()` (awaited, throw isolated +
+   * logged), then drop it from the caps + modules maps so a subsequent
+   * `dispatch` rejects with "Unknown module". Used on extension disable /
+   * uninstall. No-op for an unknown id. The per-module storage is left intact
+   * so a re-enable keeps its state.
+   */
+  async teardown(moduleId: string): Promise<void> {
+    const mod = this.modules.get(moduleId);
+    if (mod?.teardown) {
+      try {
+        await mod.teardown();
+      } catch (err) {
+        this.deps.log(`module teardown failed: ${moduleId}`, err);
+      }
+    }
+    this.caps.delete(moduleId);
+    this.modules.delete(moduleId);
   }
 
   /** Dispatch a renderer `ModuleHost.call`. Throws on unknown id/capability. */

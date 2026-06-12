@@ -129,3 +129,51 @@ export interface AppModule {
    */
   permissions?: ExtensionPermission[];
 }
+
+/**
+ * The shape a **runtime-loaded** panel bundle must `default`-export. This is the
+ * disk-loading counterpart to `AppModule.panel`: where a built-in module hands
+ * core a ready React `ComponentType`, a runtime-loaded extension instead exports
+ * a factory that core calls to *build* that component.
+ *
+ * **Why a factory instead of exporting the component directly?**
+ * A runtime-loaded panel is a separately-built ESM bundle. If it did
+ * `import 'react'` of its own, the bundler would either inline a *second* copy
+ * of React or rely on a fragile import-map to dedupe against the host's copy.
+ * Two React instances in one tree break hooks ("Invalid hook call" / mismatched
+ * dispatcher) because hook state lives in module-level singletons. To avoid
+ * that, the host passes **its own React instance** into `activate`; the panel
+ * builds its component closed over that instance, so every hook the panel runs
+ * resolves against the host's React tree. The extension's bundle externalizes
+ * `react` entirely and never ships or imports one.
+ *
+ * `activate` is called once per mount by the host loader; the returned component
+ * receives the same `{ host }` prop contract as `AppModule.panel`, so a panel's
+ * body is identical whether it's built-in or runtime-loaded.
+ *
+ * Built-in modules keep using `AppModule.panel` unchanged — this factory is the
+ * *runtime* code path, not a replacement for it.
+ *
+ * @example
+ * ```ts
+ * // extension's renderer entry, built as ESM with `react` externalized
+ * import type { RendererEntry } from '@cctc/extension-sdk/renderer';
+ *
+ * const entry: RendererEntry = {
+ *   activate({ React, host }) {
+ *     return function Panel() {
+ *       const [n, setN] = React.useState(0); // host's React → hooks work
+ *       return React.createElement('button', { onClick: () => setN(n + 1) }, `${host.moduleId}: ${n}`);
+ *     };
+ *   },
+ * };
+ * export default entry;
+ * ```
+ */
+export interface RendererEntry {
+  /**
+   * Build the panel component. The host injects its own React instance and the
+   * capability bridge; the returned component is mounted with `{ host }`.
+   */
+  activate(ctx: { React: typeof import('react'); host: ModuleHost }): ComponentType<{ host: ModuleHost }>;
+}

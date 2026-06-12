@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, isValidElement, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, isValidElement, type ReactNode } from 'react';
 import { FileText, Trash2, ExternalLink, X, Search, Plus, Pencil, Eye, Save } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -32,6 +32,21 @@ interface Props {
   project: Project;
 }
 
+// Width of the document list column. Persisted as a renderer-only UI pref under
+// a cc.* localStorage key (same idiom as the other global UI prefs), not via
+// IPC config — it's a per-machine layout preference, not app state.
+const LIBRARY_LIST_MIN = 220;
+const LIBRARY_LIST_MAX = 560;
+const LIBRARY_LIST_DEFAULT = 300;
+const LIBRARY_LIST_KEY = 'cc.libraryListWidth';
+
+function loadLibraryListWidth(): number {
+  if (typeof localStorage === 'undefined') return LIBRARY_LIST_DEFAULT;
+  const raw = Number(localStorage.getItem(LIBRARY_LIST_KEY));
+  if (!Number.isFinite(raw) || raw <= 0) return LIBRARY_LIST_DEFAULT;
+  return Math.max(LIBRARY_LIST_MIN, Math.min(LIBRARY_LIST_MAX, raw));
+}
+
 export function LibraryView({ project }: Props) {
   const pushToast = useUi((s) => s.pushToast);
   // CRITICAL: select raw docs slice — inline filter/map infinite-loops React
@@ -46,6 +61,47 @@ export function LibraryView({ project }: Props) {
   // jump to it — and `startEditing` to open it straight in edit mode.
   const [pendingSelectId, setPendingSelectId] = useState<string | null>(null);
   const [startEditing, setStartEditing] = useState(false);
+
+  // Resizable doc-list column. The width lives on the grid via an inline CSS
+  // var; dragging the splitter rewrites it and persists to localStorage on
+  // mouse-up. A ref mirrors the live value so the listeners don't restart.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [listWidth, setListWidth] = useState(loadLibraryListWidth);
+
+  const onResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    document.body.classList.add('resizing-col');
+    const left = rootRef.current?.getBoundingClientRect().left ?? 0;
+    let latest = listWidth;
+    const onMove = (ev: MouseEvent) => {
+      latest = Math.max(
+        LIBRARY_LIST_MIN,
+        Math.min(LIBRARY_LIST_MAX, Math.round(ev.clientX - left))
+      );
+      setListWidth(latest);
+    };
+    const onUp = () => {
+      document.body.classList.remove('resizing-col');
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      try {
+        localStorage.setItem(LIBRARY_LIST_KEY, String(latest));
+      } catch {
+        /* localStorage write is best-effort */
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const onResizeDoubleClick = () => {
+    setListWidth(LIBRARY_LIST_DEFAULT);
+    try {
+      localStorage.setItem(LIBRARY_LIST_KEY, String(LIBRARY_LIST_DEFAULT));
+    } catch {
+      /* best-effort */
+    }
+  };
 
   // Collect all unique tags from docs (useMemo for stable ref)
   const allTags = useMemo(() => {
@@ -186,7 +242,11 @@ export function LibraryView({ project }: Props) {
   };
 
   return (
-    <div className="explorer-view library-view">
+    <div
+      ref={rootRef}
+      className="explorer-view library-view"
+      style={{ gridTemplateColumns: `${listWidth}px 1fr` }}
+    >
       {/* Left pane: doc list */}
       <div className="explorer-tree">
         <div className="explorer-tree-header">
@@ -282,6 +342,20 @@ export function LibraryView({ project }: Props) {
           )}
         </div>
       </div>
+
+      {/* Splitter: drag to resize the list column, double-click to reset. */}
+      <div
+        className="library-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-valuemin={LIBRARY_LIST_MIN}
+        aria-valuemax={LIBRARY_LIST_MAX}
+        aria-valuenow={listWidth}
+        title="Drag to resize · double-click to reset"
+        style={{ left: `${listWidth}px` }}
+        onMouseDown={onResizeMouseDown}
+        onDoubleClick={onResizeDoubleClick}
+      />
 
       {/* Right pane: preview */}
       <div className="explorer-viewer library-viewer">

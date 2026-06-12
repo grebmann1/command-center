@@ -45,4 +45,13 @@ export interface MainModule {
    * extension's capabilities but never crashes the app.
    */
   setup(ctx: MainModuleContext): Record<string, ModuleCapability> | Promise<Record<string, ModuleCapability>>;
+  /**
+   * Release any process-level resources the extension acquired in `setup`
+   * (timers, fs/file watchers, child processes, open sockets). Called when the
+   * extension is disabled or uninstalled — and, for runtime-loaded extensions,
+   * before a hot-reload re-imports the module. May be sync or async; the host
+   * awaits it. Throwing here is logged and isolated, never crashes the app.
+   * Optional: a stateless extension needs no teardown.
+   */
+  teardown?(): void | Promise<void>;
 }

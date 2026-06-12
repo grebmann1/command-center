@@ -92,6 +92,18 @@ export const IPC = {
     reveal: 'plugins:reveal',
     onChanged: 'plugins:onChanged'
   },
+  /**
+   * Runtime extensions under `~/.cc-center/extensions/<id>/`. Mirrors the
+   * `plugins:` shape. `readRendererEntry` returns the extension's renderer
+   * bundle JS as a string for the renderer to blob-import (P1-C).
+   */
+  extensions: {
+    list: 'extensions:list',
+    setEnabled: 'extensions:setEnabled',
+    reveal: 'extensions:reveal',
+    readRendererEntry: 'extensions:readRendererEntry',
+    onChanged: 'extensions:onChanged'
+  },
   claudeSettings: {
     read: 'claudeSettings:read',
     write: 'claudeSettings:write'
@@ -113,7 +125,20 @@ export const IPC = {
     }
   },
   app: {
-    homedir: 'app:homedir'
+    homedir: 'app:homedir',
+    version: 'app:version'
+  },
+  /**
+   * Auto-update (electron-updater). `check`/`quitAndInstall` are renderer→main
+   * requests; `onStatus`/`onProgress` are main→renderer pushes driven by the
+   * autoUpdater event stream. Only core can push (modules can't), so this lives
+   * here rather than in a module.
+   */
+  updates: {
+    check: 'updates:check',
+    quitAndInstall: 'updates:quitAndInstall',
+    onStatus: 'updates:onStatus',
+    onProgress: 'updates:onProgress'
   },
   /**
    * Generic multiplexer for app modules (plugins/*). One channel pair for

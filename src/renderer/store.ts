@@ -15,7 +15,9 @@ import type {
   SavedRecordInput,
   ScheduledTask,
   ScheduleTemplate,
-  ScheduleGroup
+  ScheduleGroup,
+  UpdateProgress,
+  UpdateStatus
 } from '@shared/types';
 import {
   snapshotTabs,
@@ -842,6 +844,28 @@ export const useData = create<DataState>((set, get) => ({
       useSaved.setState({ records, loading: false });
     });
 
+    // Auto-update: subscribe to the main-process event stream. The boot check
+    // is kicked from main; here we mirror status into the store (for the About
+    // section) and surface the key transitions as toasts. Progress is stored
+    // but not toasted — the About section renders the bar.
+    window.cc.updates.onStatus((status) => {
+      useUpdates.setState({ status });
+      if (status.kind === 'available') {
+        const v = status.version ? ` v${status.version}` : '';
+        useUi.getState().pushToast(`Downloading update${v}…`);
+      } else if (status.kind === 'downloaded') {
+        const v = status.version ? ` v${status.version}` : '';
+        useUi
+          .getState()
+          .pushToast(`Update${v} ready — installs when you quit`);
+      } else if (status.kind === 'error') {
+        useUi.getState().pushToast(`Update check failed: ${status.message ?? 'unknown error'}`, 'error');
+      }
+    });
+    window.cc.updates.onProgress((progress) => {
+      useUpdates.setState({ progress });
+    });
+
     // Scheduler: one-shot list + push subscription. The main process emits
     // `scheduler:onChanged` after every fire and after every CRUD action,
     // so the panel never needs to poll.
@@ -1070,6 +1094,9 @@ export const useData = create<DataState>((set, get) => ({
       pushErrorToast(errorMessage(err, 'Failed to remove project'));
       return;
     }
+    // Forget the project's live agent states/rollup BEFORE we wipe terminals —
+    // clearProject reads session membership from the still-populated map.
+    useAgentStatus.getState().clearProject(id);
     set((s) => {
       const terminals = { ...s.terminals };
       const claudeSessions = { ...s.claudeSessions };
@@ -1245,6 +1272,10 @@ export const useData = create<DataState>((set, get) => ({
         detachedStack: { ...s.detachedStack, [projectId]: detached }
       };
     });
+    // Drop the session's live agent state so the project rollup dot recomputes
+    // (else a closed-while-idle session leaves a stale green dot behind). Runs
+    // after the terminals `set` so recomputeRollup sees the session gone.
+    useAgentStatus.getState().clear(sessionId, projectId);
     // Advance selection: if the closed tab was active, pick the neighbor to
     // its right (else its left, else nothing). Without this, selectedTabId
     // dangles on a removed id and the workspace renders blank.
@@ -1356,6 +1387,7 @@ export const useData = create<DataState>((set, get) => ({
         }
       }));
       useUi.getState().clearUnread(sessionId);
+      useAgentStatus.getState().clear(sessionId, projectId);
       useUi
         .getState()
         .pushToast(
@@ -1418,6 +1450,9 @@ export const useData = create<DataState>((set, get) => ({
         [projectId]: (s.terminals[projectId] || []).filter((t) => t.id !== sessionId)
       }
     }));
+    // The old session id is gone; clear its agent state so the rollup doesn't
+    // carry a phantom status for the pre-restart pty.
+    useAgentStatus.getState().clear(sessionId, projectId);
     const created = await get().createTerminal(projectId, snapshot.profile, 80, 24, {
       extraArgs: snapshot.extraArgs,
       title: snapshot.title,
@@ -1550,6 +1585,12 @@ export const useData = create<DataState>((set, get) => ({
         // visible: a scheduled run promoted to a tab (e.g. opened from the
         // inbox) should clean up its tab when the job ends, not leave a
         // "[session exited]" tombstone behind. User-opened tabs keep theirs.
+        // A dead pty no longer drives a live agent state — clear it (deferred,
+        // so we don't nest a useAgentStatus `set` inside this one) so the
+        // project rollup dot stops showing the session's last status. Applies
+        // whether the tab is reaped (zombie) or kept as an "exited" tombstone.
+        const owningProject = pid;
+        queueMicrotask(() => useAgentStatus.getState().clear(sessionId, owningProject));
         if (tab.headless || tab.scheduled) {
           terminals[pid] = terminals[pid].filter((t) => t.id !== sessionId);
           detachedStack[pid] = (detachedStack[pid] || []).filter((id) => id !== sessionId);
@@ -1697,6 +1738,9 @@ interface AgentStatusState {
   apply: (sessionId: string, projectId: string, state: AgentState) => void;
   /** Drop a session (pty exited / tab closed) and refresh its project rollup. */
   clear: (sessionId: string, projectId: string) => void;
+  /** Drop a whole project (project removed): forget every session's state and
+   *  its rollup entry so no phantom dot lingers. */
+  clearProject: (projectId: string) => void;
 }
 
 export const useAgentStatus = create<AgentStatusState>((set, get) => ({
@@ -1714,6 +1758,20 @@ export const useAgentStatus = create<AgentStatusState>((set, get) => ({
       const byId = { ...s.byId };
       delete byId[sessionId];
       return { byId, rollup: recomputeRollup(byId, projectId, s.rollup) };
+    }),
+  clearProject: (projectId) =>
+    set((s) => {
+      // Read membership before the caller wipes the terminals map. Drop every
+      // session's state plus the project's rollup entry in one pass.
+      const sessions = useData.getState().terminals[projectId] ?? [];
+      const ids = new Set(sessions.map((t) => t.id));
+      const hadRollup = projectId in s.rollup;
+      if (ids.size === 0 && !hadRollup) return s;
+      const byId = { ...s.byId };
+      for (const id of ids) delete byId[id];
+      const rollup = { ...s.rollup };
+      delete rollup[projectId];
+      return { byId, rollup };
     })
 }));
 
@@ -1814,6 +1872,21 @@ interface SchedulerLiveState {
 export const useScheduler = create<SchedulerLiveState>(() => ({
   tasks: [],
   loading: true
+}));
+
+/**
+ * Auto-update state — driven by the `updates:onStatus`/`onProgress` pushes from
+ * the main process (electron-updater). `progress` is only meaningful while
+ * `status.kind === 'downloading'`.
+ */
+interface UpdatesLiveState {
+  status: UpdateStatus;
+  progress: UpdateProgress | null;
+}
+
+export const useUpdates = create<UpdatesLiveState>(() => ({
+  status: { kind: 'idle' },
+  progress: null
 }));
 
 /**

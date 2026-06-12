@@ -765,6 +765,56 @@ export interface PluginEntry {
   manifestValid: boolean;
 }
 
+/**
+ * One discovered runtime extension under `~/.cc-center/extensions/<id>/`, as
+ * surfaced to the renderer by `cc.extensions.list()`. Mirrors the SDK's
+ * `ExtensionManifest` shape inline so this IPC-contract file stays dependency-
+ * free (no `@cctc/extension-sdk` import in the shared types surface).
+ */
+export interface ExtensionEntry {
+  /** Stable, URL-safe id — the `<id>` directory name and storage namespace. */
+  id: string;
+  /** Absolute root dir of the extension (`~/.cc-center/extensions/<id>`). */
+  path: string;
+  /**
+   * The parsed `extension.json` manifest, or null when missing/malformed.
+   * Null implies the extension was skipped (see `error`).
+   */
+  manifest: ExtensionManifestView | null;
+  /** Enabled-map state; defaults to true unless explicitly disabled. */
+  enabled: boolean;
+  /**
+   * True when the extension passed validation + version gate AND (if it
+   * declares a main entry) its main module imported + registered cleanly.
+   */
+  loaded: boolean;
+  /**
+   * Why the extension was skipped or failed to load, if any. One of:
+   * `bad-manifest` (missing/unparseable/invalid shape), `version-mismatch`
+   * (engines.cctcApi rejects the host), `disabled` (enabled-map says off),
+   * `main-load-failed` (the main entry threw on import/setup). Absent on a
+   * clean load.
+   */
+  error?: ExtensionLoadError;
+}
+
+export type ExtensionLoadError =
+  | 'bad-manifest'
+  | 'version-mismatch'
+  | 'disabled'
+  | 'main-load-failed';
+
+/** Renderer-safe projection of the SDK `ExtensionManifest`. */
+export interface ExtensionManifestView {
+  id: string;
+  title: string;
+  icon: string;
+  titleLabel?: string;
+  entry: { renderer?: string; main?: string };
+  engines: { cctcApi: string };
+  permissions?: string[];
+}
+
 export type McpSource = 'user' | 'plugin' | 'project';
 
 export type McpTransport = 'stdio' | 'http' | 'unknown';
@@ -786,6 +836,37 @@ export interface McpServerEntry {
   enabled: boolean;
   /** Set when toggle is disabled in UI (plugin-scope rows). */
   enabledLockedBy?: 'plugin';
+}
+
+/**
+ * Auto-update lifecycle, mirrored from electron-updater's autoUpdater events
+ * onto a single renderer-facing union. `disabled` is our own state for the dev
+ * build (electron-updater is a no-op when the app isn't packaged).
+ */
+export type UpdateStatusKind =
+  | 'idle'
+  | 'disabled'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error';
+
+export interface UpdateStatus {
+  kind: UpdateStatusKind;
+  /** Target version for available/downloading/downloaded; absent otherwise. */
+  version?: string;
+  /** Present when kind === 'error'. */
+  message?: string;
+}
+
+/** Download progress as emitted by electron-updater's `download-progress`. */
+export interface UpdateProgress {
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
 }
 
 export interface CcApi {
@@ -876,6 +957,8 @@ export interface CcApi {
   app: {
     onMenuEvent(cb: (event: string) => void): () => void;
     homedir(): Promise<string>;
+    /** The running app version (package.json `version`), for the About section. */
+    version(): Promise<string>;
     /** Fired when an OS notification click asks the UI to focus a session. */
     onFocusSession(cb: (sessionId: string, projectId: string) => void): () => void;
     /**
@@ -955,6 +1038,19 @@ export interface CcApi {
     reveal(id: string): Promise<Result<true>>;
     onChanged(cb: (entries: PluginEntry[]) => void): () => void;
   };
+  /**
+   * Runtime extensions discovered under `~/.cc-center/extensions/<id>/`.
+   * Mirrors `plugins`. `setEnabled(id, false)` tears down the extension's main
+   * module; `readRendererEntry(id)` returns the renderer bundle JS as a string
+   * (or null) for the renderer to blob-import.
+   */
+  extensions: {
+    list(): Promise<ExtensionEntry[]>;
+    setEnabled(id: string, enabled: boolean): Promise<Result<true>>;
+    reveal(id: string): Promise<Result<true>>;
+    readRendererEntry(id: string): Promise<string | null>;
+    onChanged(cb: (entries: ExtensionEntry[]) => void): () => void;
+  };
   claudeSettings: {
     read(projectPath: string, scope: ClaudeSettingsScope): Promise<ClaudeSettingsResult>;
     write(
@@ -1002,6 +1098,18 @@ export interface CcApi {
       moduleId: string,
       msg: { projectId: string; comments?: string; docs?: Array<{ path: string }> }
     ): Promise<{ id: string }>;
+  };
+  /**
+   * Auto-update (electron-updater). `check` kicks a manual check (auto-download
+   * follows). `quitAndInstall` applies a downloaded update by relaunching.
+   * `onStatus`/`onProgress` push the autoUpdater event stream; both return an
+   * unsubscribe fn (same shape as inbox.onAppended).
+   */
+  updates: {
+    check(): Promise<void>;
+    quitAndInstall(): Promise<void>;
+    onStatus(cb: (status: UpdateStatus) => void): () => void;
+    onProgress(cb: (progress: UpdateProgress) => void): () => void;
   };
 }
 

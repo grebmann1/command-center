@@ -16,7 +16,8 @@ import { SearchPanel } from './components/SearchPanel';
 import { ShortcutsHelp } from './components/ShortcutsHelp';
 import { Toaster } from './components/Toaster';
 import { ModulePanelHost } from './modules/ModulePanelHost';
-import { APP_MODULES } from './modules';
+import { useMergedModules } from './modules';
+import { initExtensionModules, reconcileExtensionModules } from './modules/loader';
 import {
   scheduleGitRefresh,
   useData,
@@ -38,6 +39,7 @@ export function App() {
   const projects = useData((s) => s.projects);
   const terminals = useData((s) => s.terminals);
   const unreadInbox = useUnreadInboxCount();
+  const modules = useMergedModules();
 
   // Reflect the current project + active tab into the OS window title so
   // ⌘-Tab / Mission Control disambiguates Command Center across projects.
@@ -68,7 +70,7 @@ export function App() {
       document.title = `${inboxBadge}MCP · ${base}`;
       return;
     }
-    const activeModule = APP_MODULES.find((m) => m.id === nav);
+    const activeModule = modules.find((m) => m.id === nav);
     if (activeModule) {
       document.title = `${inboxBadge}${activeModule.titleLabel ?? activeModule.title} · ${base}`;
       return;
@@ -84,7 +86,21 @@ export function App() {
     document.title = active
       ? `${inboxBadge}${active.title} · ${project.name} — ${base}`
       : `${inboxBadge}${project.name} — ${base}`;
-  }, [nav, selectedProjectId, selectedTabId, projects, terminals, unreadInbox]);
+  }, [nav, selectedProjectId, selectedTabId, projects, terminals, unreadInbox, modules]);
+
+  // Discover + load runtime extension panels at startup, then re-reconcile on
+  // every `extensions:onChanged` push (enable/disable/install/remove). The
+  // loaded set lands in the extension-modules store, which feeds the merged
+  // module set the shell renders from. Renderer-only / already-loaded
+  // extensions reconcile live; enabling a not-yet-loaded main side still needs
+  // a relaunch (per P1-B), and that relaunch re-runs this init.
+  useEffect(() => {
+    void initExtensionModules();
+    const off = window.cc.extensions.onChanged((entries) => {
+      void reconcileExtensionModules(entries);
+    });
+    return off;
+  }, []);
 
   useEffect(() => {
     init();
