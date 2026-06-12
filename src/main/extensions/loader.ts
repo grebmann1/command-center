@@ -22,10 +22,28 @@ type LogFn = (message: string, err?: unknown) => void;
 const noopLog: LogFn = () => {};
 
 export interface LoadedExtensions {
-  /** Renderer-facing entries (manifest + enabled + loaded + error). */
+  /** Renderer-facing entries (manifest + enabled + loaded + mainActive + error). */
   entries: ExtensionEntry[];
   /** Main modules to merge into `moduleHost.setupAll`. */
   modules: MainModule[];
+}
+
+export interface LoadOptions {
+  log?: LogFn;
+  /**
+   * When provided, the loader runs in **re-discovery mode**: it does NOT
+   * `import()` any main module (an ESM import is cached by URL — a re-import
+   * after teardown returns the SAME, still-half-initialised instance, so a
+   * naive re-setup is a partial no-op). Instead it stamps each main-bearing
+   * entry's `mainActive` from this set — the ids the host actually has live in
+   * `moduleHost` right now. Main modules are relaunch-required to (re)activate,
+   * so a re-enabled-but-not-relaunched extension correctly reads
+   * `mainActive:false` and the renderer can surface a relaunch hint.
+   *
+   * Omit on the BOOT path: the loader imports each main module and marks the
+   * ones it collected `mainActive:true`.
+   */
+  activeMainIds?: ReadonlySet<string>;
 }
 
 /**
@@ -39,25 +57,45 @@ function isMainModule(v: unknown): v is MainModule {
 }
 
 /**
- * Discover extensions, then import the main module of each enabled one that
- * declares `entry.main`. Returns the renderer-facing entry list (with any
- * load error stamped) plus the collected `MainModule`s. The caller merges the
- * modules with `MAIN_MODULES` and runs `setupAll` once.
+ * Discover extensions and resolve each one's main-side state.
+ *
+ * BOOT path (no `activeMainIds`): import the main module of each enabled,
+ * compatible extension that declares `entry.main`, take its `default` as a
+ * `MainModule`, and collect it. The caller merges `modules` with `MAIN_MODULES`
+ * and runs `setupAll` once. Collected modules' entries are marked
+ * `mainActive:true`; a failed import stamps `loaded:false` + `main-load-failed`.
+ *
+ * RE-DISCOVERY path (`activeMainIds` provided): do NOT import anything — just
+ * re-read the manifests/enabled-map and stamp each main-bearing entry's
+ * `mainActive` from the live set. `modules` comes back empty (the host already
+ * has its boot-time modules; main modules are relaunch-required to (re)activate).
  */
-export async function loadExtensions(log: LogFn = noopLog): Promise<LoadedExtensions> {
+export async function loadExtensions(opts: LoadOptions = {}): Promise<LoadedExtensions> {
+  const log = opts.log ?? noopLog;
+  const reDiscover = opts.activeMainIds !== undefined;
+  const activeMainIds = opts.activeMainIds ?? new Set<string>();
+
   const discovered = await discoverExtensions(log);
   const modules: MainModule[] = [];
   const entries: ExtensionEntry[] = [];
 
   for (const ext of discovered) {
     const entry = toEntry(ext);
+
     if (ext.mainEntryPath && ext.loaded) {
-      const mod = await importMainModule(ext, log);
-      if (mod) {
-        modules.push(mod);
+      if (reDiscover) {
+        // No import: a main module is only active if the host loaded it at boot.
+        entry.mainActive = activeMainIds.has(ext.id);
       } else {
-        entry.loaded = false;
-        entry.error = 'main-load-failed';
+        const mod = await importMainModule(ext, log);
+        if (mod) {
+          modules.push(mod);
+          entry.mainActive = true;
+        } else {
+          entry.loaded = false;
+          entry.mainActive = false;
+          entry.error = 'main-load-failed';
+        }
       }
     }
     entries.push(entry);

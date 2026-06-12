@@ -9,7 +9,7 @@ import {
   nativeImage,
   powerMonitor
 } from 'electron';
-import { join, relative, isAbsolute } from 'node:path';
+import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
@@ -65,6 +65,7 @@ import {
   readRendererEntry,
   extensionDir
 } from './extensions/discovery.js';
+import { isWithin } from './extensions/path-util.js';
 import type { ExtensionEntry } from '../shared/types.js';
 import { MAIN_MODULES } from './modules/index.js';
 import { homedir } from 'node:os';
@@ -93,12 +94,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export function logMainError(context: string, err: unknown) {
   const message = err instanceof Error ? err.stack || err.message : String(err);
   console.error(`[main] ${context}: ${message}`);
-}
-
-function isWithin(child: string, parent: string): boolean {
-  if (!isAbsolute(child)) return false;
-  const rel = relative(parent, child);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 /** Resolve `projectPath` (passed by the renderer) to listSkills options. */
@@ -132,14 +127,22 @@ async function emitPluginsChanged() {
 
 /**
  * Re-discover runtime extensions and push the fresh list to the renderer.
- * Used after an enable/disable so the panel reflects the new state. Does NOT
- * re-run setupAll — enabling an extension that wasn't loaded at boot requires
- * a relaunch (matching the plugins model); disabling tears down live in the
- * handler below.
+ * Used after an enable/disable so the panel reflects the new state. Runs in
+ * RE-DISCOVERY mode — it does NOT re-import or re-run setupAll. Instead it
+ * stamps each main-bearing extension's `mainActive` from the host's currently-
+ * live modules: a main module is relaunch-required to (re)activate (an ESM
+ * import is URL-cached, so a re-import after teardown returns the same stale
+ * instance). So a re-enabled-but-not-relaunched extension reads
+ * `mainActive:false` and the renderer surfaces a relaunch hint rather than
+ * mounting a panel whose `host.call()` would reject. Renderer-only extensions
+ * reconcile fully live. Disable tears the main side down live in the handler.
  */
 async function emitExtensionsChanged() {
   try {
-    const { entries } = await loadExtensions(logMainError);
+    const { entries } = await loadExtensions({
+      log: logMainError,
+      activeMainIds: moduleHost.liveModuleIds()
+    });
     extensionEntries = entries;
     safeSend(IPC.extensions.onChanged, extensionEntries);
   } catch (err) {
@@ -758,16 +761,21 @@ function registerIpc() {
   );
 
   // Runtime extensions (~/.cc-center/extensions/<id>/). Mirrors the plugins
-  // handlers. `list` returns the cached boot scan; `setEnabled` flips the
-  // enabled-map and, on disable, tears down the live main module.
+  // handlers. `list` returns the latest scan; `setEnabled` flips the
+  // enabled-map. Model: a renderer-only extension takes effect immediately; a
+  // main-bearing extension's MAIN side (its capabilities) activates only at
+  // boot — so enabling one leaves `mainActive:false` until relaunch, and
+  // disabling tears the live main module down now.
   safeHandle(IPC.extensions.list, () => extensionEntries, () => []);
   safeHandle(
     IPC.extensions.setEnabled,
     async (id: string, enabled: boolean): Promise<Result<true>> => {
       const res = await setExtensionEnabled(id, enabled);
       if (res.ok) {
-        // Disable → tear the live module down now (await teardown, drop caps).
-        // Enable of a not-yet-loaded extension takes effect on next relaunch.
+        // Disable → tear the live module down now (await teardown, drop caps);
+        // emitExtensionsChanged then re-stamps mainActive:false from the host.
+        // Enable of a main-bearing extension does NOT re-import (ESM URL cache
+        // would hand back a stale instance) — it activates on next relaunch.
         if (!enabled) await moduleHost.teardown(id);
         void emitExtensionsChanged();
       }
@@ -1275,7 +1283,7 @@ app.whenReady().then(() => {
   // main modules with the static MAIN_MODULES and run setupAll once. Each
   // module's setup() runs once; failures are isolated per-module (and per-
   // extension at import time) so a broken one never blocks app start.
-  loadExtensions(logMainError)
+  loadExtensions({ log: logMainError })
     .then(async ({ entries, modules }) => {
       extensionEntries = entries;
       await moduleHost.setupAll([...MAIN_MODULES, ...modules]);

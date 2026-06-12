@@ -789,6 +789,21 @@ export interface ExtensionEntry {
    */
   loaded: boolean;
   /**
+   * Whether the extension's MAIN side (its capabilities, reached via
+   * `host.call`) is currently live in this process.
+   *
+   * - A renderer-only extension (no `entry.main`) is always `true` — there's
+   *   nothing to activate, so its panel works the moment it's enabled.
+   * - A main-bearing extension is `true` only when its `MainModule` was
+   *   `import()`-ed into the host at THIS boot. Main modules are
+   *   **relaunch-required to (re)activate**: enabling one that wasn't loaded at
+   *   boot leaves `mainActive:false` until the next relaunch, so the renderer
+   *   can surface a relaunch hint rather than mount a panel whose `host.call()`
+   *   would reject with "Unknown module". Disable tears the main side down live
+   *   (also `false`).
+   */
+  mainActive: boolean;
+  /**
    * Why the extension was skipped or failed to load, if any. One of:
    * `bad-manifest` (missing/unparseable/invalid shape), `version-mismatch`
    * (engines.cctcApi rejects the host), `disabled` (enabled-map says off),

@@ -114,6 +114,15 @@ export class MainModuleHost {
     this.modules.delete(moduleId);
   }
 
+  /**
+   * Ids of the modules currently live (set up, not torn down). The extension
+   * loader stamps each main-bearing extension's `mainActive` from this on
+   * re-discovery, so the renderer knows whether `host.call` will resolve.
+   */
+  liveModuleIds(): Set<string> {
+    return new Set(this.modules.keys());
+  }
+
   /** Dispatch a renderer `ModuleHost.call`. Throws on unknown id/capability. */
   async dispatch(moduleId: string, capability: string, args: unknown[]): Promise<unknown> {
     const caps = this.caps.get(moduleId);

@@ -122,14 +122,30 @@ cp dist/main.js ~/.cc-center/extensions/$ID/   # only if you ship a main module
 Dev loop: edit `src/` → `npm run build` → re-copy into the extensions dir →
 re-enable in CCTC.
 
-## Enable / disable — the relaunch caveat
+## Enable / disable — when changes take effect
 
 Extensions are enabled/disabled in CCTC (Settings → Extensions) via an
-enabled-map (modeled on the CLI-plugins loader). **Toggling enable triggers a
-relaunch** so the main-side module is `import()`-ed fresh and the renderer
-re-blob-imports the new bundle — main-process module caching means a live
-hot-swap isn't done in this phase. Plan your dev loop around a relaunch after
-each rebuild.
+enabled-map (modeled on the CLI-plugins loader). What "takes effect" means
+depends on whether the extension ships a main module:
+
+- **Renderer-only extension** (no `entry.main`): enable/disable takes effect
+  **immediately** — the panel mounts (or unmounts) on the next render, no
+  relaunch needed.
+- **Main-bearing extension** (`entry.main`): its main side — the capabilities
+  reached via `host.call` — is loaded **once at app boot**. So:
+  - **Enabling** flips the map immediately, but the main module activates only
+    on the **next relaunch**. Until then the entry reports `mainActive:false`
+    and the UI surfaces a relaunch hint; the panel's `host.call(...)` would
+    otherwise reject with "Unknown module". (The main process can't hot-swap
+    the module: an ESM `import()` is cached by URL, so a re-import after a
+    teardown returns the same stale instance — relaunch is the clean reset.)
+  - **Disabling** tears the live main module down **immediately** (its
+    `teardown()` runs and its capabilities are dropped).
+
+Dev loop: edit `src/` → `npm run build` → re-copy into the extensions dir →
+**relaunch CCTC** (a renderer-only extension can skip the relaunch, but a
+main-bearing one needs it to pick up both the new main bundle and the new
+renderer bundle).
 
 ## Permissions are declared, not enforced (today)
 

@@ -46,7 +46,13 @@ describe('extension discovery', () => {
     const { discoverExtensions } = await importDiscovery();
     const list = await discoverExtensions();
     expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({ id: 'alpha', enabled: true, loaded: true });
+    // Renderer-only → no main side to activate, so mainActive is true at discovery.
+    expect(list[0]).toMatchObject({
+      id: 'alpha',
+      enabled: true,
+      loaded: true,
+      mainActive: true
+    });
     expect(list[0].error).toBeUndefined();
     expect(list[0].manifest?.entry.renderer).toBe('./renderer.js');
     // No main entry → loader resolves no mainEntryPath.
@@ -65,8 +71,34 @@ describe('extension discovery', () => {
     const list = await discoverExtensions();
     expect(list).toHaveLength(1);
     expect(list[0].loaded).toBe(true);
+    // Main-bearing → discovery alone does NOT activate the main side; the loader
+    // flips mainActive once it imports + the host registers the module.
+    expect(list[0].mainActive).toBe(false);
     expect(list[0].mainEntryPath).toBe(join(dir, 'main.js'));
     expect(list[0].manifest?.entry.renderer).toBeUndefined();
+  });
+
+  it('refuses a main entry that escapes the extension dir (skips, no mainEntryPath)', async () => {
+    await writeExt('mainescaper', {
+      id: 'mainescaper',
+      title: 'MainEscaper',
+      icon: 'Cog',
+      entry: { main: '../../../../tmp/evil.js' },
+      engines: goodEngines
+    });
+    const warnings: string[] = [];
+    const { discoverExtensions } = await importDiscovery();
+    const list = await discoverExtensions((m) => warnings.push(m));
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      id: 'mainescaper',
+      loaded: false,
+      mainActive: false,
+      error: 'bad-manifest'
+    });
+    // Crucially: no mainEntryPath, so the loader never import()s the escaped path.
+    expect(list[0].mainEntryPath).toBeUndefined();
+    expect(warnings.some((w) => w.includes('mainescaper') && w.includes('escapes'))).toBe(true);
   });
 
   it('skips + warns on a malformed (unparseable) manifest', async () => {
@@ -219,10 +251,43 @@ describe('extension loader', () => {
     const { loadExtensions } = await importLoader();
     const { entries, modules } = await loadExtensions();
     expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ id: 'mainmod', loaded: true });
+    // Boot path imports the module → mainActive true.
+    expect(entries[0]).toMatchObject({ id: 'mainmod', loaded: true, mainActive: true });
     expect(entries[0].error).toBeUndefined();
     expect(modules).toHaveLength(1);
     expect(modules[0].id).toBe('mainmod');
+  });
+
+  it('re-discovery mode does not import; mainActive reflects the live host set', async () => {
+    const dir = await writeExt('reenable', {
+      id: 'reenable',
+      title: 'ReEnable',
+      icon: 'Cog',
+      entry: { main: './main.mjs' },
+      engines: goodEngines
+    });
+    await writeFile(
+      join(dir, 'main.mjs'),
+      `export default { id: 'reenable', setup() { return {}; } };`,
+      'utf-8'
+    );
+    const { loadExtensions } = await importLoader();
+
+    // Re-enabled but NOT loaded into the host this boot → mainActive:false, and
+    // no module is collected (no re-import). This is the "needs relaunch" state.
+    const notLive = await loadExtensions({ activeMainIds: new Set<string>() });
+    expect(notLive.modules).toHaveLength(0);
+    expect(notLive.entries[0]).toMatchObject({
+      id: 'reenable',
+      loaded: true,
+      mainActive: false
+    });
+
+    // Already live in the host (loaded at boot) → mainActive:true, still no
+    // re-import.
+    const live = await loadExtensions({ activeMainIds: new Set(['reenable']) });
+    expect(live.modules).toHaveLength(0);
+    expect(live.entries[0].mainActive).toBe(true);
   });
 
   it('isolates a failing main import as main-load-failed without collecting it', async () => {
@@ -265,7 +330,7 @@ describe('extension loader', () => {
     });
     const { loadExtensions } = await importLoader();
     const { entries, modules } = await loadExtensions();
-    expect(entries[0]).toMatchObject({ id: 'renderonly', loaded: true });
+    expect(entries[0]).toMatchObject({ id: 'renderonly', loaded: true, mainActive: true });
     expect(modules).toHaveLength(0);
   });
 });

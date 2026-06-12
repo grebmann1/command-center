@@ -15,9 +15,10 @@
 
 import { existsSync } from 'node:fs';
 import { readFile, readdir, rename, writeFile, mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { resolveContained } from './path-util.js';
 import { checkApiCompat, type ExtensionManifest } from '@cctc/extension-sdk';
 import type {
   ExtensionEntry,
@@ -198,7 +199,15 @@ export async function discoverExtensions(log: LogFn = noopLog): Promise<Discover
     const enabled = enabledMap[name] !== false;
 
     if (!manifest) {
-      out.push({ id: name, path: dir, manifest: null, enabled, loaded: false, error });
+      out.push({
+        id: name,
+        path: dir,
+        manifest: null,
+        enabled,
+        loaded: false,
+        mainActive: false,
+        error
+      });
       continue;
     }
 
@@ -215,24 +224,65 @@ export async function discoverExtensions(log: LogFn = noopLog): Promise<Discover
         manifest: view,
         enabled,
         loaded: false,
+        mainActive: false,
         error: 'version-mismatch'
       });
       continue;
     }
 
     if (!enabled) {
-      out.push({ id: name, path: dir, manifest: view, enabled, loaded: false, error: 'disabled' });
+      out.push({
+        id: name,
+        path: dir,
+        manifest: view,
+        enabled,
+        loaded: false,
+        mainActive: false,
+        error: 'disabled'
+      });
       continue;
     }
 
-    // Resolve the main entry path (if any). The loader imports it; until then we
-    // mark loaded:true to mean "discovery-clean".
+    // Resolve the main entry path (if any), contained within the extension dir.
+    // A manifest whose `entry.main` escapes the dir (e.g. `../../evil.js`) would
+    // otherwise let the loader `import()` arbitrary code into the MAIN process —
+    // same guard the renderer entry already has. On escape, skip with a bad
+    // manifest and DO NOT set mainEntryPath. The loader imports it; until then
+    // we mark loaded:true to mean "discovery-clean".
     let mainEntryPath: string | undefined;
     if (manifest.entry.main) {
-      mainEntryPath = join(dir, manifest.entry.main);
+      const contained = resolveContained(dir, manifest.entry.main);
+      if (!contained) {
+        log(`extension ${name}: main entry escapes extension dir — refusing`);
+        out.push({
+          id: name,
+          path: dir,
+          manifest: view,
+          enabled,
+          loaded: false,
+          mainActive: false,
+          error: 'bad-manifest'
+        });
+        continue;
+      }
+      mainEntryPath = contained;
     }
 
-    out.push({ id: name, path: dir, manifest: view, enabled, loaded: true, mainEntryPath });
+    // Provisional mainActive: a renderer-only extension has no main side to
+    // activate, so it's live the moment it's enabled (true). A main-bearing one
+    // is NOT active from discovery alone — only the loader, after it imports +
+    // the host registers the module, flips this to true. Left false here so a
+    // re-enabled-but-not-relaunched main extension stays mainActive:false.
+    const mainActive = !mainEntryPath;
+    out.push({
+      id: name,
+      path: dir,
+      manifest: view,
+      enabled,
+      loaded: true,
+      mainActive,
+      mainEntryPath
+    });
   }
 
   out.sort((a, b) => a.id.localeCompare(b.id));
@@ -240,7 +290,15 @@ export async function discoverExtensions(log: LogFn = noopLog): Promise<Discover
 }
 
 function badEntry(id: string, dir: string): DiscoveredExtension {
-  return { id, path: dir, manifest: null, enabled: true, loaded: false, error: 'bad-manifest' };
+  return {
+    id,
+    path: dir,
+    manifest: null,
+    enabled: true,
+    loaded: false,
+    mainActive: false,
+    error: 'bad-manifest'
+  };
 }
 
 /**
@@ -265,9 +323,9 @@ export async function readRendererEntry(id: string, log: LogFn = noopLog): Promi
 
   // Contain the read to the extension's own dir — reject a renderer path that
   // resolves outside it (defends against a `../../etc/passwd`-style manifest).
-  const target = resolve(dir, manifest.entry.renderer);
-  const contained = resolve(dir);
-  if (target !== contained && !target.startsWith(contained + '/')) {
+  // Same helper the main-entry guard uses (cross-platform; no separator assumption).
+  const target = resolveContained(dir, manifest.entry.renderer);
+  if (!target) {
     log(`extension ${id}: renderer entry escapes extension dir — refusing`);
     return null;
   }
@@ -291,6 +349,7 @@ export function toEntry(d: DiscoveredExtension): ExtensionEntry {
     manifest: d.manifest,
     enabled: d.enabled,
     loaded: d.loaded,
+    mainActive: d.mainActive,
     error: d.error
   };
 }
