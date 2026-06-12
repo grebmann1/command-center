@@ -217,9 +217,9 @@ input {
   flex-shrink: 0;
 }
 
-/* Tiny green pip on the scheduler icon when schedules are running. The numeric
- * running badge carries the count when the rail is expanded; on the collapsed
- * rail the dot is the only running signal. */
+/* Tiny gold pip on the scheduler icon when a scheduled agent is running. The
+ * numeric running badge carries the count when the rail is expanded; on the
+ * collapsed rail the dot is the only running signal. */
 .nav-running-dot {
   position: absolute;
   top: -2px;
@@ -227,12 +227,12 @@ input {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--success);
+  background: var(--accent-gold);
   box-shadow: 0 0 0 2px var(--bg-base);
 }
 
 .nav-badge--running {
-  background: var(--success);
+  background: var(--accent-gold);
 }
 
 .nav-badge--blocked {
@@ -9527,7 +9527,40 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
    ========================================================================= */
 
 .library-view {
-  /* inherits .explorer-view layout */
+  /* inherits .explorer-view grid; positioned so the absolute splitter (which
+     sits at the column boundary) anchors to this box. grid-template-columns is
+     driven by an inline style from the component so the column is resizable. */
+  position: relative;
+}
+
+/* Splitter between the doc list and the preview. Mirrors .list-pane-resizer:
+   a thin invisible hit-target that tints on hover/drag. Positioned at the
+   column boundary via an inline `left` from the component. */
+.library-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  margin-left: -3px;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.library-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: var(--accent-blue);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.library-resizer:hover::after,
+body.resizing-col .library-resizer::after {
+  opacity: 0.6;
 }
 
 /* Search box */
@@ -9535,11 +9568,17 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
-  margin: 8px 12px;
+  padding: 7px 10px;
+  margin: 10px 12px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 7px;
   background: var(--bg-elevated);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.library-search:focus-within {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(47, 129, 247, 0.18);
 }
 
 .library-search svg {
@@ -9549,6 +9588,7 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
 
 .library-search input {
   flex: 1;
+  min-width: 0;
   border: none;
   background: transparent;
   color: var(--text-primary);
@@ -9584,25 +9624,27 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
 }
 
 .library-tag-chip {
-  padding: 4px 8px;
+  padding: 3px 9px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 999px;
   background: var(--bg-panel);
   color: var(--text-muted);
   font-size: 11px;
+  line-height: 1.5;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 
 .library-tag-chip:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .library-tag-chip.active {
-  border-color: var(--accent, #2f81f7);
-  background: var(--accent, #2f81f7);
-  color: var(--bg-panel);
+  border-color: var(--accent-blue);
+  background: var(--accent-blue);
+  color: #fff;
 }
 
 .library-tag-small {
@@ -9615,10 +9657,6 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
 }
 
 /* Doc list */
-.library-list {
-  /* inherits .explorer-tree-body scrolling */
-}
-
 .library-list-empty {
   padding: 24px;
   color: var(--text-dim);
@@ -9626,19 +9664,27 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   font-size: 12px;
 }
 
-.library-list-item {
+.library-list {
+  padding: 6px 8px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
+}
+
+.library-list-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
   width: 100%;
-  padding: 8px 12px;
-  border: none;
-  border-bottom: 1px solid var(--border);
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.13s, border-color 0.13s;
 }
 
 .library-list-item:hover {
@@ -9647,8 +9693,20 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
 
 .library-list-item.active {
   background: var(--bg-elevated);
-  border-left: 2px solid var(--accent, #2f81f7);
-  padding-left: 10px;
+  border-color: var(--border-strong);
+}
+
+/* Left accent bar on the selected row — a rounded pill rather than a hard
+   full-height border, so it reads as a soft selection chip. */
+.library-list-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent-blue);
 }
 
 .library-list-item-header {
@@ -9713,6 +9771,47 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   color: var(--accent-gold);
 }
 
+/* The shared .explorer-viewer-header uses 11px monospace — right for file
+   paths, wrong for a document title. Give the library viewer a larger,
+   proportional title and a touch more breathing room. */
+.library-viewer .explorer-viewer-header {
+  padding: 12px 16px;
+  font-family: inherit;
+}
+
+.library-viewer .explorer-viewer-path {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: normal;
+}
+
+.library-viewer .explorer-viewer-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.13s, color 0.13s, border-color 0.13s;
+}
+
+.library-viewer .explorer-viewer-actions button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.library-viewer .explorer-viewer-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* Viewer header additions */
 .library-viewer-tags {
   display: flex;
@@ -9763,14 +9862,15 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 8px;
+  padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--bg-elevated);
   color: var(--text-primary);
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
+  transition: background 0.13s, border-color 0.13s;
 }
 
 .library-new-idea:hover {
@@ -9798,13 +9898,14 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 9px;
+  padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--bg-elevated);
   color: var(--text-primary);
   font-size: 11px;
   cursor: pointer;
+  transition: background 0.13s, border-color 0.13s;
 }
 
 .library-edit-btn:hover {
@@ -9813,9 +9914,13 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
 }
 
 .library-edit-btn.primary {
-  background: var(--accent, #2f81f7);
-  border-color: var(--accent, #2f81f7);
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
   color: #fff;
+}
+
+.library-edit-btn.primary:hover {
+  filter: brightness(1.08);
 }
 
 .library-edit-btn:disabled {

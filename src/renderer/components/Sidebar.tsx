@@ -19,7 +19,7 @@ import {
   useRunningSchedulerCount,
   type NavId
 } from '../store';
-import { APP_MODULES } from '../modules';
+import { useMergedModules } from '../modules';
 import { AgentTray } from './AgentTray';
 
 interface NavEntry {
@@ -42,15 +42,6 @@ function resolveIcon(name: string): LucideIcon {
   return (lucideIcons as Record<string, LucideIcon>)[name] ?? HelpCircle;
 }
 
-// App modules (plugins/*) contribute their own nav entries. They're grouped
-// under an "Extensions" heading to set them apart from the core tool, and
-// Settings stays pinned to the bottom after them.
-const moduleNavItems: NavEntry[] = APP_MODULES.map((m) => ({
-  id: m.id,
-  label: m.title,
-  icon: resolveIcon(m.icon)
-}));
-
 const settingsNavItem: NavEntry = { id: 'settings', label: 'Settings', icon: Settings };
 
 export function Sidebar() {
@@ -62,18 +53,29 @@ export function Sidebar() {
   const enabledSchedules = useEnabledSchedulerCount();
   const runningSchedules = useRunningSchedulerCount();
 
+  // App modules (built-in plugins/* + runtime-loaded extensions) contribute
+  // their own nav entries, grouped under an "Extensions" heading to set them
+  // apart from the core tool. Built-ins and runtime extensions are treated
+  // identically here; the merged set is reactive so a discovered extension's
+  // nav appears (and a disabled one disappears) without a reload.
+  const modules = useMergedModules();
+  const moduleNavItems: NavEntry[] = modules.map((m) => ({
+    id: m.id,
+    label: m.title,
+    icon: resolveIcon(m.icon)
+  }));
+
   const renderNavItem = (item: NavEntry) => {
     const Icon = item.icon;
     const showBadge = item.id === 'inbox' && unreadInbox > 0;
-    // Scheduler badge shows the number of armed (enabled) schedules.
-    // When any are firing right now we turn it green and add a pulsing
-    // dot on the icon so the "running" state reads at a glance.
+    // Scheduler badge only appears when a scheduled agent is running right now;
+    // it shows that live count in gold and adds a pulsing dot on the icon so
+    // the "running" state reads at a glance. An armed-but-idle schedule shows
+    // no badge.
     const isScheduler = item.id === 'scheduler';
-    const showScheduleBadge = isScheduler && enabledSchedules > 0;
     const running = isScheduler && runningSchedules > 0;
-    const scheduleTitle = running
-      ? `${enabledSchedules} scheduled · ${runningSchedules} running`
-      : `${enabledSchedules} scheduled`;
+    const showScheduleBadge = running;
+    const scheduleTitle = `${runningSchedules} running · ${enabledSchedules} scheduled`;
     return (
       <button
         key={item.id}
@@ -104,11 +106,11 @@ export function Sidebar() {
         )}
         {showScheduleBadge && (
           <span
-            className={`nav-badge ${running ? 'nav-badge--running' : 'nav-badge--muted'}`}
+            className="nav-badge nav-badge--running"
             aria-label={scheduleTitle}
             title={scheduleTitle}
           >
-            {enabledSchedules > 99 ? '99+' : enabledSchedules}
+            {runningSchedules > 99 ? '99+' : runningSchedules}
           </span>
         )}
       </button>
