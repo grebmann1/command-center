@@ -8,3 +8,6 @@ dist
 *.pre-vscode-bak
 .claude/settings.local.json
 .zana/
+
+# Local tool cache (understand-anything knowledge-graph indexer)
+.understand-anything/
