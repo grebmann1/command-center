@@ -9,8 +9,12 @@ name: Release
 # that architecture (no reliable cross-compile): macos-13 = Intel/x64,
 # macos-14 = Apple Silicon/arm64. Both .dmg artifacts attach to one Release.
 #
-# The app is unsigned (personal use): on first launch, right-click the app and
-# choose Open to get past Gatekeeper.
+# The app is self-signed (no Apple Developer ID / no notarization) so that
+# electron-updater can auto-update one build to the next — Squirrel.Mac refuses
+# to update an unsigned app. The signing cert is imported from the CSC_LINK +
+# CSC_KEY_PASSWORD repo secrets (see docs/auto-update-setup.md). A fresh install
+# still needs right-click → Open once to clear Gatekeeper; auto-updates after
+# that don't prompt.
 
 on:
   push:
@@ -81,15 +85,28 @@ jobs:
           # (FATAL: JavaScript heap out of memory). Raise the limit; macos
           # runners have >=7 GB RAM.
           NODE_OPTIONS: --max-old-space-size=6144
-          # No code signing (unsigned personal build); skip electron-builder's
-          # attempt to discover signing identities.
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Self-signed code signing for auto-update (electron-updater/Squirrel.Mac
+          # requires the app to be signed). electron-builder imports the cert from
+          # these repo secrets:
+          #   CSC_LINK         = base64 of the .p12 export
+          #   CSC_KEY_PASSWORD = the .p12 export password
+          # See docs/auto-update-setup.md for how to generate + add them. If the
+          # secrets are absent (e.g. a fork), the build still runs unsigned — but
+          # auto-update won't work for that build.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dmg-${{ matrix.arch }}
-          path: dist/*.dmg
+          name: release-${{ matrix.arch }}
+          # dmg = first install; zip + latest-mac.yml = the auto-update feed
+          # electron-updater reads. blockmaps enable differential downloads.
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.blockmap
+            dist/latest-mac.yml
           if-no-files-found: error
 
   release:
@@ -108,14 +125,22 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.dmg
+          # dmg + zip + blockmap + latest-mac.yml must all be attached:
+          # electron-updater reads latest-mac.yml to detect a new version and
+          # downloads the zip (the dmg is for first-install only).
+          files: |
+            artifacts/*.dmg
+            artifacts/*.zip
+            artifacts/*.blockmap
+            artifacts/latest-mac.yml
           generate_release_notes: true
           fail_on_unmatched_files: true
           body: |
             ### Claude Code Terminal Center ${{ github.ref_name }}
 
-            macOS build (unsigned, Apple Silicon). On first launch, right-click
-            the app and choose **Open** to get past Gatekeeper.
+            macOS build (self-signed, Apple Silicon). On first launch, right-click
+            the app and choose **Open** to get past Gatekeeper. After that,
+            updates install automatically on quit.
 
             | Mac | Download |
             | --- | --- |

@@ -28,6 +28,16 @@ extraResources:
   - from: resources/brainstorm-skill.md
     to: brainstorm-skill.md
 
+# Auto-update feed. electron-updater reads `latest-mac.yml` from the GitHub
+# Release attached to this repo and offers any newer published version. Build
+# also generates `latest-mac.yml` locally so `npm run dist:mac` produces a feed
+# you can eyeball. owner/repo are explicit (not derived from package.json) so a
+# stale `homepage` can't point the updater at the wrong repo.
+publish:
+  provider: github
+  owner: grebmann1
+  repo: command-center
+
 asar: true
 asarUnpack:
   # node-pty ships a native .node binary that can't run from inside asar
@@ -36,14 +46,28 @@ asarUnpack:
 mac:
   category: public.app-category.developer-tools
   icon: resources/icon.icns
+  # Self-signed code signing (no Apple Developer ID / no notarization). The
+  # signing identity is supplied at build time: locally from the login keychain,
+  # in CI from CSC_LINK + CSC_KEY_PASSWORD. electron-updater (Squirrel.Mac)
+  # REQUIRES the app to be signed, and requires the new build to share the same
+  # signing identity as the running one — so do NOT disable signing here.
+  # hardenedRuntime stays off: it's only meaningful with notarization, which a
+  # self-signed cert can't do. gatekeeperAssess off so the build doesn't fail on
+  # an unnotarized bundle. Fresh installs still need right-click → Open once;
+  # auto-update from one signed build to the next works without that.
   hardenedRuntime: false
   gatekeeperAssess: false
   # Arch is selected per build via the CLI flag (e.g. `electron-builder --mac
   # --arm64`). node-pty is a native module, so each arch must be packaged on a
   # runner of that arch — the release workflow uses a macos-13/macos-14 matrix.
   # Listing arch here would override the flag and force a cross-rebuild.
+  #
+  # dmg = first-install artifact; zip = the artifact Squirrel.Mac swaps in for
+  # auto-update. Both must ship in the Release (electron-builder lists both in
+  # latest-mac.yml).
   target:
     - dmg
+    - zip
   artifactName: "${productName}-${version}-${arch}.${ext}"
 
 dmg:

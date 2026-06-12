@@ -5,7 +5,7 @@
   "private": true,
   "description": "Claude Code Terminal Command Center — multi-project terminal hub",
   "author": "grebmann",
-  "homepage": "https://github.com/grebmann/claude-code-terminal-center",
+  "homepage": "https://github.com/grebmann1/command-center",
   "main": "out/main/index.js",
   "type": "module",
   "workspaces": [
@@ -56,6 +56,7 @@
     "@xterm/addon-serialize": "^0.13.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.453.0",
     "mermaid": "^11.15.0",
     "monaco-editor": "^0.55.1",
