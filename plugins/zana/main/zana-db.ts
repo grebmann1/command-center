@@ -58,6 +58,16 @@ function loadDatabase(log: Log): BetterSqlite3 | null {
   return _Database;
 }
 
+/**
+ * Whether the native SQLite driver is loadable. The dispatch in zana-main uses
+ * this to decide between "the DB is the source of truth" and "fall back to the
+ * JSON tree": when the driver is missing/unbuilt we must NOT commit to the DB
+ * path (every read would return empty), so the caller falls through to JSON.
+ */
+export function isDbDriverAvailable(log: Log): boolean {
+  return loadDatabase(log) !== null;
+}
+
 /** The SQLite DB filename Zana writes under a `.zana` root. */
 const DB_FILENAME = 'tickets.db';
 
@@ -174,16 +184,22 @@ export function assignTicketInDb(
   log: Log
 ): ZanaTicketDetail {
   return withWritableDb(zanaDir, log, (db) => {
-    const row = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id) as
-      | Record<string, unknown>
-      | undefined;
-    if (!row) throw new Error('Ticket not found');
+    // The whole read-modify-write-readback runs in ONE transaction. The `audit`
+    // column is a full-JSON read-modify-write, so re-reading the row inside the
+    // txn (rather than before it) is what prevents clobbering a concurrent
+    // audit append by the daemon: the daemon's write serialises before or after
+    // ours, never interleaved. better-sqlite3 transactions are synchronous, so
+    // the returned value is the committed state.
+    const apply = db.transaction((): ZanaTicketDetail => {
+      const row = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id) as
+        | Record<string, unknown>
+        | undefined;
+      if (!row) throw new Error('Ticket not found');
 
-    // Append to the existing audit log, tolerating a null/garbage cell.
-    const audit = parseAudit(row.audit);
-    audit.push(auditEntry);
+      // Append to the existing audit log, tolerating a null/garbage cell.
+      const audit = parseAudit(row.audit);
+      audit.push(auditEntry);
 
-    const txn = db.transaction(() => {
       db.prepare(
         `UPDATE tickets
             SET assigneeProfileId = @assigneeProfileId,
@@ -200,12 +216,12 @@ export function assignTicketInDb(
         audit: JSON.stringify(audit),
         updatedAt: nowIso
       });
-    });
-    txn();
 
-    const fresh = readTicketDetailRow(db, id);
-    if (!fresh) throw new Error('Failed to read Zana ticket back after assignment');
-    return fresh;
+      const fresh = readTicketDetailRow(db, id);
+      if (!fresh) throw new Error('Failed to read Zana ticket back after assignment');
+      return fresh;
+    });
+    return apply();
   });
 }
 

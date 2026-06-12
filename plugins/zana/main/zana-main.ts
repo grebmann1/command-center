@@ -54,6 +54,7 @@ import {
 import {
   assignTicketInDb,
   hasTicketsDb,
+  isDbDriverAvailable,
   readSprintsFromDb,
   readTicketDetailFromDb,
   readTicketsFromDb
@@ -356,18 +357,32 @@ function mapArtifact(raw: any): ZanaArtifact | null {
 }
 
 /**
+ * Whether a `.zana` root should be read via SQLite. True only when BOTH a
+ * non-empty `tickets.db` exists AND the native driver is loadable. Gating on the
+ * driver matters: `hasTicketsDb` is a pure `fs.stat`, so on a host where
+ * `better-sqlite3` is missing/unbuilt it would still be true while every DB read
+ * returns empty — committing to the DB path would then show NO tickets even when
+ * a valid legacy `tickets/` tree exists. Requiring the driver lets such a
+ * workspace fall through to the JSON reader instead of rendering empty.
+ *
+ * Note this does NOT mask a genuinely-empty DB: if the driver loads and the DB
+ * opens, an empty result legitimately means zero tickets and we stay on the DB
+ * path (we don't second-guess it with the JSON tree).
+ */
+async function useTicketsDb(zanaDir: string, log: Log): Promise<boolean> {
+  return isDbDriverAvailable(log) && (await hasTicketsDb(zanaDir));
+}
+
+/**
  * Read all tickets under a `.zana` root, DB-first.
  *
  * Zana ≥0.1.x stores tickets in `<root>/.zana/tickets.db` (SQLite). Older
  * workspaces used the `tickets/<uuid>/ticket.json` tree. We prefer the DB when
- * a non-empty one is present and read the JSON tree otherwise, so both new and
- * legacy `.zana/` dirs render. The DB reader is fully tolerant (a driver/open/
- * query failure yields `[]`); we treat an empty DB result as "fall through to
- * JSON" only when no DB file exists — a DB that exists but is genuinely empty
- * legitimately has zero tickets.
+ * one is usable (see {@link useTicketsDb}) and read the JSON tree otherwise, so
+ * both new and legacy `.zana/` dirs render.
  */
 async function readTickets(zanaDir: string, log: Log): Promise<ZanaTicket[]> {
-  if (await hasTicketsDb(zanaDir)) {
+  if (await useTicketsDb(zanaDir, log)) {
     return readTicketsFromDb(zanaDir, log).slice(0, MAX_TICKETS);
   }
   return readTicketsFromJson(zanaDir, log);
@@ -410,7 +425,7 @@ async function readSprints(
   tickets: ZanaTicket[],
   log: Log
 ): Promise<ZanaSprint[]> {
-  if (await hasTicketsDb(zanaDir)) {
+  if (await useTicketsDb(zanaDir, log)) {
     return readSprintsFromDb(zanaDir, tickets, log, isClosedZanaStatus);
   }
   return readSprintsFromJson(zanaDir, tickets, log);
@@ -574,7 +589,7 @@ export const zanaMainModule: MainModule = {
           const source = await resolveSource(opts);
           // DB-first (matches readTickets): newer workspaces keep full detail
           // (incl. audit) in tickets.db; older ones in tickets/<id>/ticket.json.
-          if (await hasTicketsDb(source.path)) {
+          if (await useTicketsDb(source.path, log)) {
             return readTicketDetailFromDb(source.path, opts.id, log);
           }
           const file = path.join(source.path, 'tickets', opts.id, 'ticket.json');
