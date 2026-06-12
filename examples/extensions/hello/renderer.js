@@ -21,6 +21,10 @@
 // navBadge } — instead of a bare component, so this RUNTIME-loaded bundle now
 // contributes a command palette entry and a sidebar nav badge, not just a panel.
 // commands/navBadge use the same (host)=>… signatures as the built-in AppModule.
+//
+// Command-API dogfood: the second command exercises the additive
+// ExtensionCommand fields — `icon`, `category`, and a declarative host-evaluated
+// `when` (string-only, fail-closed) — all backward-compatible on SDK v1.
 const entry = {
   activate({ React, host }) {
     function HelloPanel() {
@@ -90,7 +94,24 @@ const entry = {
             id: 'ping',
             label: 'Hello: ping',
             keywords: ['pong', 'greet'],
+            icon: 'Sparkles',
             run: function () { h.toast('pong from hello'); }
+          },
+          {
+            // SDK-1 (additive) dogfood: `icon` (lucide name, resolved
+            // core-side), `category` (empty-query grouping label), and a
+            // declarative host-evaluated `when` — a STRING, never a function;
+            // an unknown key / parse error fails closed (command hidden). This
+            // one is omitted from the palette when no project is selected.
+            id: 'project-toast',
+            label: 'Hello: name the active project',
+            category: 'Hello · Project',
+            icon: 'FolderGit2',
+            when: 'hasActiveProject',
+            run: function () {
+              const p = h.getActiveProject();
+              h.toast(p ? 'active project: ' + p.name : 'no active project');
+            }
           }
         ];
       },

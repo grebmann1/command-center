@@ -2650,6 +2650,33 @@ body.resizing-col {
   color: var(--text-dim);
 }
 
+/* Match highlight inside palette / quick-open labels. Reuses the
+   `.palette-label mark` look; the explicit class lets non-label contexts opt
+   in without inheriting unrelated <mark> styling. */
+.palette-match {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Empty-query section headers (Projects / Tabs / Actions / Extensions) and the
+   per-extension sub-heading. Non-interactive — skipped by arrow-key nav. */
+.palette-section {
+  padding: 8px 14px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.palette-subsection {
+  padding: 4px 14px 2px 22px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
 .find-bar {
   position: absolute;
   top: 12px;

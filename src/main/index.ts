@@ -50,6 +50,7 @@ import {
   revealSkillDir
 } from './skills.js';
 import { SkillBundlesStore } from './skill-bundles-store.js';
+import { listCommands } from './commands.js';
 import { ScheduleGroupsStore } from './schedule-groups-store.js';
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import { listSshHosts, syncWorkspaceHosts } from './ssh-config.js';
@@ -595,6 +596,13 @@ function registerIpc() {
           : req.cwd && isWithin(req.cwd, project.path)
           ? req.cwd
           : project.path;
+      // For claude-family profiles, an opening prompt is appended as the
+      // positional `[prompt]` argv element (same convention the scheduler uses)
+      // so the interactive session runs it on first turn. Ignored for `shell`.
+      const isClaude =
+        req.profile === 'claude' || req.profile === 'claude-resume' || req.profile === 'claude-yolo';
+      const extraArgs =
+        req.prompt && isClaude ? [...(req.extraArgs ?? []), req.prompt] : req.extraArgs;
       const session = ptys.create({
         projectId: req.projectId,
         profile: req.profile,
@@ -603,7 +611,7 @@ function registerIpc() {
         rows: req.rows,
         config: store.getConfig(),
         projectSettings: store.getProjectSettings(req.projectId),
-        extraArgs: req.extraArgs,
+        extraArgs,
         title: req.title,
         remote: project.remote
       });
@@ -944,6 +952,12 @@ function registerIpc() {
     (skillId: string, projectPath?: string) =>
       revealSkillDir(skillId, projectPathToOptions(projectPath)),
     () => ({ ok: false, path: '', message: 'reveal failed' })
+  );
+
+  safeHandle(
+    IPC.commands.list,
+    (projectPath?: string) => listCommands(projectPathToOptions(projectPath)),
+    () => []
   );
 
   safeHandle(IPC.skills.bundles.list, () => skillBundles.list(), () => []);

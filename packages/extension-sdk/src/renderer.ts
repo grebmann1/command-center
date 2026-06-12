@@ -227,6 +227,47 @@ export interface ExtensionCommand {
   run: () => void;
   /** Extra fuzzy-match terms beyond `label` (aliases, synonyms). */
   keywords?: string[];
+  /**
+   * Lucide icon name (e.g. `'Ticket'`, `'Search'`), resolved core-side against
+   * `lucide-react` — the same string-name convention as {@link AppModule.icon},
+   * so the contract carries no dependency on the icon library's types. Unknown
+   * names fall back to a neutral glyph. Omit to use the default command icon.
+   */
+  icon?: string;
+  /**
+   * Grouping label shown in the palette's empty-query view. Defaults to the
+   * owning extension's title. Use it to bucket several commands under a custom
+   * heading (e.g. `'GUS: Sprints'`).
+   */
+  category?: string;
+  /**
+   * Declarative visibility expression evaluated **host-side** against a fixed,
+   * coarse, non-sensitive context. This is a **string**, never a function — a
+   * predicate closure can't cross the extension isolation boundary, and
+   * host-evaluating extension code would defeat the broker model. When the
+   * expression is false the command is omitted from the palette; an unknown key
+   * or a parse error also hides it (**fail-closed**). Absent → always shown.
+   *
+   * Grammar: `key`, `key == value`, `key != value`, combined with `!`, `&&`,
+   * `||`, and parentheses. A bare `key` is truthy-tested, so
+   * `when: 'hasActiveProject'` suffices.
+   *
+   * Available context keys (coarse & non-sensitive by design — they answer
+   * yes/no/which questions, never expose paths, names, or contents):
+   *   - `activeNav` — active sidebar nav id (string), e.g. `'projects'`, `'settings'`, or your module id
+   *   - `hasActiveProject` — is a project selected? (boolean)
+   *   - `hasActiveTab` — is there an active tab? (boolean)
+   *   - `tabCount` — number of visible tabs in the selected project (number)
+   *   - `activeTabStatus` — active tab status string (e.g. `'running'`, `'exited'`), or `''`
+   *   - `activeTabProfile` — active tab launch profile (e.g. `'claude'`, `'shell'`), or `''`
+   *   - `workspaceMode` — `'terminals' | 'explorer' | 'preview' | 'library'`
+   *   - `platform` — `'darwin' | 'win32' | 'linux'`
+   *   - `panelFocused` — is THIS extension's own panel the active nav? (boolean)
+   *
+   * @example `when: "hasActiveProject && workspaceMode == terminals"`
+   * @example `when: "activeNav == projects || panelFocused"`
+   */
+  when?: string;
 }
 
 /**

@@ -202,6 +202,9 @@ const api: CcApi = {
       }
     }
   },
+  commands: {
+    list: (projectPath?: string) => ipcRenderer.invoke(IPC.commands.list, projectPath)
+  },
   scheduler: {
     list: () => ipcRenderer.invoke(IPC.scheduler.list),
     create: (input) => ipcRenderer.invoke(IPC.scheduler.create, input),

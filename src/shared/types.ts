@@ -348,6 +348,13 @@ export interface CreateTerminalRequest {
   extraArgs?: string[];
   title?: string;
   cwd?: string;
+  /**
+   * Optional opening prompt for claude-family profiles — appended as the
+   * positional `[prompt]` argv element so the spawned interactive session runs
+   * it on first turn (e.g. a slash command like `/eq-craft`). Ignored for the
+   * `shell` profile, where it would be parsed as a shell command.
+   */
+  prompt?: string;
 }
 
 export interface FsEntry {
@@ -681,6 +688,31 @@ export interface ScheduleUpdateInput {
 }
 
 export type SkillSource = 'user' | 'plugin' | 'project';
+
+/**
+ * A Claude Code *slash command* discovered from `.claude/commands/**\/*.md`.
+ * Surfaced in the command palette so the user can launch it straight into a new
+ * or existing Claude session. `scope` mirrors Claude's own resolution order.
+ */
+export interface SlashCommand {
+  /** Stable handle: `${scope}:${name}`, e.g. `plugin:zana:status`. */
+  id: string;
+  /** Command name with `:` namespacing, e.g. `eq`, `git:commit`, `zana:status`. */
+  name: string;
+  /** The literal a user types / we send to Claude, e.g. `/git:commit`. */
+  invocation: string;
+  scope: 'user' | 'project' | 'plugin';
+  /** Plugin slug (only when scope === 'plugin'). */
+  pluginName?: string;
+  /** Project id (only when scope === 'project'). */
+  projectId?: string;
+  /** Absolute path of the backing `.md` file. */
+  path: string;
+  /** From frontmatter `description`, else the first body line. */
+  description?: string;
+  /** From frontmatter `argument-hint`, e.g. `<pr-url>` — hints args exist. */
+  argumentHint?: string;
+}
 
 export interface SkillEntry {
   /** Stable handle: `${source}:${qualifiedName}`, e.g. `plugin:zana/team-status`. */
@@ -1029,6 +1061,10 @@ export interface CcApi {
       ): Promise<SkillBundleApplyResult>;
       onChanged(cb: (bundles: SkillBundle[]) => void): () => void;
     };
+  };
+  commands: {
+    /** Discover Claude Code slash commands (user + enabled-plugin + project). */
+    list(projectPath?: string): Promise<SlashCommand[]>;
   };
   inbox: {
     history(opts?: {

@@ -6,10 +6,8 @@ import {
   Plug,
   Puzzle,
   Settings,
-  HelpCircle,
   PanelLeftClose,
   PanelLeftOpen,
-  icons as lucideIcons,
   type LucideIcon
 } from 'lucide-react';
 import {
@@ -19,6 +17,7 @@ import {
   useRunningSchedulerCount,
   type NavId
 } from '../store';
+import { resolveIcon } from '../util/resolveIcon';
 import { useMergedModules } from '../modules';
 import { getHost } from '../modules/ModulePanelHost';
 import { AgentTray } from './AgentTray';
@@ -60,11 +59,6 @@ const coreNavItems: NavEntry[] = [
   { id: 'skills', label: 'Skills', icon: BookOpen },
   { id: 'mcp', label: 'MCP', icon: Plug }
 ];
-
-/** Resolve a module's icon name against lucide's registry; fall back safely. */
-function resolveIcon(name: string): LucideIcon {
-  return (lucideIcons as Record<string, LucideIcon>)[name] ?? HelpCircle;
-}
 
 const settingsNavItem: NavEntry = { id: 'settings', label: 'Settings', icon: Settings };
 

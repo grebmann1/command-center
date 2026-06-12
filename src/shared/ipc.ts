@@ -128,6 +128,9 @@ export const IPC = {
       onChanged: 'skills:bundles:onChanged'
     }
   },
+  commands: {
+    list: 'commands:list'
+  },
   app: {
     homedir: 'app:homedir',
     version: 'app:version'

@@ -636,7 +636,7 @@ interface DataState {
     profile: LaunchProfileId,
     cols: number,
     rows: number,
-    opts?: { extraArgs?: string[]; title?: string; cwd?: string }
+    opts?: { extraArgs?: string[]; title?: string; cwd?: string; prompt?: string }
   ) => Promise<TerminalSession | null>;
   /**
    * Terminate a session: kills the pty and removes the tab. Pushes a
@@ -1153,7 +1153,8 @@ export const useData = create<DataState>((set, get) => ({
         rows,
         extraArgs: opts?.extraArgs,
         title: opts?.title,
-        cwd: opts?.cwd
+        cwd: opts?.cwd,
+        prompt: opts?.prompt
       });
       if (!result.ok) {
         pushErrorToast(result.message);

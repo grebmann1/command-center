@@ -3,6 +3,7 @@ import { FileText } from 'lucide-react';
 import type { Project, WalkedFile } from '@shared/types';
 import { useUi } from '../store';
 import { fuzzyScore } from '../util/fuzzy';
+import { highlightMatches } from './palette/highlight';
 
 interface Props {
   project: Project;
@@ -182,7 +183,7 @@ export function QuickOpen({ project, onClose }: Props) {
                 <span className="palette-icon">
                   <FileText size={14} />
                 </span>
-                <span className="palette-label">{highlight(r.file.rel, r.matchIdx)}</span>
+                <span className="palette-label">{highlightMatches(r.file.rel, r.matchIdx)}</span>
               </button>
             ))
           )}
@@ -192,28 +193,4 @@ export function QuickOpen({ project, onClose }: Props) {
   );
 }
 
-function highlight(text: string, matchIdx: number[]): React.ReactNode {
-  if (matchIdx.length === 0) return text;
-  const set = new Set(matchIdx);
-  const parts: React.ReactNode[] = [];
-  let buf = '';
-  let bufHit = false;
-  for (let i = 0; i < text.length; i++) {
-    const hit = set.has(i);
-    if (i === 0) {
-      buf = text[i];
-      bufHit = hit;
-      continue;
-    }
-    if (hit === bufHit) {
-      buf += text[i];
-    } else {
-      parts.push(bufHit ? <mark key={i}>{buf}</mark> : buf);
-      buf = text[i];
-      bufHit = hit;
-    }
-  }
-  parts.push(bufHit ? <mark key="last">{buf}</mark> : buf);
-  return parts;
-}
 
