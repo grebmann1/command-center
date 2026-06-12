@@ -38,7 +38,13 @@ export default defineConfig(
           lib: {
             entry: resolve(__dirname, 'src/main-entry.ts'),
             formats: ['es'],
-            fileName: () => 'main.js'
+            // .mjs (not .js): the host loads the main entry via import() of a
+            // FILE PATH, where Node resolves ESM-vs-CJS by extension + nearest
+            // package.json `type`. A `.js` ESM bundle in an extension dir with
+            // no `type:module` is parsed as CJS → "Unexpected token 'export'".
+            // .mjs is unambiguously ESM. (The renderer bundle is blob-imported,
+            // always ESM, so it stays .js.)
+            fileName: () => 'main.mjs'
           },
           rollupOptions: { external: ['electron', ...nodeBuiltins] }
         }

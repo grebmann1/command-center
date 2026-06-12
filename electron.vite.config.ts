@@ -84,7 +84,17 @@ export default defineConfig({
     build: {
       watch: { include: ['src/**', 'plugins/**'] },
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/preload/index.ts') }
+        input: { index: resolve(__dirname, 'src/preload/index.ts') },
+        // A SANDBOXED preload (webPreferences.sandbox:true) MUST be CommonJS —
+        // Electron cannot load an ESM preload in a sandboxed renderer, and it
+        // fails SILENTLY (the preload never runs, so `window.cc` is undefined
+        // and the renderer crashes on first access). Force CJS `index.js`
+        // output instead of the default `.mjs`. The path in src/main/index.ts
+        // must match (`../preload/index.js`).
+        output: {
+          format: 'cjs',
+          entryFileNames: 'index.js'
+        }
       }
     }
   },

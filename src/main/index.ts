@@ -419,7 +419,10 @@ function createWindow() {
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 14, y: 14 },
     webPreferences: {
-      preload: join(__dirname, '../preload/index.mjs'),
+      // CommonJS preload (../preload/index.js) — REQUIRED because sandbox:true
+      // below cannot load an ESM preload (it fails silently → window.cc
+      // undefined → renderer crash). Build emits CJS; see electron.vite.config.
+      preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,

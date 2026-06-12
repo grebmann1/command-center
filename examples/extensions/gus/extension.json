@@ -4,7 +4,7 @@
   "icon": "Ticket",
   "titleLabel": "GUS",
   "entry": {
-    "main": "main.js",
+    "main": "main.mjs",
     "renderer": "renderer.js"
   },
   "engines": {

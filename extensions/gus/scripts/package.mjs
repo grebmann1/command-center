@@ -27,7 +27,8 @@ const repoRoot = join(extRoot, '..', '..');
 const dist = join(extRoot, 'dist');
 const manifest = join(extRoot, 'extension.json');
 
-const FILES = ['main.js', 'renderer.js'];
+// main.mjs (unambiguous ESM — see vite.config.ts), renderer.js (blob-imported).
+const FILES = ['main.mjs', 'renderer.js'];
 
 async function copyInto(targetDir) {
   await mkdir(targetDir, { recursive: true });
