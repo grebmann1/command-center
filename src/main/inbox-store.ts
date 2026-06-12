@@ -28,7 +28,7 @@ import { readFile, appendFile, mkdir, writeFile, rename } from 'node:fs/promises
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
-import type { InboxDoc, InboxEntry } from '../shared/types.js';
+import type { InboxDoc, InboxEntry, InboxNotifyLevel } from '../shared/types.js';
 
 export type { InboxDoc, InboxEntry } from '../shared/types.js';
 
@@ -44,6 +44,8 @@ export interface InboxInput {
   sessionId?: string;
   /** True when the push came from a scheduled (background) run. */
   scheduled?: boolean;
+  /** Loudness for scheduled entries; copied onto the entry. See {@link InboxNotifyLevel}. */
+  notify?: InboxNotifyLevel;
 }
 
 export interface InboxReadOpts {

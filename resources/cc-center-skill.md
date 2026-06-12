@@ -90,7 +90,7 @@ well-formed or the file is silently skipped at load.
   "status": { "runCount": 0, "runs": [] },
   "createdAt": "2026-01-01T00:00:00.000Z",
   "updatedAt": "2026-01-01T00:00:00.000Z",
-  "notifyInbox": false,
+  "inboxLevel": "quiet",
   "autoCloseOnFinish": false
 }
 ```
@@ -113,7 +113,7 @@ well-formed or the file is silently skipped at load.
 | `status` | ✅ | For a brand-new schedule use exactly `{ "runCount": 0, "runs": [] }`. The app fills in `lastRunAt`, `nextRunAt`, etc. — **don't fabricate run history.** |
 | `createdAt` | ✅ | ISO-8601 string. |
 | `updatedAt` | ✅ | ISO-8601 string. |
-| `notifyInbox` | — | Boolean. When `true`, each run pushes a summary to the user's inbox on exit. Default `false`. |
+| `inboxLevel` | — | One of `"silent"`, `"quiet"`, `"loud"`. Governs **all** inbox entries from a run — the run-completion summary AND any `inbox_push` the agent makes. `silent` = nothing recorded; `quiet` (default) = recorded in the collapsed "Scheduled" group, no unread badge; `loud` = surfaced inline and counted in the unread badge. Replaces the legacy boolean `notifyInbox` (`true`→`loud`, `false`→`quiet`), which is still read for backward compatibility. |
 | `autoCloseOnFinish` | — | Boolean, **claude profiles only.** When `true`, a Stop hook closes the session once Claude finishes responding. Leave `false` if the agent should stay alive to receive a reply (these two are mutually exclusive in intent). |
 
 ### Profiles

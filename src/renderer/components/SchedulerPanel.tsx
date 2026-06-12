@@ -43,7 +43,8 @@ import type {
   ScheduleCreateInput,
   ScheduleRun,
   ScheduleTemplate,
-  ScheduleGroup
+  ScheduleGroup,
+  InboxNotifyLevel
 } from '@shared/types';
 import { parseEvery, formatInterval } from '@shared/parse-every';
 import {
@@ -54,6 +55,25 @@ import {
   useUi
 } from '../store';
 import { groupIcon, GROUP_FALLBACK_COLOR } from './scheduleGroupMeta';
+
+/** The three inbox-loudness choices, in increasing loudness, for the form picker. */
+const INBOX_LEVELS: ReadonlyArray<{ value: InboxNotifyLevel; title: string; hint: string }> = [
+  {
+    value: 'silent',
+    title: 'Silent',
+    hint: "Don't record runs in the inbox at all."
+  },
+  {
+    value: 'quiet',
+    title: 'Quiet',
+    hint: 'Record in the collapsed “Scheduled” group — no unread badge.'
+  },
+  {
+    value: 'loud',
+    title: 'Notify',
+    hint: 'Show inline and count toward the unread inbox badge.'
+  }
+];
 
 const PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
 const PROFILE_LABEL: Record<LaunchProfileId, string> = {
@@ -913,8 +933,8 @@ function ScheduleModal({
   const [prompt, setPrompt] = useState(
     task?.prompt ?? seededTask?.prompt ?? seededTemplate?.defaults.prompt ?? ''
   );
-  const [notifyInbox, setNotifyInbox] = useState<boolean>(
-    task?.notifyInbox ?? seededTask?.notifyInbox ?? false
+  const [inboxLevel, setInboxLevel] = useState<InboxNotifyLevel>(
+    task?.inboxLevel ?? seededTask?.inboxLevel ?? 'quiet'
   );
   // Default ON for new schedules: a scheduled run is background work, so closing
   // the session once the agent finishes keeps the tab strip clean. Existing
@@ -993,7 +1013,7 @@ function ScheduleModal({
           prompt: prompt.trim() || undefined,
           extraArgs: seededTemplate?.defaults.extraArgs ?? seededTask?.extraArgs,
           scope: scope === 'project' ? { projectId } : 'global',
-          notifyInbox,
+          inboxLevel,
           autoCloseOnFinish,
           // Group only applies to global scope; main drops it for project scope.
           group: scope === 'global' && group ? group : undefined
@@ -1013,7 +1033,7 @@ function ScheduleModal({
           profile,
           every,
           prompt,
-          notifyInbox,
+          inboxLevel,
           autoCloseOnFinish,
           // Only global schedules carry a group. `null` clears → Ungrouped.
           ...(isGlobalTask ? { group: group || null } : {})
@@ -1230,19 +1250,26 @@ function ScheduleModal({
             />
           </div>
           <div className="scheduler-form-field">
-            <label className="scheduler-checkbox-row">
-              <input
-                type="checkbox"
-                checked={notifyInbox}
-                onChange={(e) => setNotifyInbox(e.target.checked)}
-              />
-              <span>
-                Notify on completion
-                <span className="scheduler-form-optional">
-                  {' '}— append an inbox entry summarising each run.
-                </span>
-              </span>
-            </label>
+            <label>Inbox notifications</label>
+            <div className="scheduler-scope-picker" role="radiogroup">
+              {INBOX_LEVELS.map(({ value, title, hint }) => (
+                <label
+                  key={value}
+                  className={`scheduler-scope-option ${inboxLevel === value ? 'is-active' : ''}`}
+                >
+                  <input
+                    type="radio"
+                    name="sched-inbox-level"
+                    checked={inboxLevel === value}
+                    onChange={() => setInboxLevel(value)}
+                  />
+                  <div className="scheduler-scope-option-body">
+                    <span className="scheduler-scope-title">{title}</span>
+                    <span className="scheduler-scope-hint">{hint}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
           </div>
           <div className="scheduler-form-field">
             <label

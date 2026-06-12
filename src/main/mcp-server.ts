@@ -25,7 +25,7 @@ import { AddressInfo } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { IInboxStore } from './inbox-store.js';
-import type { Project } from '../shared/types.js';
+import type { Project, InboxNotifyLevel } from '../shared/types.js';
 import { registerInboxPushTool } from './inbox-mcp-tool.js';
 import { registerScheduleReportTool } from './schedule-report-mcp-tool.js';
 
@@ -67,11 +67,13 @@ export interface McpServerOptions {
     status?: 'success' | 'partial' | 'failure'
   ) => void;
   /**
-   * Resolve whether a session is a scheduled (background) run. Used to stamp
-   * `scheduled` on `inbox_push` entries so the sidebar can group recurring
-   * jobs. Returns false when the session is unknown / not scheduled.
+   * Resolve a session's scheduled inbox loudness. Returns the owning schedule's
+   * {@link InboxNotifyLevel} for a scheduled (background) run, or `null` when
+   * the session is unknown / not scheduled. Used to stamp `scheduled` + `notify`
+   * on `inbox_push` entries (so the sidebar can group/badge them) and to drop
+   * pushes from `silent` schedules entirely.
    */
-  isSessionScheduled?: (sessionId: string) => boolean;
+  resolveScheduledLevel?: (sessionId: string) => InboxNotifyLevel | null;
 }
 
 export interface McpServerHandle {
@@ -95,13 +97,20 @@ function buildProjectMcpServer(opts: {
   sessionId?: string;
   inboxStore: IInboxStore;
   onReport?: McpServerOptions['onReport'];
-  isSessionScheduled?: McpServerOptions['isSessionScheduled'];
+  resolveScheduledLevel?: McpServerOptions['resolveScheduledLevel'];
 }): McpServer {
   const mcp = new McpServer({ name: 'cc-inbox', version: '0.1.0' });
-  // Resolve scheduled-ness once at build time so inbox_push entries from a
-  // background run carry the flag for sidebar grouping.
-  const scheduled = !!(opts.sessionId && opts.isSessionScheduled?.(opts.sessionId));
-  registerInboxPushTool(mcp, { ...opts, scheduled });
+  // Resolve scheduled-ness + loudness once at build time so inbox_push entries
+  // from a background run carry the flag (for grouping) and the level (for
+  // badge counting), and so `silent` pushes can be dropped.
+  const scheduledLevel = opts.sessionId
+    ? opts.resolveScheduledLevel?.(opts.sessionId) ?? null
+    : null;
+  registerInboxPushTool(mcp, {
+    ...opts,
+    scheduled: scheduledLevel !== null,
+    notify: scheduledLevel ?? undefined
+  });
   // schedule_report attaches an agent-authored summary to the originating
   // scheduled run. It needs a session to attach to, so we only register it on
   // the session-scoped route — otherwise the agent would see a tool in its
@@ -285,7 +294,7 @@ async function handleRequest(
     sessionId,
     inboxStore: opts.inboxStore,
     onReport: opts.onReport,
-    isSessionScheduled: opts.isSessionScheduled
+    resolveScheduledLevel: opts.resolveScheduledLevel
   });
 
   // Ensure transport + mcp tear down once the response finishes, even on

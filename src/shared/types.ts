@@ -64,6 +64,16 @@ export interface InboxDoc {
   path: string;
 }
 
+/**
+ * How loudly a schedule's inbox entries should surface.
+ *  - `silent` — runs are not recorded in the inbox at all.
+ *  - `quiet`  — recorded, but collapsed into the per-project "Scheduled"
+ *               group and excluded from the unread badge (the default — keeps
+ *               recurring jobs from nagging).
+ *  - `loud`   — surfaced as a normal entry and counted in the unread badge.
+ */
+export type InboxNotifyLevel = 'silent' | 'quiet' | 'loud';
+
 export interface InboxEntry {
   id: string;
   ts: number;
@@ -90,6 +100,16 @@ export interface InboxEntry {
    * jobs don't flood the per-project list.
    */
   scheduled?: boolean;
+  /**
+   * Loudness of a scheduled entry, copied from the owning schedule at write
+   * time (`silent` entries are never written, so only `quiet`/`loud` appear on
+   * disk). Absent on non-scheduled (manual / agent-on-a-real-tab) entries,
+   * which are always treated as loud. The renderer reads this to decide badge
+   * counting and whether the entry shows inline or in the collapsed group —
+   * it can't be re-derived client-side once the originating session is gone,
+   * same rationale as {@link scheduled}.
+   */
+  notify?: InboxNotifyLevel;
 }
 
 /** A frozen snapshot of an inbox doc, captured at save time. */
@@ -237,6 +257,14 @@ export interface TerminalSession {
    * as a tombstone. User-opened tabs keep their exited tombstone.
    */
   scheduled?: boolean;
+  /**
+   * For scheduled sessions, the owning schedule's inbox loudness, baked in at
+   * spawn so an `inbox_push` from the agent can be stamped with the right
+   * {@link InboxNotifyLevel} (and dropped entirely when `silent`) — even after
+   * the schedule itself has been edited or deleted mid-run. Absent on
+   * user-opened tabs. Not surfaced in the UI.
+   */
+  inboxLevel?: InboxNotifyLevel;
 }
 
 export interface AppConfig {
@@ -535,10 +563,16 @@ export interface ScheduledTask {
   /** Set by the loader for UI display; not persisted. */
   source?: 'global' | { projectId: string };
   /**
-   * When true, on each run exit we append an InboxEntry summarising the run
-   * (last 20 log lines, duration, result). Default false.
+   * How loudly this schedule's runs surface in the inbox. Governs BOTH the
+   * scheduler's own run-completion summary AND any `inbox_push` the agent makes
+   * during a scheduled run:
+   *  - `silent` — nothing recorded.
+   *  - `quiet` (default) — recorded in the collapsed "Scheduled" group, no badge.
+   *  - `loud` — surfaced inline and counted in the unread badge.
+   * Replaces the legacy boolean `notifyInbox` (migrated on load: true→loud,
+   * false/absent→quiet). See {@link InboxNotifyLevel}.
    */
-  notifyInbox?: boolean;
+  inboxLevel?: InboxNotifyLevel;
   /**
    * When true (claude-family profiles only), a Stop hook is injected into the
    * spawned session so the terminal auto-closes once Claude finishes its
@@ -566,7 +600,8 @@ export interface ScheduleCreateInput {
   /** When omitted, the schedule is written to the global directory. */
   scope?: 'global' | { projectId: string };
   retain?: number;
-  notifyInbox?: boolean;
+  /** Inbox loudness; defaults to `quiet` when omitted. See {@link InboxNotifyLevel}. */
+  inboxLevel?: InboxNotifyLevel;
   autoCloseOnFinish?: boolean;
   /** Group id (see {@link ScheduleGroup}). Only meaningful for global scope. */
   group?: string;
@@ -638,7 +673,8 @@ export interface ScheduleUpdateInput {
   prompt?: string;
   every?: string;
   retain?: number;
-  notifyInbox?: boolean;
+  /** Inbox loudness. Omit to leave unchanged. See {@link InboxNotifyLevel}. */
+  inboxLevel?: InboxNotifyLevel;
   autoCloseOnFinish?: boolean;
   /** Group id, or null to clear (move to Ungrouped). Omit to leave unchanged. */
   group?: string | null;

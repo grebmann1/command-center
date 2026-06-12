@@ -15,6 +15,7 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { IInboxStore } from './inbox-store.js';
+import type { InboxNotifyLevel } from '../shared/types.js';
 
 /**
  * Description shown to the LLM. Taken near-verbatim from
@@ -81,6 +82,13 @@ export interface RegisterInboxPushOpts {
   sessionId?: string;
   /** True when the originating session is a scheduled (background) run. */
   scheduled?: boolean;
+  /**
+   * Scheduled loudness for this session's pushes. `silent` drops the push
+   * (recorded as success to the agent, but nothing written); `quiet`/`loud`
+   * are stamped onto the entry. Absent for non-scheduled sessions, whose
+   * pushes are always written and treated as loud.
+   */
+  notify?: InboxNotifyLevel;
   inboxStore: IInboxStore;
 }
 
@@ -91,7 +99,7 @@ export interface RegisterInboxPushOpts {
  * deleted-then-recreated project doesn't bleed identity across requests.
  */
 export function registerInboxPushTool(server: McpServer, opts: RegisterInboxPushOpts): void {
-  const { projectId, projectLabel, sessionId, scheduled, inboxStore } = opts;
+  const { projectId, projectLabel, sessionId, scheduled, notify, inboxStore } = opts;
 
   server.registerTool(
     'inbox_push',
@@ -101,13 +109,27 @@ export function registerInboxPushTool(server: McpServer, opts: RegisterInboxPush
     },
     async ({ docs, comments }) => {
       try {
+        // A `silent` schedule suppresses inbox entirely. Report success so the
+        // agent doesn't retry or treat its check-in as failed — the schedule
+        // simply opted out of surfacing.
+        if (notify === 'silent') {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: 'Suppressed: this scheduled run has inbox notifications set to silent.'
+              }
+            ]
+          };
+        }
         const entry = await inboxStore.append({
           projectId,
           projectLabel,
           docs,
           comments,
           sessionId,
-          scheduled
+          scheduled,
+          notify
         });
         return {
           content: [

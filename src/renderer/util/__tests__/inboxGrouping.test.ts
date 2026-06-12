@@ -87,6 +87,19 @@ describe('groupByBucketThenProject', () => {
     expect(sgs[0].scheduledEntries.map((e) => e.id)).toEqual(['s1', 's2']);
   });
 
+  it('renders loud scheduled entries inline, not in the collapsed group', () => {
+    const entries: InboxEntry[] = [
+      entry({ id: 'a1', projectId: 'A', ts: NOW - 1000 }),
+      entry({ id: 'loud', projectId: 'A', ts: NOW - 2000, scheduled: true, notify: 'loud' }),
+      entry({ id: 'quiet', projectId: 'A', ts: NOW - 3000, scheduled: true, notify: 'quiet' })
+    ];
+    const groups = groupByBucketThenProject(entries, NOW);
+    const [, sgs] = groups[0];
+    // Loud joins the inline list; quiet stays collapsed.
+    expect(sgs[0].entries.map((e) => e.id)).toEqual(['a1', 'loud']);
+    expect(sgs[0].scheduledEntries.map((e) => e.id)).toEqual(['quiet']);
+  });
+
   it('uses projectLabel as fallbackLabel, else projectId', () => {
     const entries: InboxEntry[] = [
       entry({ id: 'a', projectId: 'P-with-label', projectLabel: 'My Project', ts: NOW - 1000 }),

@@ -143,7 +143,7 @@ export class SchedulerManager extends EventEmitter {
         (input.scope ?? 'global') === 'global' && input.group?.trim()
           ? input.group.trim()
           : undefined,
-      notifyInbox: input.notifyInbox ?? false,
+      inboxLevel: input.inboxLevel ?? 'quiet',
       // Default ON: a scheduled run is background work; close its session once
       // the agent finishes so sessions don't pile up at the prompt. The form
       // always sends an explicit value; this default only applies to callers
@@ -173,7 +173,7 @@ export class SchedulerManager extends EventEmitter {
       next.schedule = { every: patch.every };
     }
     if (patch.retain !== undefined) next.history = { retain: clampRetain(patch.retain) };
-    if (patch.notifyInbox !== undefined) next.notifyInbox = patch.notifyInbox;
+    if (patch.inboxLevel !== undefined) next.inboxLevel = patch.inboxLevel;
     if (patch.autoCloseOnFinish !== undefined) next.autoCloseOnFinish = patch.autoCloseOnFinish;
     // `null` clears the group (→ Ungrouped); a string sets it; undefined leaves
     // it unchanged. Only meaningful for global schedules.
@@ -487,7 +487,11 @@ export class SchedulerManager extends EventEmitter {
         headless: true,
         // Marks this as a scheduled run so pty appends the schedule_report
         // system-prompt guidance (and only for scheduled spawns).
-        scheduled: true
+        scheduled: true,
+        // Bake the schedule's loudness into the session so an agent-initiated
+        // inbox_push during this run is stamped (or dropped, when silent) with
+        // the right level — independent of later edits to the schedule.
+        inboxLevel: live.task.inboxLevel ?? 'quiet'
       });
     } catch (err) {
       this.log(`fire ${id} pty.create`, err);
@@ -517,7 +521,10 @@ export class SchedulerManager extends EventEmitter {
         message: exitCode === 0 ? undefined : `exit ${exitCode}`
       };
       this.recordRun(id, finalRun);
-      if (live.task.notifyInbox) {
+      // `silent` schedules never write a completion summary; `quiet`/`loud`
+      // both write one, stamped with the level so the renderer can decide
+      // badge counting and inline-vs-grouped placement.
+      if ((live.task.inboxLevel ?? 'quiet') !== 'silent') {
         void this.notifyInboxOnExit(live.task, finalRun, project);
       }
     };
@@ -558,7 +565,11 @@ export class SchedulerManager extends EventEmitter {
         sessionId: run.sessionId,
         // This is the scheduler's own run-complete notice — always a
         // scheduled (background) entry, so the sidebar groups it.
-        scheduled: true
+        scheduled: true,
+        // `loud` schedules count toward the unread badge and render inline;
+        // `quiet` (the default) stay collapsed and badge-free. `silent` never
+        // reaches here (gated by the caller).
+        notify: task.inboxLevel ?? 'quiet'
       });
     } catch (err) {
       this.log(`notifyInbox ${task.id}`, err);

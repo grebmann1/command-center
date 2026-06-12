@@ -86,7 +86,10 @@ export function groupByBucketThenProject(
       };
       groups.set(e.projectId, sg);
     }
-    if (e.scheduled) sg.scheduledEntries.push(e);
+    // `loud` scheduled entries opted into surfacing — render them inline like
+    // manual entries. `quiet` (and any other) scheduled entries collapse into
+    // the per-project "Scheduled" group so recurring jobs don't flood the list.
+    if (e.scheduled && e.notify !== 'loud') sg.scheduledEntries.push(e);
     else sg.entries.push(e);
   }
 

@@ -81,4 +81,50 @@ describe('validateScheduleFile', () => {
     expect(r.status.runs).toEqual([]);
     expect(r.status.runCount).toBe(0);
   });
+
+  describe('inboxLevel migration', () => {
+    it('defaults to quiet when neither inboxLevel nor notifyInbox is present', () => {
+      const r = validateScheduleFile({ ...baseTask });
+      expect('error' in r).toBe(false);
+      if ('error' in r) return;
+      expect(r.inboxLevel).toBe('quiet');
+    });
+
+    it('honors an explicit inboxLevel', () => {
+      for (const level of ['silent', 'quiet', 'loud'] as const) {
+        const r = validateScheduleFile({ ...baseTask, inboxLevel: level });
+        expect('error' in r).toBe(false);
+        if ('error' in r) return;
+        expect(r.inboxLevel).toBe(level);
+      }
+    });
+
+    it('migrates legacy notifyInbox:true → loud', () => {
+      const r = validateScheduleFile({ ...baseTask, notifyInbox: true });
+      expect('error' in r).toBe(false);
+      if ('error' in r) return;
+      expect(r.inboxLevel).toBe('loud');
+    });
+
+    it('migrates legacy notifyInbox:false → quiet', () => {
+      const r = validateScheduleFile({ ...baseTask, notifyInbox: false });
+      expect('error' in r).toBe(false);
+      if ('error' in r) return;
+      expect(r.inboxLevel).toBe('quiet');
+    });
+
+    it('prefers inboxLevel over a conflicting legacy notifyInbox', () => {
+      const r = validateScheduleFile({ ...baseTask, inboxLevel: 'silent', notifyInbox: true });
+      expect('error' in r).toBe(false);
+      if ('error' in r) return;
+      expect(r.inboxLevel).toBe('silent');
+    });
+
+    it('falls back to quiet for an unrecognized inboxLevel string', () => {
+      const r = validateScheduleFile({ ...baseTask, inboxLevel: 'shout' });
+      expect('error' in r).toBe(false);
+      if ('error' in r) return;
+      expect(r.inboxLevel).toBe('quiet');
+    });
+  });
 });

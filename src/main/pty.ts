@@ -1,7 +1,7 @@
 import * as pty from 'node-pty';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import type { LaunchProfileId, TerminalSession, AppConfig, ProjectSettings, ProjectRemote } from '../shared/types.js';
+import type { LaunchProfileId, TerminalSession, AppConfig, ProjectSettings, ProjectRemote, InboxNotifyLevel } from '../shared/types.js';
 import { ensureMcpConfigForProjectSync } from './mcp-config.js';
 
 interface Live {
@@ -167,6 +167,11 @@ export class PtyManager extends EventEmitter {
      * user-opened tabs so they aren't nagged to report.
      */
     scheduled?: boolean;
+    /**
+     * Scheduled inbox loudness, baked onto the session so an agent `inbox_push`
+     * during this run is stamped (or, when `silent`, dropped) accordingly.
+     */
+    inboxLevel?: InboxNotifyLevel;
   }): TerminalSession {
     if (opts.remote) {
       return this.createRemote({ ...opts, remote: opts.remote });
@@ -288,7 +293,8 @@ export class PtyManager extends EventEmitter {
       createdAt: Date.now(),
       extraArgs: opts.extraArgs,
       headless: opts.headless || undefined,
-      scheduled: opts.scheduled || undefined
+      scheduled: opts.scheduled || undefined,
+      inboxLevel: opts.scheduled ? opts.inboxLevel : undefined
     };
 
     this.live.set(session.id, { session, proc });
@@ -339,6 +345,7 @@ export class PtyManager extends EventEmitter {
     remote: ProjectRemote;
     headless?: boolean;
     scheduled?: boolean;
+    inboxLevel?: InboxNotifyLevel;
   }): TerminalSession {
     const { remote } = opts;
     // Defense in depth: addRemoteProject already rejects leading-dash values,
@@ -372,7 +379,8 @@ export class PtyManager extends EventEmitter {
       createdAt: Date.now(),
       extraArgs: opts.extraArgs,
       headless: opts.headless || undefined,
-      scheduled: opts.scheduled || undefined
+      scheduled: opts.scheduled || undefined,
+      inboxLevel: opts.scheduled ? opts.inboxLevel : undefined
     };
 
     this.live.set(session.id, { session, proc });

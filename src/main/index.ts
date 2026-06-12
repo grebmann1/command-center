@@ -1216,9 +1216,15 @@ app.whenReady().then(() => {
     onReport: (_projectId: string, sessionId: string, summary: string, status) => {
       scheduler.attachReport(sessionId, summary, status);
     },
-    // Lets inbox_push stamp `scheduled` so the sidebar groups background-run
-    // entries instead of flooding the per-project list with them.
-    isSessionScheduled: (sessionId: string) => ptys.getSession(sessionId)?.scheduled ?? false
+    // Lets inbox_push stamp `scheduled` + `notify` (so the sidebar can group
+    // and badge background-run entries) and drop `silent` pushes. Returns null
+    // for non-scheduled sessions; a scheduled session missing a level defaults
+    // to `quiet`.
+    resolveScheduledLevel: (sessionId: string) => {
+      const s = ptys.getSession(sessionId);
+      if (!s?.scheduled) return null;
+      return s.inboxLevel ?? 'quiet';
+    }
   })
     .then(async (handle) => {
       mcpServer = handle;

@@ -1952,12 +1952,21 @@ export const useMcpCatalogue = create<McpLiveState>(() => ({
   loading: true
 }));
 
-/** Sidebar-badge count: entries whose id isn't in the read set. */
+/**
+ * Sidebar-badge count: unread entries that should nag. Scheduled entries only
+ * count when their schedule opted into `loud`; `quiet` ones stay in the
+ * collapsed group without inflating the badge (manual/agent entries have no
+ * `notify` and always count). This is the core of "scheduled shouldn't pop".
+ */
 export function useUnreadInboxCount(): number {
   const entries = useInbox((s) => s.entries);
   const readIds = useInboxRead((s) => s.readIds);
   let n = 0;
-  for (const e of entries) if (!readIds[e.id]) n += 1;
+  for (const e of entries) {
+    if (readIds[e.id]) continue;
+    if (e.scheduled && e.notify !== 'loud') continue;
+    n += 1;
+  }
   return n;
 }
 

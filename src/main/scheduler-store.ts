@@ -64,7 +64,17 @@ export function validateScheduleFile(raw: unknown): ScheduledTask | { error: str
       ? (r.extraArgs as unknown[]).filter((s): s is string => typeof s === 'string')
       : undefined,
     prompt: typeof r.prompt === 'string' ? r.prompt : undefined,
-    notifyInbox: typeof r.notifyInbox === 'boolean' ? r.notifyInbox : false,
+    // Inbox loudness. Prefer the new `inboxLevel`; fall back to the legacy
+    // boolean `notifyInbox` (true→loud, false→quiet) so older files keep their
+    // intent; default `quiet` when neither is present.
+    inboxLevel:
+      r.inboxLevel === 'silent' || r.inboxLevel === 'quiet' || r.inboxLevel === 'loud'
+        ? r.inboxLevel
+        : typeof r.notifyInbox === 'boolean'
+          ? r.notifyInbox
+            ? 'loud'
+            : 'quiet'
+          : 'quiet',
     // Default ON when omitted (e.g. hand-authored JSON): scheduled sessions are
     // background work and should close when the agent finishes. A schedule that
     // explicitly saved `false` keeps that choice.
