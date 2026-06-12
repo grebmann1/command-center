@@ -17,7 +17,7 @@
 import { useMemo } from 'react';
 import { useUi } from '../store';
 import { useMergedModules } from './index';
-import { createModuleHost } from './host';
+import { createModuleHost, clearModuleCache } from './host';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import type { ModuleHost } from '@shared/module-api';
 
@@ -31,7 +31,25 @@ export function ModulePanelHost() {
   const host = useMemo<ModuleHost | null>(() => (mod ? getHost(mod.id) : null), [mod]);
 
   if (!mod || !host) return null;
+
+  // As of the Phase 2 contract `panel` is optional: a module may contribute
+  // only `commands` and/or a `navBadge`. Such a module still owns a nav entry
+  // (for its badge + palette commands), so selecting it must not crash —
+  // ListPane has already bowed out of the content area for any merged module.
+  // We render a tasteful placeholder rather than nothing so the empty content
+  // area doesn't read as a broken view.
   const Panel = mod.panel;
+  if (!Panel) {
+    return (
+      <div className="module-no-panel" role="status">
+        <p>{mod.title} has no view of its own.</p>
+        <p className="module-no-panel-hint">
+          It contributes commands and badges — open the command palette (⌘K) to use them.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <ErrorBoundary key={mod.id}>
       <Panel host={host} />
@@ -57,10 +75,14 @@ export function getHost(moduleId: string): ModuleHost {
 }
 
 /**
- * Drop a module's cached host. Called by the extension loader when an extension
- * is disabled or removed, so its host (and any closed-over state) is released
- * and a later re-enable builds a fresh one.
+ * Drop a module's cached host AND its in-memory `host.cache`. Called by the
+ * extension loader when an extension is disabled or removed, so its host (and
+ * any closed-over state) is released and a later re-enable builds a fresh one.
+ * Clearing the cache here keeps the cache lifecycle matched to the host's — a
+ * removed extension must not leave stale scratch data behind to leak (or to be
+ * silently re-read on a later re-enable).
  */
 export function evictHost(moduleId: string): void {
   hosts.delete(moduleId);
+  clearModuleCache(moduleId);
 }

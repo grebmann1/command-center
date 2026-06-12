@@ -73,7 +73,91 @@ prop.
 `host` (`ModuleHost`) is the only surface an extension touches — there is no
 escape hatch to `window.cc`. It exposes: `moduleId`, `call`, `storage`,
 `openExternal`, `pushInbox`, `toast`, `getActiveProject`, `listProjects`,
-`selectProject`, `launchSession`.
+`selectProject`, `launchSession`, and (Phase 2) `on` and `cache`.
+
+## Events — `host.on(event, cb)`
+
+`host.on` subscribes to a **read-only notification** the host already emits and
+returns an **unsubscribe function** (mirroring core's `on*` convention). The
+handler fires with the event's typed, JSON-serialisable payload on every
+occurrence. These notify the panel that something changed; they never mutate
+anything. **Always unsubscribe in your effect cleanup** — a panel that
+subscribes on mount and never unsubscribes leaks handlers across remounts.
+
+```ts
+React.useEffect(() => {
+  const off = host.on('project:changed', ({ project }) => setProject(project));
+  return off; // unsubscribe on unmount
+}, []);
+```
+
+| Event | Payload |
+|---|---|
+| `project:changed` | `{ project: { id, name, path } \| null }` — the shell's selected project changed/cleared. |
+| `nav:changed` | `{ nav: string }` — the active nav (sidebar selection) changed. |
+| `session:updated` | `{ session: SessionInfo }` where `SessionInfo = { id, projectId, title, status }`. |
+| `session:agentStatus` | `{ sessionId, state: 'working' \| 'blocked' \| 'done' \| 'idle' \| 'unknown' }`. |
+| `session:exit` | `{ sessionId, code }`. |
+| `inbox:appended` | `{ id }` — new inbox entry id. |
+| `inbox:removed` | `{ id }` — removed inbox entry id. |
+| `schedule:changed` | `{}` (empty — re-read scheduled tasks as needed). |
+| `mcp:changed` | `{}` (empty — re-read MCP config as needed). |
+| `skills:changed` | `{}` (empty — re-read installed skills as needed). |
+
+Treat payloads as immutable, and don't assume any delivery ordering between
+distinct event types. `SessionInfo` is a deliberately minimal SDK-owned
+projection of core's richer session — stable across versions.
+
+## Cache — `host.cache`
+
+`host.cache` is a **synchronous, in-memory** scratch store private to the
+extension: `get(key)`, `set(key, value)`, `delete(key)` — no Promises. Its
+contents **survive panel unmount** (unlike React state, which is torn down when
+the nav switches away), so it's the right home for ephemeral working data you
+don't want to recompute on every remount (a fetched list, a counter). It does
+**not** persist to disk and is gone on app/extension restart, and it is dropped
+when the extension is disabled/removed.
+
+`cache` vs `storage`:
+
+| | `host.cache` | `host.storage` |
+|---|---|---|
+| Sync/async | synchronous (no `await`) | async (`Promise`) |
+| Lifetime | in-memory; survives unmount; gone on restart/disable | persisted to disk; survives restart |
+| Use for | ephemeral, cheap-to-lose working data | durable view preferences (selected sprint, …) |
+
+## Contributions — `commands` and `navBadge` (panel now optional)
+
+A module contributes through any subset of three extension points on the
+`AppModule`: `panel`, `commands`, and `navBadge`. **`panel` is now optional** —
+a module may contribute only `commands` and/or a `navBadge`. A panel-less module
+still gets a sidebar nav entry; selecting it renders a small placeholder
+(`.module-no-panel`) rather than a view.
+
+```ts
+// On the AppModule (the module manifest object), NOT the RendererEntry:
+commands: (host) => [
+  { id: 'say-hi', label: 'Hello: say hi', keywords: ['greet'], run: () => host.toast('hi') }
+],
+navBadge: (host) => host.listProjects().length, // number | string | null (null/0/'' → no badge)
+```
+
+- **`commands(host)`** returns `ExtensionCommand[]` (`{ id, label, run, keywords? }`).
+  Core merges them into the command palette (⌘K), namespaced `ext:<moduleId>:<id>`,
+  grouped under the module title, each throw-isolated.
+- **`navBadge(host)`** returns a `number | string | null` rendered in the
+  sidebar's `.nav-badge` slot. Keep it **cheap and synchronous** — it may be
+  invoked on every render. For a precisely-live badge, recompute off
+  `host.cache` / state updated from a `host.on` subscription.
+
+> **Runtime bundles cannot contribute `commands`/`navBadge` today.** These live
+> on the `AppModule`, but a runtime-loaded extension's `RendererEntry.activate()`
+> returns only the panel component, and the loader builds the `AppModule` from
+> the manifest + that panel — it carries no `commands`/`navBadge`. So today these
+> two contributions are exercised by **built-in** modules (e.g. `gus`). The
+> runtime `host.on` / `host.cache` surfaces, by contrast, work in a runtime
+> bundle — see the `hello` sample. Extending `RendererEntry` + the loader to
+> carry command/badge factories from a bundle is a follow-up.
 
 ## The main module (optional)
 

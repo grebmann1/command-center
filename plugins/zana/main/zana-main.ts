@@ -51,6 +51,13 @@ import {
   type ZanaTicketDetail,
   isClosedZanaStatus
 } from '../shared/types.js';
+import {
+  assignTicketInDb,
+  hasTicketsDb,
+  readSprintsFromDb,
+  readTicketDetailFromDb,
+  readTicketsFromDb
+} from './zana-db.js';
 
 /** Defensive caps so a runaway `.zana/` dir can't stall the read. */
 const MAX_TICKETS = 2000;
@@ -348,8 +355,26 @@ function mapArtifact(raw: any): ZanaArtifact | null {
   };
 }
 
-/** Read every `tickets/<uuid>/ticket.json` under a `.zana` root (bounded). */
+/**
+ * Read all tickets under a `.zana` root, DB-first.
+ *
+ * Zana ≥0.1.x stores tickets in `<root>/.zana/tickets.db` (SQLite). Older
+ * workspaces used the `tickets/<uuid>/ticket.json` tree. We prefer the DB when
+ * a non-empty one is present and read the JSON tree otherwise, so both new and
+ * legacy `.zana/` dirs render. The DB reader is fully tolerant (a driver/open/
+ * query failure yields `[]`); we treat an empty DB result as "fall through to
+ * JSON" only when no DB file exists — a DB that exists but is genuinely empty
+ * legitimately has zero tickets.
+ */
 async function readTickets(zanaDir: string, log: Log): Promise<ZanaTicket[]> {
+  if (await hasTicketsDb(zanaDir)) {
+    return readTicketsFromDb(zanaDir, log).slice(0, MAX_TICKETS);
+  }
+  return readTicketsFromJson(zanaDir, log);
+}
+
+/** Read every `tickets/<uuid>/ticket.json` under a `.zana` root (bounded). */
+async function readTicketsFromJson(zanaDir: string, log: Log): Promise<ZanaTicket[]> {
   const ticketsDir = path.join(zanaDir, 'tickets');
   if (!(await isDir(ticketsDir))) return [];
   let entries: string[];
@@ -374,8 +399,29 @@ async function readTickets(zanaDir: string, log: Log): Promise<ZanaTicket[]> {
   return tickets;
 }
 
+/**
+ * Read sprints under a `.zana` root, DB-first (mirrors {@link readTickets}).
+ * The DB holds sprints in a `sprints` table; legacy workspaces keep them in
+ * `sprints/_index.json`. Counts are derived from the passed `tickets` in both
+ * paths.
+ */
+async function readSprints(
+  zanaDir: string,
+  tickets: ZanaTicket[],
+  log: Log
+): Promise<ZanaSprint[]> {
+  if (await hasTicketsDb(zanaDir)) {
+    return readSprintsFromDb(zanaDir, tickets, log, isClosedZanaStatus);
+  }
+  return readSprintsFromJson(zanaDir, tickets, log);
+}
+
 /** Read `sprints/_index.json`, deriving counts + a display name per sprint. */
-async function readSprints(zanaDir: string, tickets: ZanaTicket[], log: Log): Promise<ZanaSprint[]> {
+async function readSprintsFromJson(
+  zanaDir: string,
+  tickets: ZanaTicket[],
+  log: Log
+): Promise<ZanaSprint[]> {
   const indexFile = path.join(zanaDir, 'sprints', '_index.json');
   const raw = await readJson<any[]>(indexFile, log);
   if (!Array.isArray(raw)) return [];
@@ -526,6 +572,11 @@ export const zanaMainModule: MainModule = {
         if (!opts || typeof opts.id !== 'string' || !opts.id) return null;
         try {
           const source = await resolveSource(opts);
+          // DB-first (matches readTickets): newer workspaces keep full detail
+          // (incl. audit) in tickets.db; older ones in tickets/<id>/ticket.json.
+          if (await hasTicketsDb(source.path)) {
+            return readTicketDetailFromDb(source.path, opts.id, log);
+          }
           const file = path.join(source.path, 'tickets', opts.id, 'ticket.json');
           const raw = await readJson<any>(file, log);
           return raw ? mapTicketDetail(raw) : null;
@@ -715,15 +766,27 @@ export const zanaMainModule: MainModule = {
         let file = '';
         try {
           const source = await resolveSource(opts);
-          file = path.join(source.path, 'tickets', opts.id, 'ticket.json');
+          const dbBacked = await hasTicketsDb(source.path);
 
-          const raw = await readJson<any>(file, log);
-          if (!raw || typeof raw !== 'object') {
-            throw new Error('Ticket not found');
+          // Read the CURRENT assignee state from whichever backend holds it, so
+          // the field computation below is identical for both paths.
+          let prevAssigneeName: string | null;
+          let prevAssigneeId: string | null;
+          if (dbBacked) {
+            const current = readTicketDetailFromDb(source.path, opts.id, log);
+            if (!current) throw new Error('Ticket not found');
+            prevAssigneeName = current.assigneeName ?? null;
+            prevAssigneeId = current.assigneeId ?? null;
+          } else {
+            file = path.join(source.path, 'tickets', opts.id, 'ticket.json');
+            const raw = await readJson<any>(file, log);
+            if (!raw || typeof raw !== 'object') {
+              throw new Error('Ticket not found');
+            }
+            prevAssigneeName = typeof raw.assigneeName === 'string' ? raw.assigneeName : null;
+            prevAssigneeId = typeof raw.assigneeId === 'string' ? raw.assigneeId : null;
           }
 
-          const prevAssigneeName =
-            typeof raw.assigneeName === 'string' ? raw.assigneeName : null;
           const profileId =
             typeof opts.profileId === 'string' && opts.profileId ? opts.profileId : null;
           const explicitName =
@@ -747,13 +810,13 @@ export const zanaMainModule: MainModule = {
             }
             newProfileId = profileId;
             newAssigneeName = resolvedName ?? profileId;
-            newAssigneeId = typeof raw.assigneeId === 'string' ? raw.assigneeId : profileId;
+            newAssigneeId = prevAssigneeId ?? profileId;
             action = 'assigned';
           } else if (explicitName) {
             // Free-text assign (no profile).
             newProfileId = null;
             newAssigneeName = explicitName;
-            newAssigneeId = typeof raw.assigneeId === 'string' ? raw.assigneeId : null;
+            newAssigneeId = prevAssigneeId;
             action = 'assigned';
           } else {
             // Unassign.
@@ -764,13 +827,6 @@ export const zanaMainModule: MainModule = {
           }
 
           const nowIso = new Date().toISOString();
-
-          // Preserve every unmodelled field; only touch the assignment fields.
-          raw.assigneeProfileId = newProfileId;
-          raw.assigneeName = newAssigneeName;
-          raw.assigneeId = newAssigneeId;
-          raw.updatedAt = nowIso;
-
           const auditEntry: ZanaAuditEntry = {
             id: randomUUID(),
             action,
@@ -782,6 +838,27 @@ export const zanaMainModule: MainModule = {
             },
             timestamp: nowIso
           };
+
+          // DB-backed workspaces: write straight to tickets.db so the change is
+          // visible to Zana AND read back by our DB-first reader. Legacy
+          // workspaces keep the atomic ticket.json write.
+          if (dbBacked) {
+            return assignTicketInDb(
+              source.path,
+              opts.id,
+              { assigneeProfileId: newProfileId, assigneeName: newAssigneeName, assigneeId: newAssigneeId },
+              auditEntry,
+              nowIso,
+              log
+            );
+          }
+
+          const raw = (await readJson<any>(file, log)) ?? {};
+          // Preserve every unmodelled field; only touch the assignment fields.
+          raw.assigneeProfileId = newProfileId;
+          raw.assigneeName = newAssigneeName;
+          raw.assigneeId = newAssigneeId;
+          raw.updatedAt = nowIso;
           if (Array.isArray(raw.audit)) {
             raw.audit.push(auditEntry);
           } else {

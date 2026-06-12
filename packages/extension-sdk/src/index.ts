@@ -9,7 +9,14 @@
  *   - `@cctc/extension-sdk/helpers`  — pure runtime helpers (markdown, …)
  */
 
-import type { AppModule, ModuleHost, RendererEntry } from './renderer.js';
+import type {
+  AppModule,
+  ModuleHost,
+  RendererEntry,
+  HostEvents,
+  SessionInfo,
+  ExtensionCommand,
+} from './renderer.js';
 import type { MainModule, MainModuleContext } from './main.js';
 
 /**
@@ -165,4 +172,13 @@ function tokenSatisfied(token: string, current: number): boolean {
   return false; // unparseable → fail closed
 }
 
-export type { AppModule, ModuleHost, RendererEntry, MainModule, MainModuleContext };
+export type {
+  AppModule,
+  ModuleHost,
+  RendererEntry,
+  HostEvents,
+  SessionInfo,
+  ExtensionCommand,
+  MainModule,
+  MainModuleContext,
+};

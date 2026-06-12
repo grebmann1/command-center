@@ -11,13 +11,44 @@
  *   - DO NOT import react. The host injects React via activate({ React, host }).
  *   - Build with React.createElement (not JSX) so nothing references the
  *     externalized jsx-runtime.
+ *
+ * Phase 2 dogfood: exercises host.on('project:changed') (live re-render on
+ * project switch) and host.cache (in-memory/sync scratch that survives unmount —
+ * a mount counter + the last-seen project list). See examples/extensions/hello/
+ * renderer.js for the matching runnable artifact.
  */
 import type { RendererEntry, ModuleHost } from '@cctc/extension-sdk/renderer';
 
 const entry: RendererEntry = {
   activate({ React, host }) {
     return function HelloPanel(_props: { host: ModuleHost }) {
-      const projects = host.listProjects();
+      // Seed from cache so a remount paints the previously-seen list at once,
+      // then fall back to a fresh read. Cache is synchronous — no await.
+      const [projects, setProjects] = React.useState(
+        () => host.cache.get<ReturnType<ModuleHost['listProjects']>>('projects') ?? host.listProjects()
+      );
+
+      // Count mounts across the panel's lifetime. Lives in host.cache, so it
+      // survives unmount (React state would reset on every nav switch).
+      const mounts = (host.cache.get<number>('mounts') ?? 0) + 1;
+      React.useEffect(() => {
+        host.cache.set('mounts', mounts);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+
+      // Re-render the list live on project switches. `on` returns an unsubscribe
+      // fn; returning it from the effect tears the subscription down on unmount.
+      React.useEffect(() => {
+        const off = host.on('project:changed', () => {
+          const next = host.listProjects();
+          host.cache.set('projects', next);
+          setProjects(next);
+        });
+        return off;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+
+      const active = host.getActiveProject();
 
       return React.createElement(
         'div',
@@ -26,7 +57,9 @@ const entry: RendererEntry = {
         React.createElement(
           'p',
           null,
-          `Loaded ${projects.length} project${projects.length === 1 ? '' : 's'}:`
+          `Loaded ${projects.length} project${projects.length === 1 ? '' : 's'}${
+            active ? ` · active: ${active.name}` : ''
+          }:`
         ),
         React.createElement(
           'ul',
@@ -34,6 +67,11 @@ const entry: RendererEntry = {
           projects.map((p) =>
             React.createElement('li', { key: p.id }, `${p.name} — ${p.path}`)
           )
+        ),
+        React.createElement(
+          'p',
+          { style: { fontSize: 12, opacity: 0.7 } },
+          `Panel mounted ${mounts} time${mounts === 1 ? '' : 's'} this session (via host.cache).`
         ),
         React.createElement(
           'button',

@@ -2710,6 +2710,25 @@ body.resizing-col {
   font-size: 13px;
 }
 
+/* Shown when a panel-less app module (commands/badge only) is selected. */
+.module-no-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.module-no-panel-hint {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
 .palette-item {
   display: flex;
   align-items: center;

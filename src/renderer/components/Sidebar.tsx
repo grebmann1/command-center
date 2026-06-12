@@ -20,12 +20,36 @@ import {
   type NavId
 } from '../store';
 import { useMergedModules } from '../modules';
+import { getHost } from '../modules/ModulePanelHost';
 import { AgentTray } from './AgentTray';
 
 interface NavEntry {
   id: NavId;
   label: string;
   icon: LucideIcon;
+  /**
+   * Pre-evaluated extension nav badge (from `AppModule.navBadge`). Only set for
+   * app-module entries that declare one. A number, a short string, or
+   * null/0/'' for no badge.
+   */
+  moduleBadge?: number | string | null;
+}
+
+/**
+ * Evaluate a merged module's `navBadge(host)` safely. V1 simplicity: this runs
+ * on every Sidebar render (the rail already re-renders on store ticks, so the
+ * badge stays roughly live). A module that wants a precisely-live badge should
+ * recompute off host.cache / a host.on subscription per the SDK contract.
+ *
+ * A throwing or absent factory yields no badge — it never breaks the rail.
+ */
+function evalModuleBadge(m: { id: string; navBadge?: (host: ReturnType<typeof getHost>) => number | string | null }): number | string | null {
+  if (!m.navBadge) return null;
+  try {
+    return m.navBadge(getHost(m.id));
+  } catch {
+    return null;
+  }
 }
 
 const coreNavItems: NavEntry[] = [
@@ -62,7 +86,8 @@ export function Sidebar() {
   const moduleNavItems: NavEntry[] = modules.map((m) => ({
     id: m.id,
     label: m.title,
-    icon: resolveIcon(m.icon)
+    icon: resolveIcon(m.icon),
+    moduleBadge: evalModuleBadge(m)
   }));
 
   const renderNavItem = (item: NavEntry) => {
@@ -76,6 +101,19 @@ export function Sidebar() {
     const running = isScheduler && runningSchedules > 0;
     const showScheduleBadge = running;
     const scheduleTitle = `${runningSchedules} running · ${enabledSchedules} scheduled`;
+    // Extension-contributed badge (AppModule.navBadge), pre-evaluated when the
+    // module nav entries were built. Distinct from the core inbox/scheduler
+    // badges above, which are gated on their own ids — a module id never
+    // collides with 'inbox'/'scheduler', so this can't disturb them.
+    const moduleBadge = item.moduleBadge;
+    const showModuleBadge =
+      moduleBadge != null && moduleBadge !== 0 && moduleBadge !== '';
+    const moduleBadgeText =
+      typeof moduleBadge === 'number'
+        ? moduleBadge > 99
+          ? '99+'
+          : String(moduleBadge)
+        : String(moduleBadge);
     return (
       <button
         key={item.id}
@@ -111,6 +149,15 @@ export function Sidebar() {
             title={scheduleTitle}
           >
             {runningSchedules > 99 ? '99+' : runningSchedules}
+          </span>
+        )}
+        {showModuleBadge && (
+          <span
+            className="nav-badge"
+            aria-label={`${moduleBadgeText} for ${item.label}`}
+            title={`${moduleBadgeText} for ${item.label}`}
+          >
+            {moduleBadgeText}
           </span>
         )}
       </button>

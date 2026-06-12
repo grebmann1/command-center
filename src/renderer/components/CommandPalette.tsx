@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Folder, TerminalSquare, Plus, ChevronRight, Code2, FolderOpen, FileSearch, Sparkles, Play, Zap, Keyboard, History, Search, Inbox, RotateCcw, Trash2, Copy, Pin, PinOff, Globe, BookOpen, Clock, LayoutGrid, RotateCw, Undo2 } from 'lucide-react';
+import { Folder, TerminalSquare, Plus, ChevronRight, Code2, FolderOpen, FileSearch, Sparkles, Play, Zap, Keyboard, History, Search, Inbox, RotateCcw, Trash2, Copy, Pin, PinOff, Globe, BookOpen, Clock, LayoutGrid, RotateCw, Undo2, Puzzle } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
 import { useData, useScheduler, useUi, visibleTerminals } from '../store';
 import type { LaunchProfileId, OpenTarget, Project } from '@shared/types';
 import { fuzzyScore } from '../util/fuzzy';
+import { useMergedModules } from '../modules';
+import { getHost } from '../modules/ModulePanelHost';
 
 interface PaletteItem {
   key: string;
   icon: React.ReactNode;
   label: string;
   hint?: string;
+  /** Extra fuzzy-match terms beyond label/hint (extension command keywords). */
+  keywords?: string[];
   run: () => void;
 }
 
@@ -28,6 +32,7 @@ export function CommandPalette({ onClose }: Props) {
   const restoreLastDetached = useData((s) => s.restoreLastDetached);
   const setPinned = useData((s) => s.setPinned);
   const scheduledTasks = useScheduler((s) => s.tasks);
+  const modules = useMergedModules();
   const selectProject = useUi((s) => s.selectProject);
   const selectTab = useUi((s) => s.selectTab);
   const setNav = useUi((s) => s.setNav);
@@ -70,6 +75,47 @@ export function CommandPalette({ onClose }: Props) {
     const el = list.querySelector<HTMLElement>(`[data-idx="${activeIdx}"]`);
     el?.scrollIntoView({ block: 'nearest' });
   }, [activeIdx]);
+
+  // Commands contributed by app modules (built-in plugins/* + runtime
+  // extensions, uniformly — from the merged set). For each module that
+  // declares `commands`, we call its factory with the module's live host and
+  // adapt every ExtensionCommand into a PaletteItem. Keys are namespaced
+  // `ext:<moduleId>:<cmd.id>` so they never collide with core actions or each
+  // other; the module title is shown as the hint so the row reads as belonging
+  // to that module. Recomputes when the merged-module set changes (an
+  // extension enabling/disabling). Per-module try/catch: a throwing factory is
+  // skipped and never breaks the palette.
+  const extensionItems = useMemo<PaletteItem[]>(() => {
+    const out: PaletteItem[] = [];
+    for (const mod of modules) {
+      if (!mod.commands) continue;
+      let cmds;
+      try {
+        cmds = mod.commands(getHost(mod.id));
+      } catch {
+        continue; // a throwing commands() factory is skipped, not fatal
+      }
+      if (!Array.isArray(cmds)) continue;
+      for (const cmd of cmds) {
+        out.push({
+          key: `ext:${mod.id}:${cmd.id}`,
+          icon: <Puzzle size={14} />,
+          label: cmd.label,
+          hint: mod.title,
+          keywords: cmd.keywords,
+          run: () => {
+            onClose();
+            try {
+              cmd.run();
+            } catch {
+              /* command threw — swallow so a bad extension can't crash the shell */
+            }
+          }
+        });
+      }
+    }
+    return out;
+  }, [modules, onClose]);
 
   const items = useMemo<PaletteItem[]>(() => {
     const projectItems: PaletteItem[] = projects.map((p: Project) => ({
@@ -391,8 +437,8 @@ export function CommandPalette({ onClose }: Props) {
         });
       }
     }
-    return [...projectItems, ...tabItems, ...actions];
-  }, [projects, terminals, addProject, selectProject, selectTab, setWorkspaceMode, setNav, setSettingsTab, setOverviewOpen, overviewOpen, onClose, selectedProject, selectedProjectTabs, activeTab, restartTerminal, closeTerminal, reopenLastClosed, setPinned, pushToast, launch, scheduledTasks]);
+    return [...projectItems, ...tabItems, ...actions, ...extensionItems];
+  }, [projects, terminals, addProject, selectProject, selectTab, setWorkspaceMode, setNav, setSettingsTab, setOverviewOpen, overviewOpen, onClose, selectedProject, selectedProjectTabs, activeTab, restartTerminal, closeTerminal, reopenLastClosed, setPinned, pushToast, launch, scheduledTasks, extensionItems]);
 
   const filtered = useMemo(() => {
     const q = query.trim();
@@ -411,6 +457,18 @@ export function CommandPalette({ onClose }: Props) {
           // Hints are secondary signal — half-weight.
           const hintScore = hm.score * 0.5;
           if (hintScore > score) score = hintScore;
+        }
+      }
+      // Extension command keywords are aliases/synonyms — also half-weight,
+      // so a keyword match surfaces the command without outranking a direct
+      // label hit.
+      if (it.keywords) {
+        for (const kw of it.keywords) {
+          const km = fuzzyScore(kw, q);
+          if (km) {
+            const kwScore = km.score * 0.5;
+            if (kwScore > score) score = kwScore;
+          }
         }
       }
       if (score > -Infinity) scored.push({ item: it, score, idx: i });
