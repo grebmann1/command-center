@@ -76,6 +76,31 @@ escape hatch to `window.cc`. It exposes: `moduleId`, `call`, `storage`,
 `openExternal`, `pushInbox`, `toast`, `getActiveProject`, `listProjects`,
 `selectProject`, `launchSession`, and (Phase 2) `on` and `cache`.
 
+### Using JSX, hooks, or a UI library (e.g. lucide-react)
+
+The `React.createElement` style above needs nothing beyond `activate`'s `React`.
+But a real panel usually wants JSX and a component library — and those reference
+React at **module-eval time** (when the bundle is imported), *before* `activate`
+runs. For example, `lucide-react`'s icons call `forwardRef(...)` at import. An
+`activate`-only React won't exist yet, so eval throws.
+
+The host therefore ALSO publishes its React instance on a global,
+`globalThis.__CCTC_HOST_REACT__`, set synchronously immediately before the
+bundle is blob-imported. The pattern (what the bundled `gus` extension does):
+
+- Alias `react`, `react/jsx-runtime`, `react/jsx-dev-runtime` (in your build) to
+  tiny in-bundle **shims** that delegate to the host React — read lazily from the
+  global, falling back to the `activate({ React })` arg. Do NOT `external`-ize
+  them (a bare `import 'react'` is unresolvable under blob-import), and do NOT
+  let a second real React get bundled (breaks hooks).
+- **Bundle** your UI library (lucide-react, etc.) — the host does not inject it.
+- Net result: `rollupOptions.external: []`, one host React, JSX/hooks/lucide all
+  work. See `extensions/gus/vite.config.ts` + `extensions/gus/src/react-shim.ts`
+  for a working reference, and `create-cctc-extension` for the scaffolded setup.
+
+The simplest extensions (no JSX, no eval-time React, like the `hello` sample)
+can ignore the global entirely and just use `activate({ React })`.
+
 ## Events — `host.on(event, cb)`
 
 `host.on` subscribes to a **read-only notification** the host already emits and

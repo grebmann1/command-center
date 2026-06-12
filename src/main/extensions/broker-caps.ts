@@ -37,8 +37,14 @@ import { PermissionBroker, PermissionDenied } from './permission-broker.js';
 
 /** Hard ceiling on a brokered spawn, regardless of the ext's requested timeout. */
 const MAX_SPAWN_TIMEOUT_MS = 60_000;
-/** Cap brokered spawn output so an ext can't OOM main with a huge stdout. */
-const SPAWN_MAX_BUFFER = 8 * 1024 * 1024;
+/**
+ * Cap brokered spawn output so an ext can't OOM main with a huge stdout.
+ * 16 MiB to match the trusted built-in exec (registry.ts BUILTIN_EXEC_MAX_BUFFER)
+ * and the pre-isolation behavior — a large `sf data query` (e.g. a 2000-row
+ * sprint pull) can exceed 8 MiB, and an under-cap would watchdog-kill it into a
+ * misleading "CLI unavailable" reject rather than returning the data.
+ */
+const SPAWN_MAX_BUFFER = 16 * 1024 * 1024;
 /** Max redirect hops a brokered fetch will follow (each re-checks `net`). */
 const FETCH_MAX_REDIRECTS = 5;
 /** Cap on a brokered fetch response body — a hostile/large response can't OOM main. */
