@@ -1,9 +1,16 @@
 /**
  * GUS module — main process side.
  *
- * Fetches the current user's GUS work items and sprints by shelling out to
- * the Salesforce CLI (`sf`) against the `gus` target-org. This reuses the
+ * Fetches the current user's GUS work items and sprints by running the
+ * Salesforce CLI (`sf`) against the `gus` target-org. This reuses the
  * user's existing CLI auth — no OAuth flow or stored secrets in the app.
+ *
+ * The CLI is invoked exclusively through the brokered `ctx.exec` capability
+ * (NOT a raw node builtin), so this module uses ONLY context capabilities +
+ * pure JS. That keeps it survivable under the disk-extension Node-builtin
+ * denylist (`host-child-guard.ts`): as a trusted built-in it gets an ungated
+ * in-process `exec`; as an isolated disk extension (GUS-EXT-B) the SAME
+ * `ctx.exec({ bin: 'sf' })` call forwards to the permission-gated broker.
  *
  * Capabilities exposed to the renderer via `ModuleHost.call`:
  *   - whoami()              → GusIdentity
@@ -17,7 +24,6 @@
  * its own shared types. No core internals.
  */
 
-import { execFile } from 'node:child_process';
 import type { MainModule, MainModuleContext } from '@cctc/extension-sdk/main';
 import {
   type GusIdentity,
@@ -34,7 +40,38 @@ import {
 const TARGET_ORG = 'gus';
 /** sf queries can be slow on a cold org; give them room but bound them. */
 const QUERY_TIMEOUT_MS = 30_000;
-const MAX_BUFFER = 16 * 1024 * 1024;
+
+/** The brokered exec capability (from `MainModuleContext.exec`). */
+type Exec = NonNullable<MainModuleContext['exec']>;
+
+/**
+ * Run `sf` via the brokered `ctx.exec` and return its stdout.
+ *
+ * Result mapping vs. the old `execFile` callback:
+ *   - `ctx.exec` REJECTS on a spawn failure (sf missing / not on PATH) or a
+ *     host watchdog kill (timeout / output-cap) — S3 semantics. We translate
+ *     that reject into a single, renderer-friendly "sf CLI unavailable" error
+ *     so the board surfaces a clean message instead of a raw ENOENT/timeout.
+ *   - A process that RAN and exited non-zero RESOLVES with `code !== 0` and
+ *     still prints JSON to stdout (sf's pattern). We return that stdout
+ *     unchanged so the existing per-command JSON parsing can extract sf's own
+ *     precise `message` (auth/validation errors), preserving prior behaviour.
+ */
+async function sfExec(
+  exec: Exec,
+  args: string[],
+  log: MainModuleContext['log']
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  try {
+    return await exec({ bin: 'sf', args, timeoutMs: QUERY_TIMEOUT_MS });
+  } catch (err) {
+    // S3 reject = sf never produced a result (not installed / not on PATH, or
+    // killed by the watchdog). Distinct from a non-zero exit, which resolves.
+    const detail = err instanceof Error ? err.message : String(err);
+    log(`sf exec failed: ${detail}`);
+    throw new Error('sf CLI unavailable — check that the Salesforce CLI is installed and authed (target-org "gus").');
+  }
+}
 
 interface SfQueryResponse<T> {
   status: number;
@@ -94,41 +131,33 @@ interface RawFeedItem {
 }
 
 /**
- * Run `sf data query` and return parsed records. Rejects (with the CLI's
+ * Run `sf data query` and return parsed records. Throws (with the CLI's
  * own message when available) on non-zero exit or unparseable output, so the
- * renderer surfaces a real error instead of an empty board.
+ * renderer surfaces a real error instead of an empty board. A spawn failure /
+ * watchdog kill is translated to the "sf CLI unavailable" error by `sfExec`.
  */
-function sfQuery<T>(soql: string, log: MainModuleContext['log']): Promise<T[]> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      'sf',
-      ['data', 'query', '--target-org', TARGET_ORG, '--json', '-q', soql],
-      { timeout: QUERY_TIMEOUT_MS, maxBuffer: MAX_BUFFER },
-      (err, stdout, stderr) => {
-        // sf exits non-zero on query errors but still prints JSON to stdout;
-        // prefer parsing that for a precise message before falling back.
-        let parsed: SfQueryResponse<T> | undefined;
-        if (stdout) {
-          try {
-            parsed = JSON.parse(stdout) as SfQueryResponse<T>;
-          } catch {
-            /* fall through to err handling */
-          }
-        }
-        if (parsed && parsed.status === 0) {
-          resolve(parsed.result?.records ?? []);
-          return;
-        }
-        const msg =
-          parsed?.message ||
-          (err ? err.message : '') ||
-          stderr ||
-          'sf data query failed';
-        log(`query failed: ${msg}`);
-        reject(new Error(msg));
-      }
-    );
-  });
+async function sfQuery<T>(exec: Exec, soql: string, log: MainModuleContext['log']): Promise<T[]> {
+  const { stdout, stderr } = await sfExec(
+    exec,
+    ['data', 'query', '--target-org', TARGET_ORG, '--json', '-q', soql],
+    log
+  );
+  // sf exits non-zero on query errors but still prints JSON to stdout;
+  // prefer parsing that for a precise message before falling back.
+  let parsed: SfQueryResponse<T> | undefined;
+  if (stdout) {
+    try {
+      parsed = JSON.parse(stdout) as SfQueryResponse<T>;
+    } catch {
+      /* fall through to error handling */
+    }
+  }
+  if (parsed && parsed.status === 0) {
+    return parsed.result?.records ?? [];
+  }
+  const msg = parsed?.message || stderr || 'sf data query failed';
+  log(`query failed: ${msg}`);
+  throw new Error(msg);
 }
 
 /**
@@ -136,88 +165,79 @@ function sfQuery<T>(soql: string, log: MainModuleContext['log']): Promise<T[]> {
  * Rejects with the CLI's message so the renderer can surface (and the
  * optimistic UI can roll back) a rejected write.
  */
-function sfUpdateField(
+async function sfUpdateField(
+  exec: Exec,
   recordId: string,
   field: string,
   value: string,
   log: MainModuleContext['log']
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      'sf',
-      [
-        'data',
-        'update',
-        'record',
-        '--target-org',
-        TARGET_ORG,
-        '--sobject',
-        'ADM_Work__c',
-        '--record-id',
-        recordId,
-        '--values',
-        `${field}=${value}`,
-        '--json'
-      ],
-      { timeout: QUERY_TIMEOUT_MS, maxBuffer: MAX_BUFFER },
-      (err, stdout, stderr) => {
-        let parsed: { status?: number; message?: string } | undefined;
-        if (stdout) {
-          try {
-            parsed = JSON.parse(stdout);
-          } catch {
-            /* fall through */
-          }
-        }
-        if (parsed && parsed.status === 0) {
-          resolve();
-          return;
-        }
-        const msg = parsed?.message || (err ? err.message : '') || stderr || 'sf data update failed';
-        log(`update failed (${recordId} ${field}): ${msg}`);
-        reject(new Error(msg));
-      }
-    );
-  });
+  const { stdout, stderr } = await sfExec(
+    exec,
+    [
+      'data',
+      'update',
+      'record',
+      '--target-org',
+      TARGET_ORG,
+      '--sobject',
+      'ADM_Work__c',
+      '--record-id',
+      recordId,
+      '--values',
+      `${field}=${value}`,
+      '--json'
+    ],
+    log
+  );
+  let parsed: { status?: number; message?: string } | undefined;
+  if (stdout) {
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      /* fall through */
+    }
+  }
+  if (parsed && parsed.status === 0) {
+    return;
+  }
+  const msg = parsed?.message || stderr || 'sf data update failed';
+  log(`update failed (${recordId} ${field}): ${msg}`);
+  throw new Error(msg);
 }
 
 /** Resolve the authed GUS user. Cached for the process lifetime. */
 let identityCache: GusIdentity | null = null;
 
-function loadIdentity(log: MainModuleContext['log']): Promise<GusIdentity> {
-  if (identityCache) return Promise.resolve(identityCache);
-  return new Promise((resolve, reject) => {
-    execFile(
-      'sf',
-      ['org', 'display', 'user', '--target-org', TARGET_ORG, '--json'],
-      { timeout: QUERY_TIMEOUT_MS, maxBuffer: MAX_BUFFER },
-      (err, stdout) => {
-        let parsed:
-          | { status: number; result?: { username?: string; id?: string; instanceUrl?: string }; message?: string }
-          | undefined;
-        if (stdout) {
-          try {
-            parsed = JSON.parse(stdout);
-          } catch {
-            /* ignore */
-          }
-        }
-        const r = parsed?.result;
-        if (parsed?.status === 0 && r?.id && r.username) {
-          identityCache = {
-            username: r.username,
-            userId: r.id,
-            instanceUrl: r.instanceUrl || 'https://gus.my.salesforce.com'
-          };
-          resolve(identityCache);
-          return;
-        }
-        const msg = parsed?.message || (err ? err.message : '') || 'sf org display user failed';
-        log(`identity failed: ${msg}`);
-        reject(new Error(msg));
-      }
-    );
-  });
+async function loadIdentity(exec: Exec, log: MainModuleContext['log']): Promise<GusIdentity> {
+  if (identityCache) return identityCache;
+  const { stdout } = await sfExec(
+    exec,
+    ['org', 'display', 'user', '--target-org', TARGET_ORG, '--json'],
+    log
+  );
+  let parsed:
+    | { status: number; result?: { username?: string; id?: string; instanceUrl?: string }; message?: string }
+    | undefined;
+  if (stdout) {
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      /* ignore */
+    }
+  }
+  const r = parsed?.result;
+  if (parsed?.status === 0 && r?.id && r.username) {
+    identityCache = {
+      username: r.username,
+      userId: r.id,
+      instanceUrl: r.instanceUrl || 'https://gus.my.salesforce.com'
+    };
+    return identityCache;
+  }
+  const msg = parsed?.message || 'sf org display user failed';
+  log(`identity failed: ${msg}`);
+  throw new Error(msg);
 }
 
 /** SOQL string-literal escape (single quotes + backslashes). */
@@ -274,10 +294,18 @@ export const gusMainModule: MainModule = {
   id: 'gus',
   setup(ctx) {
     const { log } = ctx;
+    // gus runs `sf` solely through the brokered exec capability. Built-ins get
+    // an ungated in-process exec (wired in the module host); a disk extension
+    // gets the permission-gated broker exec. If neither provided one, every
+    // capability fails cleanly rather than silently returning empty data.
+    const exec = ctx.exec;
+    if (!exec) {
+      throw new Error('gus: ctx.exec capability is unavailable; cannot run the sf CLI.');
+    }
 
     return {
       async whoami(): Promise<GusIdentity> {
-        return loadIdentity(log);
+        return loadIdentity(exec, log);
       },
 
       /**
@@ -286,7 +314,7 @@ export const gusMainModule: MainModule = {
        * opts.sprintId       — restrict to one sprint.
        */
       async listWork(opts?: { includeClosed?: boolean; sprintId?: string }): Promise<GusWorkItem[]> {
-        const { userId } = await loadIdentity(log);
+        const { userId } = await loadIdentity(exec, log);
         const where: string[] = [`Assignee__r.Id = '${soqlEscape(userId)}'`];
         if (opts?.sprintId) {
           where.push(`Sprint__c = '${soqlEscape(opts.sprintId)}'`);
@@ -294,7 +322,7 @@ export const gusMainModule: MainModule = {
         const soql =
           `SELECT ${WORK_FIELDS} FROM ADM_Work__c WHERE ${where.join(' AND ')} ` +
           `ORDER BY LastModifiedDate DESC LIMIT 500`;
-        const rows = await sfQuery<RawWork>(soql, log);
+        const rows = await sfQuery<RawWork>(exec, soql, log);
         const items = rows.map(mapWork);
         // Filter closed statuses in JS so the many `Closed - *` variants are
         // all caught (a SOQL NOT IN list can't enumerate them reliably).
@@ -303,7 +331,7 @@ export const gusMainModule: MainModule = {
 
       /** Sprints the user has open work in, most recent first. */
       async listSprints(): Promise<GusSprint[]> {
-        const { userId } = await loadIdentity(log);
+        const { userId } = await loadIdentity(exec, log);
         // Pull open work and aggregate sprints in JS — keeps the closed-status
         // definition in one place (isClosedStatus) instead of a SOQL list.
         const soql =
@@ -311,6 +339,7 @@ export const gusMainModule: MainModule = {
           `FROM ADM_Work__c WHERE Assignee__r.Id = '${soqlEscape(userId)}' AND Sprint__c != null ` +
           `LIMIT 2000`;
         const rows = await sfQuery<RawWork & { Sprint__r?: { Name?: string; Start_Date__c?: string; End_Date__c?: string } | null }>(
+          exec,
           soql,
           log
         );
@@ -341,11 +370,11 @@ export const gusMainModule: MainModule = {
        * team (a relevance signal), not the team's full backlog size.
        */
       async listTeams(): Promise<GusTeam[]> {
-        const { userId } = await loadIdentity(log);
+        const { userId } = await loadIdentity(exec, log);
         const soql =
           `SELECT Status__c, Scrum_Team__c, Scrum_Team__r.Name FROM ADM_Work__c ` +
           `WHERE Assignee__r.Id = '${soqlEscape(userId)}' AND Scrum_Team__c != null LIMIT 2000`;
-        const rows = await sfQuery<RawWork>(soql, log);
+        const rows = await sfQuery<RawWork>(exec, soql, log);
         const byId = new Map<string, GusTeam>();
         for (const r of rows) {
           if (!r.Scrum_Team__c || isClosedStatus(r.Status__c ?? '')) continue;
@@ -376,7 +405,7 @@ export const gusMainModule: MainModule = {
           `SELECT ${WORK_FIELDS} FROM ADM_Work__c ` +
           `WHERE Scrum_Team__c = '${soqlEscape(teamId)}' AND Sprint__c = null ` +
           `ORDER BY Sprint_Rank__c NULLS LAST, LastModifiedDate DESC LIMIT 500`;
-        const rows = await sfQuery<RawWork>(soql, log);
+        const rows = await sfQuery<RawWork>(exec, soql, log);
         const items = rows.map(mapWork);
         return opts?.includeClosed ? items : items.filter((it) => !isClosedStatus(it.status));
       },
@@ -387,7 +416,7 @@ export const gusMainModule: MainModule = {
         const soql =
           `SELECT ${WORK_DETAIL_FIELDS} FROM ADM_Work__c ` +
           `WHERE Id = '${soqlEscape(id)}' LIMIT 1`;
-        const rows = await sfQuery<RawWorkDetail>(soql, log);
+        const rows = await sfQuery<RawWorkDetail>(exec, soql, log);
         return rows.length ? mapWorkDetail(rows[0]) : null;
       },
 
@@ -399,7 +428,7 @@ export const gusMainModule: MainModule = {
       async setStatus(id: string, status: string): Promise<{ ok: true; status: string }> {
         if (typeof id !== 'string' || !id) throw new Error('Missing work item id');
         if (typeof status !== 'string' || !status) throw new Error('Missing status');
-        await sfUpdateField(id, 'Status__c', `'${soqlEscape(status)}'`, log);
+        await sfUpdateField(exec, id, 'Status__c', `'${soqlEscape(status)}'`, log);
         return { ok: true, status };
       },
 
@@ -409,7 +438,7 @@ export const gusMainModule: MainModule = {
         const soql =
           `SELECT Id, Body__c, CreatedDate, CreatedBy.Name FROM ADM_Comment__c ` +
           `WHERE Work__c = '${soqlEscape(id)}' ORDER BY CreatedDate DESC LIMIT 50`;
-        const rows = await sfQuery<RawFeedItem & { Body__c?: string | null }>(soql, log);
+        const rows = await sfQuery<RawFeedItem & { Body__c?: string | null }>(exec, soql, log);
         return rows
           .filter((r) => (r.Body__c ?? '').trim())
           .map((r) => ({
@@ -427,7 +456,7 @@ export const gusMainModule: MainModule = {
           `SELECT ContentDocumentId, ContentDocument.Title, ContentDocument.FileExtension, ` +
           `ContentDocument.ContentSize, ContentDocument.CreatedDate, ContentDocument.CreatedBy.Name ` +
           `FROM ContentDocumentLink WHERE LinkedEntityId = '${soqlEscape(id)}' LIMIT 100`;
-        const rows = await sfQuery<RawContentLink>(soql, log);
+        const rows = await sfQuery<RawContentLink>(exec, soql, log);
         return rows.map((r) => ({
           id: r.ContentDocumentId,
           title: r.ContentDocument?.Title ?? '(untitled)',
