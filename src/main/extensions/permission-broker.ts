@@ -23,9 +23,26 @@
 
 import { basename } from 'node:path';
 import { homedir } from 'node:os';
+import { realpathSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
 import { isWithin } from './path-util.js';
 import type { ExtensionPermission } from '@cctc/extension-sdk';
+
+/**
+ * Realpath a path, tolerating non-existence (returns the lexical input). Used so
+ * granted roots + sensitive roots are stored in their REAL on-disk form — the
+ * symlink-safe fs check in broker-caps re-asserts with a `realpath()`'d target,
+ * and that target only `isWithin` a root if the root is itself canonicalized the
+ * same way (e.g. macOS `/var` → `/private/var`). Without this, a legit read of a
+ * file under a symlinked-prefix root (the common case on macOS) would be denied.
+ */
+function realpathOrSelf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
 
 /** Scope arg for a concrete request, interpreted per-permission. */
 export type PermissionScope =
@@ -52,10 +69,18 @@ export interface ExtensionGrant {
  */
 export type GrantProvider = (moduleId: string) => ExtensionGrant | null;
 
-/** Roots that are NEVER writable even if a granted fsRoot would cover them. */
+/**
+ * Roots that are NEVER writable even if a granted fsRoot would cover them.
+ * Realpath'd so the block holds against a `realpath()`'d target (broker-caps
+ * re-checks the real path; a symlink → ~/.ssh resolves here too).
+ */
 function sensitiveRoots(): string[] {
   const home = homedir();
-  return [resolve(home, '.ssh'), resolve(home, '.aws'), resolve(home, '.cc-center')];
+  return [
+    realpathOrSelf(resolve(home, '.ssh')),
+    realpathOrSelf(resolve(home, '.aws')),
+    realpathOrSelf(resolve(home, '.cc-center'))
+  ];
 }
 
 export interface AuditEntry {
@@ -129,6 +154,13 @@ export class PermissionBroker {
         // basename only — never accept a path or a shell string.
         return scope.bin === basename(scope.bin) && grant.execAllowlist.has(scope.bin);
       case 'fs': {
+        // This check is LEXICAL (sync, no fs touch): `resolve()` collapses
+        // `..`/`.` but does NOT follow symlinks. A symlink inside a granted root
+        // pointing outside it would pass here. broker-caps.ts therefore calls
+        // this gate TWICE — once on the lexical path, then again on the
+        // `realpath()`'d path (P3-HARDEN) — so a symlink escape is caught on the
+        // second pass. Keeping this gate lexical+sync preserves its use as a pure
+        // policy predicate (the renderer-facing `can()` has no fs to await).
         if (!isAbsolute(scope.path)) return false;
         const canonical = resolve(scope.path);
         const inRoot = grant.fsRoots.some((root) => isWithin(canonical, root));
@@ -170,9 +202,11 @@ export function grantFromManifest(
   scopes: { execAllowlist?: string[]; fsRoots?: string[]; egressAllowlist?: string[] } | undefined,
   extDir: string
 ): ExtensionGrant {
-  const fsRoots = [resolve(extDir)];
+  // Realpath the roots so the symlink-safe check in broker-caps (which re-asserts
+  // with a realpath'd target) compares like-for-like (macOS /var → /private/var).
+  const fsRoots = [realpathOrSelf(resolve(extDir))];
   for (const root of scopes?.fsRoots ?? []) {
-    fsRoots.push(canonicalizeRoot(root));
+    fsRoots.push(realpathOrSelf(canonicalizeRoot(root)));
   }
   return {
     permissions: new Set((permissions ?? []) as ExtensionPermission[]),

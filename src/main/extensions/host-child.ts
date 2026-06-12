@@ -20,16 +20,23 @@
  *   4. We answer `{type:'call'}` by invoking the matching capability and
  *      `{type:'teardown'}` by calling the module's `teardown?()`.
  *
- * HONEST RESIDUAL (P3-A): this is process + crash isolation + a controlled RPC
- * surface — NOT capability deprivation. The child is still a Node process, so a
- * malicious extension can `import('node:child_process')` itself here. P3-B adds
- * the broker caps (exec/fs/fetch) to `proxyCtx` + a Node-builtin denylist so the
- * brokered path is the ONLY path. The WIN today: untrusted code no longer runs
- * in MAIN (no BrowserWindow, no app state, no sibling modules' memory) and a
- * crash/hang is contained to this child.
+ * CAPABILITY DEPRIVATION (P3-HARDEN): before the untrusted `import()`, the child
+ * installs a Node-builtin denylist (`host-child-guard.ts`): an ESM loader hook +
+ * a `Module._load` patch + neutered `process.binding`, so the ext cannot reach
+ * raw `child_process`/`fs`/`net`/… and skip the broker. The brokered ctx
+ * (exec/fs/fetch/storage/log over the port) is the only practical capability
+ * path. See `host-child-guard.ts` for the honest residual (this is JS-level, not
+ * an OS sandbox; `process.dlopen`/native addons remain). The other WIN
+ * (from P3-A): untrusted code no longer runs in MAIN (no BrowserWindow, no app
+ * state, no sibling modules' memory) and a crash/hang is contained to this child.
  */
 
+import module from 'node:module';
 import { pathToFileURL } from 'node:url';
+import {
+  installChildBuiltinGuard,
+  denylistLoaderHookUrl
+} from './host-child-guard.js';
 import type {
   MainModule,
   MainModuleContext,
@@ -76,7 +83,21 @@ function isMainModule(v: unknown): v is MainModule {
   return typeof m.id === 'string' && !!m.id && typeof m.setup === 'function';
 }
 
+/**
+ * Install the Node-builtin denylist (P3-HARDEN) BEFORE any untrusted code can
+ * run. The bootstrap's own imports (above) are already resolved at top-level, so
+ * registering the ESM loader hook now only affects the *untrusted* graph imported
+ * later in {@link handleInit}. CJS `require` + `process.binding` are patched
+ * synchronously. Failure to install is fatal — we must not import an extension
+ * unguarded.
+ */
+function installBuiltinDenylist(): void {
+  installChildBuiltinGuard();
+  module.register(denylistLoaderHookUrl());
+}
+
 function start(): void {
+  installBuiltinDenylist();
   const parentPort = getParentPort();
 
   // The host's data port arrives on the FIRST `cctc-port` parentPort message

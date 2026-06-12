@@ -323,6 +323,25 @@ const res = await ctx.fetch?.('https://api.github.com/repos/x/y');
 `ctx.exec` takes a **bin + argv** — never a shell string — so there is no
 command-injection surface.
 
+- **Result vs. failure.** A process that runs and exits resolves an
+  `ExecResult` (`{stdout, stderr, code}`); a non-zero exit still resolves (with
+  that `code`), and a process that dies on a signal resolves with `code:null` +
+  `signal`. But a **spawn failure** (bin not found) or a **host watchdog kill**
+  (your `timeoutMs`, capped at 60s, or the 8 MiB output cap exceeded) **REJECTS**
+  — so a hung child surfaces as an error, not a misleading `{code:null}` success.
+- **exec PATH residual (S2).** `execAllowlist` gates the **basename** (`sf`), not
+  the on-disk binary; the bin is resolved against the **host's PATH** at spawn
+  time, so whatever is *first* on PATH for that name runs. The host's PATH is the
+  user's own trusted environment — an attacker who can prepend a hostile dir to
+  it already has local code-execution — so we do not pin a separate PATH. Do not
+  treat the allowlist as a guarantee of *which* `sf` runs, only of *which names*
+  may run.
+- **fs is symlink-safe.** `ctx.fs` paths are checked after `realpath()` (the
+  resolved real location, with the parent dir resolved for writes to new files),
+  so a symlink inside a granted root that points outside it (or at a sensitive
+  root like `~/.ssh`) cannot be used to escape — the real target is re-checked
+  against your granted roots.
+
 ### Renderer-side `host` gates
 
 `host.launchSession`, `host.openExternal`, and `host.pushInbox` are gated against
@@ -332,15 +351,20 @@ flags that would create an over-privileged agent (`--dangerously-skip-permission
 
 ### Honest residual (read this)
 
-The out-of-process child is still a Node process. A **malicious** extension could
-pull in Node's process/fs/net built-ins inside its own child and bypass the
-broker entirely — the brokered caps are the *sanctioned, scoped, audited* path,
-not yet a hard seal. A Node-builtin denylist in the child (to make the broker the
-ONLY path) is a separate, deferred hardening ticket. Likewise the renderer-side
-`host` gates are **advisory**: all panels currently share one `window.cc`, so a
-panel could call core bridges directly; authoritative per-panel attribution
-arrives with renderer isolation (a later phase). Treat the platform as
-curated-trust for *panels* and *raw-node-in-child* until those land.
+The out-of-process child now installs a **Node-builtin denylist** (P3-HARDEN): an
+ESM loader hook + a CJS `require` patch + neutered `process.binding`, so an
+extension can no longer trivially `import('node:child_process')` / `require('fs')`
+to skip the broker. The brokered caps are the only **practical** capability path.
+This is **JS-level capability deprivation, not an OS sandbox** — a determined
+attacker with a native addon (`process.dlopen`) or a realm-escape exploit could
+still reach raw OS access; the true seal is the OS/process permission boundary
+(Node `--permission` / sandbox), tracked as a follow-up. So: raw-Node bypass is no
+longer a one-liner, but the child is not a hard sandbox.
+
+The renderer-side `host` gates remain **advisory**: all panels currently share one
+`window.cc`, so a panel could call core bridges directly; authoritative per-panel
+attribution arrives with renderer isolation (a later phase). Treat the platform as
+curated-trust for *panels* until that lands.
 
 ## Reference
 

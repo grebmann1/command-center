@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, rm, writeFile, mkdir, symlink } from 'node:fs/promises';
+import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createBrokerCapabilities } from '../broker-caps.js';
 import { PermissionBroker, grantFromManifest } from '../permission-broker.js';
@@ -96,6 +96,108 @@ describe('broker-caps — gated process spawn', () => {
       alpha: grantFromManifest(['exec'], { execAllowlist: ['echo'] }, extDir)
     });
     await expect(caps.exec('alpha', { bin: '/bin/echo' })).rejects.toThrow(/PermissionDenied/);
+  });
+
+  // S3: a spawn failure or watchdog timeout must REJECT (distinct from a clean
+  // signal exit), so a hung child's kill surfaces as an error not {code:null}.
+  it('REJECTS when the bin cannot be spawned (ENOENT), not a {code:null} success', async () => {
+    const caps = brokerFor({
+      alpha: grantFromManifest(['exec'], { execAllowlist: ['definitely-no-such-bin-xyz'] }, extDir)
+    });
+    await expect(caps.exec('alpha', { bin: 'definitely-no-such-bin-xyz' })).rejects.toThrow(
+      /failed to start/
+    );
+  });
+
+  it('REJECTS when the process is killed by the timeout watchdog', async () => {
+    // `sleep 5` with a 50ms timeout → Node kills it → killed:true → reject.
+    const caps = brokerFor({
+      alpha: grantFromManifest(['exec'], { execAllowlist: ['sleep'] }, extDir)
+    });
+    await expect(
+      caps.exec('alpha', { bin: 'sleep', args: ['5'], timeoutMs: 50 })
+    ).rejects.toThrow(/killed after .*ms/);
+  });
+
+  it('still RESOLVES a non-zero exit (ran, exited cleanly with a code)', async () => {
+    const caps = brokerFor({
+      alpha: grantFromManifest(['exec'], { execAllowlist: ['sh'] }, extDir)
+    });
+    const res = await caps.exec('alpha', { bin: 'sh', args: ['-c', 'exit 3'] });
+    expect(res.code).toBe(3);
+  });
+});
+
+// P3-HARDEN: a symlink INSIDE a granted root that points OUTSIDE it (or at a
+// sensitive root) must not let a read/write escape — the realpath re-check
+// catches it after the lexical scope check passes.
+describe('broker-caps — symlink/realpath escape', () => {
+  // A SEPARATE temp tree that is NOT inside the ext dir (so it isn't covered by
+  // the always-granted ext-dir root) — the symlink target must be truly outside.
+  let outsideDir: string;
+  beforeEach(async () => {
+    extDir = await mkdtemp(join(tmpdir(), 'cc-brokercaps-'));
+    outsideDir = await mkdtemp(join(tmpdir(), 'cc-outside-'));
+  });
+  afterEach(async () => {
+    await rm(extDir, { recursive: true, force: true });
+    await rm(outsideDir, { recursive: true, force: true });
+  });
+
+  it('rejects a READ through a symlink inside a granted root pointing outside it', async () => {
+    const root = join(extDir, 'data');
+    await mkdir(root, { recursive: true });
+    // Secret lives OUTSIDE the ext dir entirely.
+    await writeFile(join(outsideDir, 'secret.txt'), 'TOPSECRET', 'utf-8');
+    // A symlink inside the granted root → the outside secret.
+    const link = join(root, 'link-to-secret');
+    await symlink(join(outsideDir, 'secret.txt'), link);
+    const caps = brokerFor({
+      alpha: grantFromManifest(['fs:read'], { fsRoots: [root] }, extDir)
+    });
+    // Lexically `root/link-to-secret` is inside the root, but its realpath is
+    // outside → must be denied.
+    await expect(caps.readFile('alpha', link)).rejects.toThrow(/PermissionDenied/);
+  });
+
+  it('rejects a WRITE to a new file whose PARENT dir is a symlink escaping the root', async () => {
+    const root = join(extDir, 'data');
+    await mkdir(root, { recursive: true });
+    // A symlinked subdir inside the root that points outside the ext dir.
+    const linkDir = join(root, 'sub');
+    await symlink(outsideDir, linkDir);
+    const caps = brokerFor({
+      alpha: grantFromManifest(['fs:write'], { fsRoots: [root] }, extDir)
+    });
+    // Writing root/sub/new.txt resolves the symlinked parent to `outsideDir` →
+    // escapes the granted root → denied (even though the leaf doesn't exist yet).
+    await expect(
+      caps.writeFile('alpha', join(linkDir, 'new.txt'), 'data')
+    ).rejects.toThrow(/PermissionDenied/);
+  });
+
+  it('rejects a WRITE through a symlink pointing into a sensitive root (~/.ssh)', async () => {
+    const root = join(extDir, 'data');
+    await mkdir(root, { recursive: true });
+    // Symlink inside the granted root → ~/.ssh (a sensitive root).
+    const link = join(root, 'ssh-link');
+    await symlink(resolve(homedir(), '.ssh'), link);
+    const caps = brokerFor({
+      alpha: grantFromManifest(['fs:write'], { fsRoots: [root] }, extDir)
+    });
+    await expect(
+      caps.writeFile('alpha', join(link, 'authorized_keys'), 'pwned')
+    ).rejects.toThrow(/PermissionDenied/);
+  });
+
+  it('still allows a legit read of a real file inside the granted root', async () => {
+    const root = join(extDir, 'data');
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, 'ok.txt'), 'fine', 'utf-8');
+    const caps = brokerFor({
+      alpha: grantFromManifest(['fs:read'], { fsRoots: [root] }, extDir)
+    });
+    expect(await caps.readFile('alpha', join(root, 'ok.txt'))).toBe('fine');
   });
 });
 

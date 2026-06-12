@@ -224,6 +224,40 @@ increasing strength: (a) **policy-only** (rely on review + the broker being the 
 denial, but still maturing. **Recommend (b) now, evaluate (c) when stable.** Note this only matters once
 you're loading *untrusted* code; for the curated set it's defense-in-depth.
 
+#### 2e-LANDED (P3-HARDEN) — the denylist as built, and its honest residual
+Option (b) shipped, generalized for the **ESM** child (`"type":"module"`), in
+`src/main/extensions/host-child-guard.ts`, installed by `host-child.ts` *before* the untrusted `import()`.
+The child is ESM, so a single `Module._load` shim is **not** enough — `import 'node:fs'` never goes through
+`_load`. The implemented guard is therefore **three layers**, each closing one reach-path verified to be
+exploitable:
+
+- **L1 — ESM loader hook** (`module.register()` of a `data:` URL whose `resolve` throws on a denied
+  specifier). Catches static AND dynamic `import` of a denied builtin across the whole untrusted module graph.
+- **L2 — `Module._load` patch.** Catches CJS `require`, reachable from ESM via `module.createRequire(...)('fs')`
+  — the loader hook does **not** see this path (verified). Also covers any transitive CJS dependency the ext
+  bundles.
+- **L3 — neutered `process.binding` / `process._linkedBinding`.** Closes the native-binding escape
+  (`process.binding('spawn_sync')`), which bypasses both L1 and L2 (verified).
+
+Denylist: `child_process, fs, fs/promises, net, dgram, http, https, http2, tls, dns, vm, worker_threads,
+cluster, inspector, repl, v8, module` (each in bare + `node:` form). `module` is denied to *untrusted* code
+too — the bootstrap's own `import 'node:module'` resolves before the hook registers, so denying it only
+affects the ext graph and removes the reflective foothold of the live `Module` namespace (`_cache`,
+`createRequire`). A well-behaved ext using only the broker `ctx` (exec/fs/fetch/storage/log over the port) is
+unaffected — none of those touch a raw builtin in the child.
+
+**HONEST RESIDUAL (do not overclaim a seal):** this is **JS-level capability deprivation in the same realm,
+not an OS sandbox.** It is bypassable in principle by:
+- **`process.dlopen`** — loading a native `.node` addon directly. Left in place deliberately (stubbing it
+  risks breaking legit native deps; the pure-JS-ext threat it adds is exotic) — an **accepted** residual.
+- a **realm/reflection escape** — JS-level guards run in the same realm as the ext; a sufficiently clever
+  reflective path is not provably sealed.
+
+So the bar moves from "trivial one-liner bypass" to "requires a native-addon or realm-escape exploit." The
+**true** seal remains option (c) — Node's `--permission` model or an OS sandbox at spawn — still the
+recommended follow-up when stable. This is the strongest *practical* mitigation without that OS boundary, and
+it is honestly **not** a hard seal.
+
 ### 2f. Crash isolation, kill, timeouts, teardown
 - **Crash isolation** is the headline win: a child segfault/`process.exit`/infinite loop no longer touches
   main. The host listens for the child's `exit`, marks the extension `mainActive:false`, surfaces it to the

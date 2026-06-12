@@ -51,11 +51,13 @@ export interface MainModuleContext {
    * (`child_process`/`fs`/`fetch`) directly and need not use these. The members
    * are optional so a `{storage, log}`-only module still typechecks.
    *
-   * RESIDUAL (honest): a disk extension's child is still a Node process, so a
-   * malicious one can `import('node:child_process')` itself and bypass `exec`
-   * until a Node-builtin denylist lands (a separate, deferred ticket). These
-   * brokered caps are the SANCTIONED, permission-gated, audited path — not yet a
-   * hard seal on raw Node.
+   * RESIDUAL (honest): the child now installs a Node-builtin denylist
+   * (P3-HARDEN: ESM loader hook + CJS `require` patch + neutered
+   * `process.binding`), so `import('node:child_process')` / `require('fs')` no
+   * longer trivially bypass `exec`. These brokered caps are the SANCTIONED,
+   * permission-gated, audited path. This is JS-level deprivation, NOT an OS
+   * sandbox — a native addon (`process.dlopen`) or realm escape could still reach
+   * raw OS; the true seal (Node `--permission` / OS sandbox) is a follow-up.
    */
   exec?: (req: ExecRequest) => Promise<ExecResult>;
   fs?: {
@@ -81,8 +83,16 @@ export interface ExecRequest {
 export interface ExecResult {
   stdout: string;
   stderr: string;
-  /** Process exit code, or null if killed by signal. */
+  /** Process exit code, or null if the process exited via a signal. */
   code: number | null;
+  /**
+   * The signal the process exited on (e.g. `"SIGSEGV"`), when `code` is null;
+   * otherwise absent. NOTE: a *spawn failure* (bin not found) or a *host
+   * watchdog kill* (timeout / output-cap exceeded) does not return a result at
+   * all — `ctx.exec` REJECTS in those cases (S3), so a `{code:null}` result here
+   * always means "ran, then died on a signal", never "never ran".
+   */
+  signal?: string | null;
 }
 
 /** Minimal, JSON-serialisable fetch init the broker honours. */
