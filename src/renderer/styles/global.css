@@ -730,13 +730,11 @@ body.resizing-col {
   text-overflow: ellipsis;
 }
 
-.project-terminal-unread {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-blue);
-  flex: 0 0 auto;
-  box-shadow: 0 0 6px rgba(47, 129, 247, 0.6);
+/* Unread output: brighten + embolden the session name (Slack/Linear style)
+   instead of a second status dot, which collided with the agent-state dot. */
+.project-terminal-row.unread .project-terminal-name {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .project-terminal-close {

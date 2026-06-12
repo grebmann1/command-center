@@ -279,13 +279,14 @@ function ProjectFocusView({ project }: { project: Project }) {
                     {bucket.sessions.map((t) => {
                       const exited = t.status === 'exited';
                       const bad = exited && (t.exitCode ?? 0) !== 0;
+                      const isUnread = !!unread[t.id] && activeTab !== t.id;
                       return (
                         <div
                           key={t.id}
                           role="listitem"
                           className={`project-terminal-row ${activeTab === t.id ? 'active' : ''} ${
                             exited ? 'exited' : ''
-                          } ${bad ? 'exited-bad' : ''}`}
+                          } ${bad ? 'exited-bad' : ''} ${isUnread ? 'unread' : ''}`}
                           onClick={(e) => {
                             e.stopPropagation();
                             if (isBackground) {
@@ -295,12 +296,15 @@ function ProjectFocusView({ project }: { project: Project }) {
                               selectTab(project.id, t.id);
                             }
                           }}
+                          aria-label={isUnread ? `${t.title} · unread output` : undefined}
                           title={
                             isBackground
                               ? `${t.title} · running in the background — click to resume`
                               : exited && t.exitCode != null
                                 ? `${t.title} · exited (code ${t.exitCode})`
-                                : t.title
+                                : isUnread
+                                  ? `${t.title} · unread output`
+                                  : t.title
                           }
                         >
                           <span
@@ -318,9 +322,6 @@ function ProjectFocusView({ project }: { project: Project }) {
                             >
                               ✗{t.exitCode}
                             </span>
-                          )}
-                          {unread[t.id] && activeTab !== t.id && (
-                            <span className="project-terminal-unread" aria-label="Unread output" />
                           )}
                           {isBackground && (
                             <button
@@ -967,22 +968,26 @@ function ProjectsList() {
                   {list.map((t) => {
                     const exited = t.status === 'exited';
                     const bad = exited && (t.exitCode ?? 0) !== 0;
+                    const isUnread = !!unread[t.id] && activeTab !== t.id;
                     return (
                     <div
                       key={t.id}
                       role="listitem"
                       className={`project-terminal-row ${activeTab === t.id ? 'active' : ''} ${
                         exited ? 'exited' : ''
-                      } ${bad ? 'exited-bad' : ''}`}
+                      } ${bad ? 'exited-bad' : ''} ${isUnread ? 'unread' : ''}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         selectProject(p.id);
                         selectTab(p.id, t.id);
                       }}
+                      aria-label={isUnread ? `${t.title} · unread output` : undefined}
                       title={
                         exited && t.exitCode != null
                           ? `${t.title} · exited (code ${t.exitCode})`
-                          : t.title
+                          : isUnread
+                            ? `${t.title} · unread output`
+                            : t.title
                       }
                     >
                       <span
@@ -997,9 +1002,6 @@ function ProjectsList() {
                         <span className="project-terminal-exit-bad" aria-label={`Exit code ${t.exitCode}`}>
                           ✗{t.exitCode}
                         </span>
-                      )}
-                      {unread[t.id] && activeTab !== t.id && (
-                        <span className="project-terminal-unread" aria-label="Unread output" />
                       )}
                       <button
                         type="button"
