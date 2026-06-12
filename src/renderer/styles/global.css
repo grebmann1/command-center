@@ -1224,13 +1224,32 @@ body.resizing-col {
 
 .workspace-topbar {
   display: flex;
-  align-items: stretch;
+  flex-direction: column;
   min-width: 0;
   border-bottom: 1px solid var(--border);
   background: var(--bg-base);
 }
 
-.workspace-topbar > .tabbar {
+/* Mode switcher row — sits above the tabs so a long tab strip can't squeeze
+   it. Right-aligned, with a hairline separating it from the tabs below. */
+.workspace-topbar-modes {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Tabs row — the flex container the TabBar fills. */
+.workspace-topbar-tabs {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.workspace-topbar-tabs > .tabbar {
   flex: 1;
   min-width: 0;
   border-bottom: none;
@@ -4595,8 +4614,11 @@ body.resizing-col {
 .workspace-mode-segmented {
   display: inline-flex;
   align-items: stretch;
-  border-left: 1px solid var(--border);
   flex: 0 0 auto;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
 }
 .workspace-mode-segmented > button {
   display: inline-flex;
@@ -7406,6 +7428,26 @@ body.resizing-col {
 .gus-open-btn:hover {
   border-color: var(--accent-blue);
   color: var(--accent-blue);
+}
+.gus-launch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--accent-blue);
+  border: 1px solid var(--accent-blue);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.gus-launch-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.gus-launch-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 .gus-modal-body {
   padding: 16px 18px 20px;

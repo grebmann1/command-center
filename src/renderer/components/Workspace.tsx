@@ -210,6 +210,15 @@ export function Workspace() {
   return (
     <main className="workspace">
       <div className="workspace-topbar">
+        {/* Mode switcher (Terminals/Explorer/Preview/Library) on its own row
+            above the tabs, so a long tab strip never squeezes it. */}
+        {project && (
+          <div className="workspace-topbar-modes">
+            {layoutPicker}
+            {modeToggle}
+          </div>
+        )}
+        <div className="workspace-topbar-tabs">
         {isTerminals ? (
           <TabBar
             tabs={tabs}
@@ -264,8 +273,7 @@ export function Workspace() {
             <span className="explorer-topbar-label">Preview</span>
           </div>
         )}
-        {layoutPicker}
-        {modeToggle}
+        </div>
       </div>
       <div className="workspace-body">
         <div
