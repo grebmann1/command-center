@@ -19,7 +19,8 @@ import {
   Paperclip,
   FileText,
   Image as ImageIcon,
-  Film
+  Film,
+  Terminal
 } from 'lucide-react';
 import type { ModuleHost } from '@cctc/extension-sdk/renderer';
 import type { GusAttachment, GusChatterPost, GusWorkDetail, GusWorkItem } from '../shared/types';
@@ -96,6 +97,33 @@ function initials(name: string): string {
     .join('');
 }
 
+/** Strip GUS rich-text HTML down to plain text, for embedding in a prompt. */
+function htmlToText(html?: string): string {
+  if (!html) return '';
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return (doc.body.textContent ?? '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Build the opening prompt that seeds the launched Claude session. */
+function buildLaunchPrompt(d: GusWorkDetail): string {
+  const lines = [`Work GUS ${d.type ?? 'work item'} ${d.name}: ${d.subject}`];
+  const meta = [
+    d.status && `Status: ${d.status}`,
+    d.priority && `Priority: ${d.priority}`,
+    d.teamName && `Team: ${d.teamName}`,
+    d.productTag && `Product: ${d.productTag}`,
+    d.assignee && `Assignee: ${d.assignee}`
+  ].filter(Boolean);
+  if (meta.length > 0) lines.push(meta.join(' · '));
+  const details = htmlToText(d.detailsHtml);
+  if (details) lines.push('', 'Details:', details);
+  lines.push(
+    '',
+    'Investigate this work item and help me resolve it. Start by summarizing what it asks for.'
+  );
+  return lines.join('\n');
+}
+
 export function GusDetailModal({ host, item, instanceUrl, onClose }: Props) {
   const [detail, setDetail] = useState<GusWorkDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,6 +132,8 @@ export function GusDetailModal({ host, item, instanceUrl, onClose }: Props) {
   const [chatterLoading, setChatterLoading] = useState(true);
   const [files, setFiles] = useState<GusAttachment[] | null>(null);
   const [filesLoading, setFilesLoading] = useState(true);
+  // True while a Claude session is being spawned, so the button can disable.
+  const [launching, setLaunching] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -179,6 +209,38 @@ export function GusDetailModal({ host, item, instanceUrl, onClose }: Props) {
   // Merge: show the card's fields immediately, enrich with detail when loaded.
   const d: GusWorkDetail = { ...item, ...(detail ?? {}) };
 
+  // Spawn a Claude session in the active project, seeded with this work item's
+  // context. Mirrors the inbox/Zana launch pattern via `host.launchSession`.
+  const launchClaude = async () => {
+    const project = host.getActiveProject();
+    if (!project) {
+      host.toast('Open a project to launch Claude.', 'error');
+      return;
+    }
+    setLaunching(true);
+    try {
+      const res = await host.launchSession({
+        projectId: project.id,
+        cwd: project.path,
+        title: `Claude: ${d.name}`,
+        extraArgs: [buildLaunchPrompt(d)]
+      });
+      if (res) {
+        host.toast(`Launched Claude for ${d.name}`);
+        onClose();
+      } else {
+        host.toast("Couldn't launch Claude.", 'error');
+      }
+    } catch (err) {
+      host.toast(
+        `Couldn't launch Claude — ${err instanceof Error ? err.message : String(err)}`,
+        'error'
+      );
+    } finally {
+      setLaunching(false);
+    }
+  };
+
   const facts: Array<[string, string | undefined | null]> = [
     ['Status', d.status],
     ['Priority', d.priority],
@@ -217,6 +279,15 @@ export function GusDetailModal({ host, item, instanceUrl, onClose }: Props) {
             )}
           </div>
           <div className="gus-modal-header-actions">
+            <button
+              type="button"
+              className="gus-launch-btn"
+              onClick={launchClaude}
+              disabled={launching}
+            >
+              {launching ? <Loader2 size={13} className="gus-spin" /> : <Terminal size={13} />}
+              <span>Launch Claude</span>
+            </button>
             <button type="button" className="gus-open-btn" onClick={openInGus}>
               <ExternalLink size={13} />
               <span>Open in GUS</span>
