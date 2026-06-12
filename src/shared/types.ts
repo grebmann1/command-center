@@ -811,6 +811,24 @@ export interface ExtensionEntry {
    * clean load.
    */
   error?: ExtensionLoadError;
+  /**
+   * P3-D install-time consent. True when the user has approved this extension's
+   * CURRENT declared permissions. A disk extension does NOT run its main / mount
+   * its panel until consented — distinct from `enabled` (the user may enable it,
+   * but it stays inactive until consent is granted). Built-in modules never need
+   * consent and don't appear in the discovered list.
+   */
+  consented: boolean;
+  /**
+   * Why this extension needs a consent prompt, or null when fully consented:
+   *  - `'new'`     — never approved (first install).
+   *  - `'widened'` — an update DECLARED more permissions than the user approved;
+   *                  re-prompt showing the new ones. The extension stays inactive
+   *                  (effective grant = declared ∩ consented) until re-approved.
+   * Null for: a consented ext, OR an entry with no manifest / not a candidate to
+   * run (bad-manifest / version-mismatch — nothing to consent to).
+   */
+  needsConsent: 'new' | 'widened' | null;
 }
 
 export type ExtensionLoadError =
@@ -828,6 +846,16 @@ export interface ExtensionManifestView {
   entry: { renderer?: string; main?: string };
   engines: { cctcApi: string };
   permissions?: string[];
+  /**
+   * Scoping for the brokered permissions (exec bins / fs roots / egress hosts).
+   * Surfaced so the renderer host can apply advisory scope checks and the P3-D
+   * consent screen can render what an extension may run/read/reach.
+   */
+  permissionScopes?: {
+    execAllowlist?: string[];
+    fsRoots?: string[];
+    egressAllowlist?: string[];
+  };
 }
 
 export type McpSource = 'user' | 'plugin' | 'project';
@@ -1064,6 +1092,13 @@ export interface CcApi {
     setEnabled(id: string, enabled: boolean): Promise<Result<true>>;
     reveal(id: string): Promise<Result<true>>;
     readRendererEntry(id: string): Promise<string | null>;
+    /**
+     * P3-D: record the user's consent to the extension's CURRENT declared
+     * permissions, then re-discover (spawning/mounting it). After this the
+     * entry's `consented` is true / `needsConsent` is null until an update
+     * widens the declared set.
+     */
+    grantConsent(id: string): Promise<Result<true>>;
     onChanged(cb: (entries: ExtensionEntry[]) => void): () => void;
   };
   claudeSettings: {

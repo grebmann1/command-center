@@ -28,8 +28,17 @@ import type { MainModule, MainModuleContext } from './main.js';
 export const SDK_API_VERSION = 1;
 
 /**
- * Capabilities an extension may declare it intends to use. **Declared now,
- * enforced later** — see `AppModule.permissions`.
+ * Capabilities an extension may declare it intends to use.
+ *
+ * As of Phase 3-B these are **ENFORCED deny-by-default for DISK extensions**:
+ * a brokered capability or gated host method whose permission is absent from
+ * the extension's granted set is rejected. Built-in modules (gus/zana, shipped
+ * with the app) are TRUSTED and bypass enforcement entirely — the trust tier is
+ * PROVENANCE, not capability.
+ *
+ * The `exec` / `fs:read` / `fs:write` / `net` tokens gate the brokered
+ * {@link MainModuleContext} capabilities (P3-B); their scoping (which bins /
+ * paths / hosts) is declared alongside in {@link ExtensionManifest.permissionScopes}.
  */
 export type ExtensionPermission =
   | 'storage'
@@ -37,7 +46,32 @@ export type ExtensionPermission =
   | 'projects:select'
   | 'session:launch'
   | 'external:open'
-  | 'inbox:push';
+  | 'inbox:push'
+  // Brokered main-side capabilities (P3-B), scoped via `permissionScopes`:
+  | 'exec'
+  | 'fs:read'
+  | 'fs:write'
+  | 'net';
+
+/**
+ * Per-permission SCOPING an extension declares alongside its `permissions`.
+ * The permission token says "may exec / read / reach"; the scope says **what**.
+ * Deny-by-default: an empty/absent scope means the gate rejects every concrete
+ * request even if the bare permission is granted. Surfaced verbatim to the P3-D
+ * consent screen so the user sees exactly what an extension may run/read/reach.
+ */
+export interface ExtensionPermissionScopes {
+  /** Allowed executable basenames for `ctx.exec` (e.g. `["sf","git"]`). No paths, no shell. */
+  execAllowlist?: string[];
+  /**
+   * Filesystem roots `ctx.fs.*` may touch, as absolute paths or `~`-prefixed
+   * home paths. A request is allowed only if its canonical path is within one
+   * granted root. The extension's OWN dir is always implicitly readable.
+   */
+  fsRoots?: string[];
+  /** Allowed egress hosts for `ctx.fetch` (hostname only, e.g. `["api.github.com"]`). */
+  egressAllowlist?: string[];
+}
 
 /**
  * Static description of a runtime-loaded extension, authored as the `cctc`
@@ -77,8 +111,18 @@ export interface ExtensionManifest {
   entry: { renderer?: string; main?: string };
   /** Contract-version requirement (see {@link checkApiCompat}), e.g. `">=1 <2"`. */
   engines: { cctcApi: string };
-  /** Capabilities the extension intends to use. Declared now, enforced in a later phase. */
+  /**
+   * Capabilities the extension intends to use. ENFORCED deny-by-default for disk
+   * extensions as of P3-B (built-ins bypass). The granted set is derived from
+   * this list today; P3-D will intersect it with explicit user consent.
+   */
   permissions?: ExtensionPermission[];
+  /**
+   * Scoping for the brokered permissions (`exec`/`fs:*`/`net`). Optional; an
+   * absent scope means the corresponding capability rejects every concrete
+   * request (deny-by-default) even when the bare permission is granted.
+   */
+  permissionScopes?: ExtensionPermissionScopes;
 }
 
 /**

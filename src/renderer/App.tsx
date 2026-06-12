@@ -15,6 +15,7 @@ import { ResumePicker } from './components/ResumePicker';
 import { SearchPanel } from './components/SearchPanel';
 import { ShortcutsHelp } from './components/ShortcutsHelp';
 import { Toaster } from './components/Toaster';
+import { ExtensionConsent } from './components/ExtensionConsent';
 import { ModulePanelHost } from './modules/ModulePanelHost';
 import { useMergedModules } from './modules';
 import { initExtensionModules, reconcileExtensionModules } from './modules/loader';
@@ -244,6 +245,7 @@ export function App() {
       <SearchPanelHost />
       <ShortcutsHelpHost />
       <Toaster />
+      <ExtensionConsent />
     </div>
   );
 }

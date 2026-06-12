@@ -163,6 +163,7 @@ const api: CcApi = {
     setEnabled: (id, enabled) => ipcRenderer.invoke(IPC.extensions.setEnabled, id, enabled),
     reveal: (id) => ipcRenderer.invoke(IPC.extensions.reveal, id),
     readRendererEntry: (id) => ipcRenderer.invoke(IPC.extensions.readRendererEntry, id),
+    grantConsent: (id) => ipcRenderer.invoke(IPC.extensions.grantConsent, id),
     onChanged: (cb) => {
       const handler = (_e: unknown, entries: ExtensionEntry[]) => cb(entries);
       ipcRenderer.on(IPC.extensions.onChanged, handler);

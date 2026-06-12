@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { resolveContained } from './path-util.js';
+import { readConsentMap, consentStateFor, type ConsentMap } from './consent.js';
 import { checkApiCompat, type ExtensionManifest } from '@cctc/extension-sdk';
 import type {
   ExtensionEntry,
@@ -121,6 +122,7 @@ function validateManifest(raw: unknown): ExtensionManifest | null {
   const permissions = Array.isArray(m.permissions)
     ? (m.permissions.filter((p) => typeof p === 'string') as ExtensionManifest['permissions'])
     : undefined;
+  const permissionScopes = parsePermissionScopes(m.permissionScopes);
 
   return {
     id: m.id,
@@ -132,8 +134,22 @@ function validateManifest(raw: unknown): ExtensionManifest | null {
       main: typeof main === 'string' ? main : undefined
     },
     engines: { cctcApi: engines.cctcApi },
-    permissions
+    permissions,
+    permissionScopes
   };
+}
+
+/** Parse + sanitize the optional `permissionScopes` block (string[] fields only). */
+function parsePermissionScopes(raw: unknown): ExtensionManifest['permissionScopes'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const s = raw as Record<string, unknown>;
+  const strArray = (v: unknown): string[] | undefined =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x) : undefined;
+  const execAllowlist = strArray(s.execAllowlist);
+  const fsRoots = strArray(s.fsRoots);
+  const egressAllowlist = strArray(s.egressAllowlist);
+  if (!execAllowlist && !fsRoots && !egressAllowlist) return undefined;
+  return { execAllowlist, fsRoots, egressAllowlist };
 }
 
 /** Project an SDK manifest down to the renderer-safe view in shared/types. */
@@ -145,7 +161,18 @@ function toManifestView(m: ExtensionManifest): ExtensionManifestView {
     titleLabel: m.titleLabel,
     entry: { renderer: m.entry.renderer, main: m.entry.main },
     engines: { cctcApi: m.engines.cctcApi },
-    permissions: m.permissions ? [...m.permissions] : undefined
+    permissions: m.permissions ? [...m.permissions] : undefined,
+    permissionScopes: m.permissionScopes
+      ? {
+          execAllowlist: m.permissionScopes.execAllowlist
+            ? [...m.permissionScopes.execAllowlist]
+            : undefined,
+          fsRoots: m.permissionScopes.fsRoots ? [...m.permissionScopes.fsRoots] : undefined,
+          egressAllowlist: m.permissionScopes.egressAllowlist
+            ? [...m.permissionScopes.egressAllowlist]
+            : undefined
+        }
+      : undefined
   };
 }
 
@@ -165,8 +192,15 @@ export async function discoverExtensions(log: LogFn = noopLog): Promise<Discover
   const root = getExtensionsDir();
   if (!existsSync(root)) return [];
 
-  const [dirs, enabledMap] = await Promise.all([listDirs(root), readEnabledMap()]);
-  const out: DiscoveredExtension[] = [];
+  const [dirs, enabledMap, consentMap] = await Promise.all([
+    listDirs(root),
+    readEnabledMap(),
+    readConsentMap()
+  ]);
+  // The loop builds entries WITHOUT the consent fields; a single post-loop pass
+  // stamps `consented`/`needsConsent` from `consentMap` so there's one place
+  // that owns the consent decision (and the per-error literals stay terse).
+  const out: RawDiscovered[] = [];
 
   for (const name of dirs) {
     if (isInternalName(name)) continue;
@@ -285,11 +319,26 @@ export async function discoverExtensions(log: LogFn = noopLog): Promise<Discover
     });
   }
 
-  out.sort((a, b) => a.id.localeCompare(b.id));
-  return out;
+  // Stamp consent. Only an entry that is a live RUN CANDIDATE (loaded + has a
+  // manifest, i.e. enabled + version-OK) carries a real consent decision; a
+  // skipped/errored/disabled entry has nothing to run, so `needsConsent:null`
+  // and `consented:false` (it isn't "consented", it's simply inactive).
+  const stamped: DiscoveredExtension[] = out.map((e) => {
+    const declared = e.manifest?.permissions;
+    const candidate = e.loaded && !!e.manifest;
+    if (!candidate) return { ...e, consented: false, needsConsent: null };
+    const { consented, needsConsent } = consentStateFor(declared, consentMap, e.id);
+    return { ...e, consented, needsConsent };
+  });
+
+  stamped.sort((a, b) => a.id.localeCompare(b.id));
+  return stamped;
 }
 
-function badEntry(id: string, dir: string): DiscoveredExtension {
+/** A discovered entry before the consent fields are stamped on. */
+type RawDiscovered = Omit<DiscoveredExtension, 'consented' | 'needsConsent'>;
+
+function badEntry(id: string, dir: string): RawDiscovered {
   return {
     id,
     path: dir,
@@ -350,7 +399,9 @@ export function toEntry(d: DiscoveredExtension): ExtensionEntry {
     enabled: d.enabled,
     loaded: d.loaded,
     mainActive: d.mainActive,
-    error: d.error
+    error: d.error,
+    consented: d.consented,
+    needsConsent: d.needsConsent
   };
 }
 

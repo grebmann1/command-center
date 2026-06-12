@@ -5,4 +5,12 @@
  * from `@cctc/extension-sdk/main` directly.
  */
 
-export type { MainModule, MainModuleContext, ModuleCapability } from '@cctc/extension-sdk/main';
+export type {
+  MainModule,
+  MainModuleContext,
+  ModuleCapability,
+  ExecRequest,
+  ExecResult,
+  BrokeredFetchInit,
+  BrokeredFetchResponse
+} from '@cctc/extension-sdk/main';

@@ -12,6 +12,10 @@
 import type { ComponentType } from 'react';
 import type { ExtensionPermission } from './index.js';
 
+// Re-export so renderer-side consumers (e.g. the host permission gate) can
+// import the permission vocabulary from the renderer subpath directly.
+export type { ExtensionPermission } from './index.js';
+
 /**
  * A SMALL, stable session shape owned by the SDK and surfaced in
  * {@link HostEvents}. Deliberately *not* core's `TerminalSession` — the SDK

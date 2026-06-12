@@ -235,7 +235,7 @@ describe('extension loader', () => {
     await rm(extDir, { recursive: true, force: true });
   });
 
-  it('imports a valid main module and collects it', async () => {
+  it('does NOT spawn a main-bearing extension until it is consented (P3-D)', async () => {
     const dir = await writeExt('mainmod', {
       id: 'mainmod',
       title: 'MainMod',
@@ -243,22 +243,37 @@ describe('extension loader', () => {
       entry: { main: './main.mjs' },
       engines: goodEngines
     });
+    // P3-A: this file must NEVER be import()'d by the loader (untrusted code runs
+    // in the child). A side-effecting throw here would surface if it were.
     await writeFile(
       join(dir, 'main.mjs'),
-      `export default { id: 'mainmod', setup() { return { ping: () => 'pong' }; } };`,
+      `throw new Error('loader must not import this into main');`,
       'utf-8'
     );
     const { loadExtensions } = await importLoader();
-    const { entries, modules } = await loadExtensions();
-    expect(entries).toHaveLength(1);
-    // Boot path imports the module → mainActive true.
-    expect(entries[0]).toMatchObject({ id: 'mainmod', loaded: true, mainActive: true });
-    expect(entries[0].error).toBeUndefined();
-    expect(modules).toHaveLength(1);
-    expect(modules[0].id).toBe('mainmod');
+
+    // Unconsented → discovered + listed (so the UI can prompt) but NO spec.
+    const first = await loadExtensions();
+    expect(first.entries).toHaveLength(1);
+    expect(first.entries[0]).toMatchObject({
+      id: 'mainmod',
+      loaded: true,
+      mainActive: false,
+      consented: false,
+      needsConsent: 'new'
+    });
+    expect(first.diskSpecs).toHaveLength(0);
+    expect(first.modules).toHaveLength(0);
+
+    // After consent → a spawn spec is collected; still never imported into main.
+    const { grantConsent } = await import('../extensions/consent.js');
+    await grantConsent('mainmod', []); // manifest declares no perms → grant the empty set
+    const after = await loadExtensions();
+    expect(after.entries[0]).toMatchObject({ consented: true, needsConsent: null });
+    expect(after.diskSpecs).toEqual([{ moduleId: 'mainmod', entryPath: join(dir, 'main.mjs') }]);
   });
 
-  it('re-discovery mode does not import; mainActive reflects the live host set', async () => {
+  it('re-discovery mode collects no spec; mainActive reflects the live set', async () => {
     const dir = await writeExt('reenable', {
       id: 'reenable',
       title: 'ReEnable',
@@ -266,61 +281,21 @@ describe('extension loader', () => {
       entry: { main: './main.mjs' },
       engines: goodEngines
     });
-    await writeFile(
-      join(dir, 'main.mjs'),
-      `export default { id: 'reenable', setup() { return {}; } };`,
-      'utf-8'
-    );
+    await writeFile(join(dir, 'main.mjs'), `export default { id: 'reenable', setup() {} };`, 'utf-8');
     const { loadExtensions } = await importLoader();
 
-    // Re-enabled but NOT loaded into the host this boot → mainActive:false, and
-    // no module is collected (no re-import). This is the "needs relaunch" state.
+    // Re-enabled but no live child → mainActive:false, no spec (needs relaunch).
     const notLive = await loadExtensions({ activeMainIds: new Set<string>() });
-    expect(notLive.modules).toHaveLength(0);
-    expect(notLive.entries[0]).toMatchObject({
-      id: 'reenable',
-      loaded: true,
-      mainActive: false
-    });
+    expect(notLive.diskSpecs).toHaveLength(0);
+    expect(notLive.entries[0]).toMatchObject({ id: 'reenable', loaded: true, mainActive: false });
 
-    // Already live in the host (loaded at boot) → mainActive:true, still no
-    // re-import.
+    // Child live in the host → mainActive:true, still no spec.
     const live = await loadExtensions({ activeMainIds: new Set(['reenable']) });
-    expect(live.modules).toHaveLength(0);
+    expect(live.diskSpecs).toHaveLength(0);
     expect(live.entries[0].mainActive).toBe(true);
   });
 
-  it('isolates a failing main import as main-load-failed without collecting it', async () => {
-    const dir = await writeExt('boom', {
-      id: 'boom',
-      title: 'Boom',
-      icon: 'Cog',
-      entry: { main: './main.mjs' },
-      engines: goodEngines
-    });
-    await writeFile(join(dir, 'main.mjs'), `throw new Error('kaboom');`, 'utf-8');
-    const { loadExtensions } = await importLoader();
-    const { entries, modules } = await loadExtensions();
-    expect(entries[0]).toMatchObject({ id: 'boom', loaded: false, error: 'main-load-failed' });
-    expect(modules).toHaveLength(0);
-  });
-
-  it('stamps main-load-failed when default export is not a MainModule', async () => {
-    const dir = await writeExt('notmod', {
-      id: 'notmod',
-      title: 'NotMod',
-      icon: 'Cog',
-      entry: { main: './main.mjs' },
-      engines: goodEngines
-    });
-    await writeFile(join(dir, 'main.mjs'), `export default { nope: true };`, 'utf-8');
-    const { loadExtensions } = await importLoader();
-    const { entries, modules } = await loadExtensions();
-    expect(entries[0]).toMatchObject({ id: 'notmod', loaded: false, error: 'main-load-failed' });
-    expect(modules).toHaveLength(0);
-  });
-
-  it('does not import the main module of a renderer-only extension', async () => {
+  it('does not collect a spec for a renderer-only extension', async () => {
     await writeExt('renderonly', {
       id: 'renderonly',
       title: 'RenderOnly',
@@ -329,8 +304,8 @@ describe('extension loader', () => {
       engines: goodEngines
     });
     const { loadExtensions } = await importLoader();
-    const { entries, modules } = await loadExtensions();
+    const { entries, diskSpecs } = await loadExtensions();
     expect(entries[0]).toMatchObject({ id: 'renderonly', loaded: true, mainActive: true });
-    expect(modules).toHaveLength(0);
+    expect(diskSpecs).toHaveLength(0);
   });
 });

@@ -13,10 +13,10 @@
  * exercise it without mocking `app`.
  */
 
-import { pathToFileURL } from 'node:url';
 import type { MainModule } from '@cctc/extension-sdk/main';
-import { discoverExtensions, toEntry, type DiscoveredExtension } from './discovery.js';
+import { discoverExtensions, toEntry } from './discovery.js';
 import type { ExtensionEntry } from '../../shared/types.js';
+import type { DiskExtensionSpec } from './process-host.js';
 
 type LogFn = (message: string, err?: unknown) => void;
 const noopLog: LogFn = () => {};
@@ -24,51 +24,58 @@ const noopLog: LogFn = () => {};
 export interface LoadedExtensions {
   /** Renderer-facing entries (manifest + enabled + loaded + mainActive + error). */
   entries: ExtensionEntry[];
-  /** Main modules to merge into `moduleHost.setupAll`. */
+  /**
+   * Main modules to merge into `moduleHost.setupAll`. Always EMPTY now: under
+   * P3-A disk-extension main code is NEVER imported into the Electron main
+   * process. It is spawned out-of-process instead — see `diskSpecs`. The field
+   * is retained (empty) so the boot caller's destructure keeps compiling and a
+   * future trusted-disk path could repopulate it.
+   */
   modules: MainModule[];
+  /**
+   * Disk extensions to spawn out-of-process: each enabled, compatible,
+   * main-bearing extension's id + resolved absolute main entry path. The host
+   * forks one `utilityProcess` per spec via `ExtensionProcessHost.spawn`. The
+   * untrusted `import()` happens in that child, never here.
+   */
+  diskSpecs: DiskExtensionSpec[];
 }
 
 export interface LoadOptions {
   log?: LogFn;
   /**
    * When provided, the loader runs in **re-discovery mode**: it does NOT
-   * `import()` any main module (an ESM import is cached by URL — a re-import
-   * after teardown returns the SAME, still-half-initialised instance, so a
-   * naive re-setup is a partial no-op). Instead it stamps each main-bearing
-   * entry's `mainActive` from this set — the ids the host actually has live in
-   * `moduleHost` right now. Main modules are relaunch-required to (re)activate,
-   * so a re-enabled-but-not-relaunched extension correctly reads
-   * `mainActive:false` and the renderer can surface a relaunch hint.
+   * collect any spawn spec. Instead it stamps each main-bearing entry's
+   * `mainActive` from this set — the ids whose `utilityProcess` child is live
+   * right now (the union of in-process built-ins + live out-of-process children,
+   * supplied by the router's `liveModuleIds`). A disk extension's main side is
+   * relaunch-required to (re)activate, so a re-enabled-but-not-relaunched
+   * extension correctly reads `mainActive:false` and the renderer surfaces a
+   * relaunch hint.
    *
-   * Omit on the BOOT path: the loader imports each main module and marks the
-   * ones it collected `mainActive:true`.
+   * Omit on the BOOT path: the loader collects a spawn spec per main-bearing
+   * extension; the caller forks one child per spec. `mainActive` is left false
+   * here (no child has reported ready yet) and re-stamped from the live set.
    */
   activeMainIds?: ReadonlySet<string>;
 }
 
 /**
- * A `MainModule` looks structurally valid: an object with a string `id` and a
- * `setup` function. We don't trust the disk bundle's `default` blindly.
- */
-function isMainModule(v: unknown): v is MainModule {
-  if (!v || typeof v !== 'object') return false;
-  const m = v as Record<string, unknown>;
-  return typeof m.id === 'string' && !!m.id && typeof m.setup === 'function';
-}
-
-/**
  * Discover extensions and resolve each one's main-side state.
  *
- * BOOT path (no `activeMainIds`): import the main module of each enabled,
- * compatible extension that declares `entry.main`, take its `default` as a
- * `MainModule`, and collect it. The caller merges `modules` with `MAIN_MODULES`
- * and runs `setupAll` once. Collected modules' entries are marked
- * `mainActive:true`; a failed import stamps `loaded:false` + `main-load-failed`.
+ * BOOT path (no `activeMainIds`): for each enabled, compatible, CONSENTED
+ * extension that declares `entry.main`, collect a `DiskExtensionSpec` (id +
+ * resolved entry path). The loader DOES NOT import the module — under P3-A the
+ * untrusted `import()` happens in a per-extension `utilityProcess`, never in
+ * main. The caller spawns one child per spec and re-stamps `mainActive` from the
+ * live set. P3-D: an enabled-but-UNCONSENTED (or permission-widened) extension
+ * is NOT spawned — consent precedes any code running — so it yields no spec and
+ * stays `mainActive:false` until the user approves.
  *
- * RE-DISCOVERY path (`activeMainIds` provided): do NOT import anything — just
- * re-read the manifests/enabled-map and stamp each main-bearing entry's
- * `mainActive` from the live set. `modules` comes back empty (the host already
- * has its boot-time modules; main modules are relaunch-required to (re)activate).
+ * RE-DISCOVERY path (`activeMainIds` provided): collect no specs — re-read the
+ * manifests/enabled-map and stamp each main-bearing entry's `mainActive` from
+ * the live set. A re-enabled-but-not-relaunched extension reads
+ * `mainActive:false`.
  */
 export async function loadExtensions(opts: LoadOptions = {}): Promise<LoadedExtensions> {
   const log = opts.log ?? noopLog;
@@ -76,7 +83,7 @@ export async function loadExtensions(opts: LoadOptions = {}): Promise<LoadedExte
   const activeMainIds = opts.activeMainIds ?? new Set<string>();
 
   const discovered = await discoverExtensions(log);
-  const modules: MainModule[] = [];
+  const diskSpecs: DiskExtensionSpec[] = [];
   const entries: ExtensionEntry[] = [];
 
   for (const ext of discovered) {
@@ -84,48 +91,20 @@ export async function loadExtensions(opts: LoadOptions = {}): Promise<LoadedExte
 
     if (ext.mainEntryPath && ext.loaded) {
       if (reDiscover) {
-        // No import: a main module is only active if the host loaded it at boot.
+        // A main module is only active if its child is live right now.
         entry.mainActive = activeMainIds.has(ext.id);
+      } else if (ext.consented) {
+        // Boot path: only a CONSENTED ext is spawned. Not active until the child
+        // reports ready (caller re-stamps from the live set). An unconsented /
+        // widened ext is skipped here — its main never runs until approval.
+        diskSpecs.push({ moduleId: ext.id, entryPath: ext.mainEntryPath });
+        entry.mainActive = false;
       } else {
-        const mod = await importMainModule(ext, log);
-        if (mod) {
-          modules.push(mod);
-          entry.mainActive = true;
-        } else {
-          entry.loaded = false;
-          entry.mainActive = false;
-          entry.error = 'main-load-failed';
-        }
+        entry.mainActive = false;
       }
     }
     entries.push(entry);
   }
 
-  return { entries, modules };
-}
-
-/** Dynamic-import one extension's main module; returns null on any failure. */
-async function importMainModule(
-  ext: DiscoveredExtension,
-  log: LogFn
-): Promise<MainModule | null> {
-  if (!ext.mainEntryPath) return null;
-  try {
-    const url = pathToFileURL(ext.mainEntryPath).href;
-    const imported = (await import(/* @vite-ignore */ url)) as { default?: unknown };
-    const candidate = imported.default;
-    if (!isMainModule(candidate)) {
-      log(`extension ${ext.id}: main entry has no valid default MainModule export`);
-      return null;
-    }
-    // The module's own id should match its dir id; warn but honour the dir id
-    // so the renderer/storage namespacing stays consistent.
-    if (candidate.id !== ext.id) {
-      log(`extension ${ext.id}: main module id "${candidate.id}" differs from dir id`);
-    }
-    return candidate;
-  } catch (err) {
-    log(`extension ${ext.id}: failed to import main entry`, err);
-    return null;
-  }
+  return { entries, modules: [], diskSpecs };
 }

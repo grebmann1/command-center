@@ -21,6 +21,7 @@ import type { AppModule } from '@shared/module-api';
 import type { ActivateResult, RendererEntry } from '@cctc/extension-sdk/renderer';
 import type { ExtensionEntry } from '@shared/types';
 import { evictHost, getHost } from './ModulePanelHost';
+import { setExtensionGrants } from './host';
 
 /**
  * A runtime-loaded extension module. Either a successfully-activated panel
@@ -213,8 +214,27 @@ let reconcileSeq = 0;
  */
 export async function reconcileExtensionModules(entries: ExtensionEntry[]): Promise<void> {
   const seq = ++reconcileSeq;
+  // P3-B: publish the disk-ext grant map for the renderer ModuleHost gate. Every
+  // entry with a manifest is a disk ext (built-ins aren't in this list), so its
+  // declared permissions become its advisory grant. A built-in id is absent from
+  // the map → its host is unrestricted (trusted by provenance).
+  // P3-B grant map: the effective (consented) permissions back the renderer
+  // ModuleHost gate. An unconsented ext gets an empty set, but it also isn't
+  // mounted at all (filtered below), so its host is never created.
+  setExtensionGrants(
+    entries
+      .filter((e) => e.manifest)
+      .map((e) => ({
+        id: e.id,
+        // Consent precedes any grant: an unconsented ext advertises no perms.
+        permissions: e.consented ? e.manifest?.permissions ?? [] : []
+      }))
+  );
+  // P3-D: only mount a CONSENTED panel. An enabled-but-unconsented (or widened)
+  // ext is discovered + listed (so the UI can prompt) but its panel never loads
+  // until the user approves — consent precedes code running.
   const wanted = entries.filter(
-    (e) => e.enabled && e.loaded && e.manifest?.entry.renderer
+    (e) => e.enabled && e.loaded && e.consented && e.manifest?.entry.renderer
   );
   const wantedIds = new Set(wanted.map((e) => e.id));
 

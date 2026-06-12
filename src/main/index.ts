@@ -60,6 +60,17 @@ import { createUpdater, type Updater } from './updater.js';
 import { TemplateStore } from './template-store.js';
 import { MainModuleHost } from './modules/registry.js';
 import { loadExtensions } from './extensions/loader.js';
+import { ExtensionProcessHost } from './extensions/process-host.js';
+import { spawnUtilityChild } from './extensions/spawn-child.js';
+import { ModuleRouter } from './extensions/module-router.js';
+import { PermissionBroker, grantFromManifest } from './extensions/permission-broker.js';
+import { createBrokerCapabilities } from './extensions/broker-caps.js';
+import {
+  readConsentMap,
+  effectivePermissions,
+  grantConsent,
+  type ConsentMap
+} from './extensions/consent.js';
 import {
   setExtensionEnabled,
   readRendererEntry,
@@ -139,9 +150,12 @@ async function emitPluginsChanged() {
  */
 async function emitExtensionsChanged() {
   try {
+    // Refresh the consent map FIRST so the GrantProvider + the re-discovered
+    // `consented`/`needsConsent` stamping reflect any just-granted consent.
+    consentMap = await readConsentMap();
     const { entries } = await loadExtensions({
       log: logMainError,
-      activeMainIds: moduleHost.liveModuleIds()
+      activeMainIds: moduleRouter.liveModuleIds()
     });
     extensionEntries = entries;
     safeSend(IPC.extensions.onChanged, extensionEntries);
@@ -257,6 +271,58 @@ const templates = new TemplateStore(() => store.listProjects());
 const moduleHost = new MainModuleHost({ log: logMainError });
 /** Latest discovered runtime extensions; refreshed on boot + enable/disable. */
 let extensionEntries: ExtensionEntry[] = [];
+/**
+ * Cached consent map (`~/.cc-center/extensions/consent.json`), refreshed
+ * whenever `extensionEntries` is. The GrantProvider reads it synchronously to
+ * intersect declared ∩ consented; `refreshExtensionState()` keeps both in sync.
+ */
+let consentMap: ConsentMap = {};
+// P3-B/P3-D: ENFORCE the declared ExtensionPermission union as deny-by-default
+// gates, intersected with what the user CONSENTED to. Built-in MAIN_MODULES
+// (gus/zana) are TRUSTED → `can()` always allows them (tier on provenance).
+//
+// P3-D FLIP: the granted set is now `declared ∩ consented` (the consent map),
+// not bare `declared`. An ext with no consent record → empty effective perms →
+// everything denied (and it isn't spawned/mounted in the first place — see the
+// loader). The broker / caps / handleBroker / renderer gate are UNCHANGED; only
+// this provider changed, exactly as the P3-B seam was designed for.
+const builtinIds = new Set<string>(MAIN_MODULES.map((m) => m.id));
+const permissionBroker = new PermissionBroker({
+  builtinIds,
+  grants: (moduleId) => {
+    if (builtinIds.has(moduleId)) return null; // built-ins never gated here
+    const entry = extensionEntries.find((e) => e.id === moduleId);
+    if (!entry || !entry.manifest) return null; // unknown / no manifest → deny
+    // Effective granted = declared ∩ consented. No consent → [] → all denied.
+    const granted = effectivePermissions(entry.manifest.permissions, consentMap, moduleId);
+    return grantFromManifest(granted, entry.manifest.permissionScopes, entry.path);
+  },
+  audit: (a) =>
+    logMainError(
+      'permission-audit',
+      `${a.allow ? 'ALLOW' : 'DENY'} ${a.moduleId} ${a.permission}${a.scope ? ` ${a.scope}` : ''}`
+    )
+});
+// P3-A: untrusted DISK extensions run OUT-OF-PROCESS, one `utilityProcess` each.
+// Built-in gus/zana stay in `moduleHost` (trusted, tier on provenance). The
+// process host's storage broker reuses moduleHost's KV store, so disk-ext and
+// built-in storage share one on-disk implementation; the anti-spoof guarantee
+// is that a disk-ext CHILD reaches storage only via its broker, where the host
+// substitutes the authenticated id (`process-host.ts` handleBroker). P3-B: the
+// brokered exec/fs/fetch caps are gated against `permissionBroker` keyed by that
+// same authenticated id.
+const extProcessHost = new ExtensionProcessHost({
+  spawn: spawnUtilityChild,
+  storage: {
+    get: (id, key) => moduleHost.storageGet(id, key),
+    set: (id, key, value) => moduleHost.storageSet(id, key, value)
+  },
+  caps: createBrokerCapabilities(permissionBroker),
+  log: logMainError
+});
+// The single dispatch entry the `modules:call` IPC handler routes through:
+// built-in id → in-process moduleHost; disk-ext id → out-of-process child.
+const moduleRouter = new ModuleRouter(moduleHost, extProcessHost);
 const skillBundles = new SkillBundlesStore();
 const scheduleGroups = new ScheduleGroupsStore();
 const skillWatchers: FSWatcher[] = [];
@@ -355,7 +421,7 @@ function createWindow() {
       preload: join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       webviewTag: true
     }
   });
@@ -776,7 +842,7 @@ function registerIpc() {
         // emitExtensionsChanged then re-stamps mainActive:false from the host.
         // Enable of a main-bearing extension does NOT re-import (ESM URL cache
         // would hand back a stale instance) — it activates on next relaunch.
-        if (!enabled) await moduleHost.teardown(id);
+        if (!enabled) await moduleRouter.teardown(id);
         void emitExtensionsChanged();
       }
       return res;
@@ -807,6 +873,29 @@ function registerIpc() {
     IPC.extensions.readRendererEntry,
     (id: string) => readRendererEntry(id, logMainError),
     () => null
+  );
+  // P3-D: persist consent to the extension's CURRENT declared permissions, then
+  // re-discover. consentMap refreshes inside emitExtensionsChanged, so the
+  // GrantProvider immediately reflects the grant. A renderer-only ext mounts on
+  // the next reconcile; a main-bearing ext spawns on the next relaunch (same
+  // model as enable — an already-running process isn't hot-swapped). We grant to
+  // the live manifest's declared list so consent always matches what was shown.
+  safeHandle(
+    IPC.extensions.grantConsent,
+    async (id: string): Promise<Result<true>> => {
+      const entry = extensionEntries.find((e) => e.id === id);
+      if (!entry || !entry.manifest) {
+        return { ok: false, code: 'NOT_FOUND', message: `Extension not found: ${id}` };
+      }
+      const res = await grantConsent(id, entry.manifest.permissions);
+      if (res.ok) void emitExtensionsChanged();
+      return res;
+    },
+    (err): Result<true> => ({
+      ok: false,
+      code: 'WRITE_FAILED',
+      message: err instanceof Error ? err.message : String(err)
+    })
   );
 
   safeHandle(
@@ -1016,7 +1105,7 @@ function registerIpc() {
   safeHandle(
     IPC.modules.call,
     (moduleId: string, capability: string, args: unknown[]) =>
-      moduleHost.dispatch(moduleId, capability, Array.isArray(args) ? args : []),
+      moduleRouter.dispatch(moduleId, capability, Array.isArray(args) ? args : []),
     (err) => {
       // Re-throw so the renderer's invoke() rejects with the real message,
       // which the module panel renders in its error state.
@@ -1025,26 +1114,32 @@ function registerIpc() {
   );
   safeHandle(
     IPC.modules.storageGet,
-    (moduleId: string, key: string) => moduleHost.storageGet(moduleId, key),
+    (moduleId: string, key: string) => moduleRouter.storageGet(moduleId, key),
     () => undefined
   );
   safeHandle(
     IPC.modules.storageSet,
     (moduleId: string, key: string, value: unknown) => {
-      moduleHost.storageSet(moduleId, key, value);
+      moduleRouter.storageSet(moduleId, key, value);
     },
     () => undefined
   );
-  // Inbox push on a module's behalf. `inboxStore.append` validates projectId +
-  // (docs|comments) and throws on a malformed push; re-throw so the module
-  // panel's call() rejects with the real message. `moduleId` is currently
-  // unused server-side but is threaded for future per-extension attribution.
+  // Inbox push on a module's behalf. P3-B: gate inbox:push MAIN-SIDE against the
+  // permission broker, keyed by the passed moduleId. NOTE (anti-spoof): the
+  // renderer passes its own moduleId as a plain arg — main gates the CLAIMED id.
+  // A built-in id always passes (trusted); a disk ext is denied unless it
+  // declared inbox:push. This is best-effort attribution until P3-C gives each
+  // panel an authenticated origin (a panel today could claim another id). Still
+  // strictly better than P3-A: a disk ext that lacks the grant cannot push.
+  // `inboxStore.append` validates projectId + (docs|comments) and throws on a
+  // malformed push; re-throw so the panel's call() rejects with the real message.
   safeHandle(
     IPC.modules.pushInbox,
     async (
-      _moduleId: string,
+      moduleId: string,
       msg: { projectId: string; comments?: string; docs?: Array<{ path: string }> }
     ) => {
+      permissionBroker.assert(moduleId, 'inbox:push');
       const entry = await inboxStore.append({
         projectId: msg.projectId,
         comments: msg.comments,
@@ -1278,23 +1373,46 @@ app.whenReady().then(() => {
   installBrainstormSkill(logMainError).catch((err) =>
     logMainError('installBrainstormSkill', err)
   );
-  // Boot app modules (built-in plugins/* + runtime extensions). Discover the
-  // runtime extensions under ~/.cc-center/extensions first, then MERGE their
-  // main modules with the static MAIN_MODULES and run setupAll once. Each
-  // module's setup() runs once; failures are isolated per-module (and per-
-  // extension at import time) so a broken one never blocks app start.
-  loadExtensions({ log: logMainError })
-    .then(async ({ entries, modules }) => {
-      extensionEntries = entries;
-      await moduleHost.setupAll([...MAIN_MODULES, ...modules]);
-      safeSend(IPC.extensions.onChanged, extensionEntries);
-    })
-    .catch(async (err) => {
-      logMainError('loadExtensions', err);
-      // Extensions failed wholesale — still boot the built-in modules.
-      await moduleHost.setupAll(MAIN_MODULES).catch((e) =>
-        logMainError('moduleHost.setupAll', e)
-      );
+  // Boot app modules. P3-A two-tier split (tier on PROVENANCE):
+  //   - built-in MAIN_MODULES (gus, zana) → in-process moduleHost (trusted).
+  //   - runtime DISK extensions → one `utilityProcess` each; their setup()/
+  //     capabilities run in that child, NEVER in main. So untrusted disk code
+  //     no longer touches the BrowserWindow / app state / sibling modules, and a
+  //     crash/hang is isolated. (Residual: the child is still Node, so it can
+  //     `import('node:child_process')` itself — P3-B brokers + a denylist close
+  //     that. P3-A delivers process + crash isolation + a controlled RPC surface.)
+  // Built-ins boot first and independently so a disk-ext failure can't touch
+  // them; each child spawn is isolated so one bad ext doesn't break boot/others.
+  moduleHost
+    .setupAll(MAIN_MODULES)
+    .catch((e) => logMainError('moduleHost.setupAll', e))
+    .finally(() => {
+      // Load the consent map before discovery so only CONSENTED disk exts spawn.
+      readConsentMap()
+        .then((m) => {
+          consentMap = m;
+        })
+        .then(() => loadExtensions({ log: logMainError }))
+        .then(async ({ entries, diskSpecs }) => {
+          extensionEntries = entries;
+          // Spawn one child per disk extension; isolate per-spec failures.
+          await Promise.all(
+            diskSpecs.map((spec) =>
+              extProcessHost
+                .spawn(spec)
+                .catch((err) => logMainError(`extension spawn ${spec.moduleId}`, err))
+            )
+          );
+          // Re-stamp mainActive from the live set (built-ins + children that
+          // reported ready) — same pattern as enable/disable re-discovery.
+          const { entries: stamped } = await loadExtensions({
+            log: logMainError,
+            activeMainIds: moduleRouter.liveModuleIds()
+          });
+          extensionEntries = stamped;
+          safeSend(IPC.extensions.onChanged, extensionEntries);
+        })
+        .catch((err) => logMainError('loadExtensions', err));
     });
   // Boot the local MCP server, then plumb its URL into PtyManager so any
   // claude-family terminal spawns get `CC_MCP_URL` injected. Errors here
@@ -1423,6 +1541,10 @@ app.on('before-quit', (event) => {
   skillBundles.stop();
   scheduleGroups.stop();
   stopSkillsWatchers();
+  // Kill every out-of-process extension child (P3-A). Electron also reaps a
+  // utilityProcess on app quit, but tear down explicitly so teardown() runs and
+  // no orphan lingers if quit is slow. Fire-and-forget — quitting won't block.
+  void extProcessHost.teardownAll();
   ptys.killAll();
   if (mcpServer) {
     const handle = mcpServer;

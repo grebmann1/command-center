@@ -102,7 +102,11 @@ export const IPC = {
     setEnabled: 'extensions:setEnabled',
     reveal: 'extensions:reveal',
     readRendererEntry: 'extensions:readRendererEntry',
-    onChanged: 'extensions:onChanged'
+    onChanged: 'extensions:onChanged',
+    // P3-D: persist the user's consent to an extension's CURRENT declared
+    // permissions, then re-discover (which spawns/mounts it). The renderer reads
+    // `consented`/`needsConsent` on each ExtensionEntry to decide when to prompt.
+    grantConsent: 'extensions:grantConsent'
   },
   claudeSettings: {
     read: 'claudeSettings:read',

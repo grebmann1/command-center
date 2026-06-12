@@ -65,7 +65,16 @@ export default defineConfig({
       // leaving a stale main that answers `modules:call` with "Unknown module".
       watch: { include: ['src/**', 'plugins/**'] },
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/main/index.ts') }
+        // `host-child` is the core-owned bootstrap that runs inside each
+        // per-extension `utilityProcess` (P3-A). Build it as a SEPARATE main
+        // entry so it lands at `out/main/host-child.js` beside `index.js`; the
+        // spawn factory resolves it via `join(__dirname, 'host-child.js')` at
+        // runtime. It's a Node/utilityProcess context — same externalize-node/
+        // electron treatment as the main entry (externalizeDepsPlugin above).
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          'host-child': resolve(__dirname, 'src/main/extensions/host-child.ts')
+        }
       }
     }
   },

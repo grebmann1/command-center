@@ -5,9 +5,61 @@
  */
 
 import type { ModuleHost } from '@shared/module-api';
-import type { HostEvents } from '@cctc/extension-sdk/renderer';
+import type { HostEvents, ExtensionPermission } from '@cctc/extension-sdk/renderer';
 import { useData, useUi } from '../store';
 import { toSessionInfo } from './sessionInfo';
+import { sanitizeExtraArgs } from '@shared/launch-sanitize';
+
+/**
+ * P3-B — renderer-side permission gate for DISK extensions.
+ *
+ * IMPORTANT (honest scope): this gate is **ADVISORY**, not authoritative. All
+ * panels today share one `window.cc` and one IPC connection, so a malicious
+ * panel can bypass `ModuleHost` and call `window.cc.terminals.create` /
+ * `window.cc.openers.openIn` directly — the renderer cannot authenticate which
+ * extension made a call. Authoritative renderer attribution (origin-based, per
+ * sandboxed-iframe panel) is design §4 / a later "open the UI to strangers"
+ * ticket (P3-C). Until then this gate:
+ *   - stops a COOPERATIVE/curated disk ext from using a capability it didn't
+ *     declare (catches honest mistakes, documents intent), and
+ *   - sanitizes `launchSession` extraArgs against the denylist regardless (the
+ *     sanitizer is shared with any future main-side gate).
+ * The strong main-side gates in P3-B are the brokered exec/fs/fetch caps (the
+ * `utilityProcess` child path) and `modules.pushInbox`/`modules.call`, which
+ * carry an id main can key on. The renderer methods below ride generic core IPC
+ * (`terminals.create`, `openers.openIn`) with no per-extension attribution, so
+ * they can only be gated advisorily here.
+ *
+ * Built-in modules (gus/zana) are NOT in the grant map → unrestricted (trusted
+ * by provenance).
+ */
+interface ModuleGrant {
+  permissions: ReadonlySet<ExtensionPermission>;
+}
+const extensionGrants = new Map<string, ModuleGrant>();
+
+/**
+ * Publish the disk-extension grant map (called from the extension loader on
+ * each reconcile). A built-in module's id is deliberately absent → its host is
+ * unrestricted. Keyed by id; the value is the declared permission set.
+ */
+export function setExtensionGrants(
+  grants: Array<{ id: string; permissions: readonly string[] }>
+): void {
+  extensionGrants.clear();
+  for (const g of grants) {
+    extensionGrants.set(g.id, {
+      permissions: new Set(g.permissions as ExtensionPermission[])
+    });
+  }
+}
+
+/** True if `moduleId` is a disk ext AND lacks `permission`. Built-ins never gated. */
+function diskExtLacks(moduleId: string, permission: ExtensionPermission): boolean {
+  const grant = extensionGrants.get(moduleId);
+  if (!grant) return false; // not a disk ext (built-in) → unrestricted
+  return !grant.permissions.has(permission);
+}
 
 /**
  * Per-module in-memory scratch caches, held at MODULE scope (not inside
@@ -125,9 +177,30 @@ export function createModuleHost(moduleId: string): ModuleHost {
       set: (key: string, value: unknown) => window.cc.modules.storageSet(moduleId, key, value)
     },
     openExternal: (url: string) => {
+      // Gate: external:open (advisory) + scheme allowlist (http/https only).
+      if (diskExtLacks(moduleId, 'external:open')) {
+        useUi.getState().pushToast(`${moduleId}: missing "external:open" permission`, 'error');
+        return;
+      }
+      let scheme: string;
+      try {
+        scheme = new URL(url).protocol;
+      } catch {
+        useUi.getState().pushToast(`${moduleId}: invalid URL`, 'error');
+        return;
+      }
+      if (scheme !== 'http:' && scheme !== 'https:') {
+        useUi.getState().pushToast(`${moduleId}: only http(s) URLs may be opened`, 'error');
+        return;
+      }
       void window.cc.openers.openIn('browser', url);
     },
     pushInbox: async (msg) => {
+      // Gate: inbox:push. (Main-side pushInbox also receives moduleId and can
+      // gate authoritatively against the claimed id — see index.ts.)
+      if (diskExtLacks(moduleId, 'inbox:push')) {
+        throw new Error(`PermissionDenied: ${moduleId} lacks "inbox:push"`);
+      }
       // Default to the shell's active project, mirroring getActiveProject().
       const projectId = msg.projectId ?? useUi.getState().selectedProjectId;
       if (!projectId) {
@@ -150,11 +223,31 @@ export function createModuleHost(moduleId: string): ModuleHost {
       useUi.getState().selectProject(projectId);
     },
     launchSession: async ({ projectId, extraArgs, title, cwd }) => {
+      // Gate: session:launch (advisory) + sanitize extraArgs against the denylist
+      // (--dangerously-skip-permissions, --mcp-config, …) so a disk ext can't
+      // launch an auto-approving / hijacked agent in the user's repo (design §1c).
+      if (diskExtLacks(moduleId, 'session:launch')) {
+        useUi.getState().pushToast(`${moduleId}: missing "session:launch" permission`, 'error');
+        return null;
+      }
+      // Project-scope: only launch into a project the shell actually knows.
+      const known = useData.getState().projects.some((p) => p.id === projectId);
+      if (!known) return null;
+      let safeArgs = extraArgs;
+      if (extensionGrants.has(moduleId)) {
+        const { args, removed } = sanitizeExtraArgs(extraArgs);
+        safeArgs = args;
+        if (removed.length > 0) {
+          useUi
+            .getState()
+            .pushToast(`${moduleId}: blocked unsafe launch flags: ${removed.join(', ')}`, 'error');
+        }
+      }
       // Mirror CommandPalette.launch: spawn a claude tab, then bring the shell
       // to it (nav → projects, select the project + new tab, show terminals).
       const session = await useData
         .getState()
-        .createTerminal(projectId, 'claude', 80, 24, { extraArgs, title, cwd });
+        .createTerminal(projectId, 'claude', 80, 24, { extraArgs: safeArgs, title, cwd });
       if (!session) return null;
       const ui = useUi.getState();
       ui.setNav('projects');
