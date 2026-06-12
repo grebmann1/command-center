@@ -252,8 +252,13 @@ export class PtyManager extends EventEmitter {
         ? ['mcp__cc-inbox__inbox_push', 'mcp__cc-inbox__schedule_report']
         : ['mcp__cc-inbox__inbox_push']
       : [];
+    // Invariant: an empty / whitespace-only opening prompt must NEVER reach
+    // argv as a positional. `claude ''` is a stray empty first-turn that the
+    // CLI may misinterpret; callers (LaunchPanel, GUS, scheduler) mostly guard
+    // this, but we enforce it once at the choke point so no current or future
+    // caller can leak a dangling positional. See cleanExtraArgs.
     const fullArgs = mergeAllowedTools(
-      [...args, ...claudeMcpArgs, ...psArgs, ...hookArgs, ...(opts.extraArgs ?? [])],
+      [...args, ...claudeMcpArgs, ...psArgs, ...hookArgs, ...cleanExtraArgs(opts.extraArgs)],
       inboxAllow
     );
     const env: Record<string, string> = {
@@ -556,6 +561,19 @@ function projectSettingsArgs(s: ProjectSettings, profile: LaunchProfileId): stri
 }
 
 /**
+ * Normalize per-tab `extraArgs` before they're spliced into argv. Drops
+ * empty / whitespace-only entries so a blank opening prompt never lands as a
+ * stray positional (`claude ''`). Non-empty args (including intentional flags
+ * and the `--` end-of-options marker) pass through unchanged, in order.
+ *
+ * This enforces the empty-prompt invariant at the single point every launch
+ * path funnels through, rather than trusting each caller to pre-filter. Pure.
+ */
+export function cleanExtraArgs(extraArgs: string[] | undefined): string[] {
+  return (extraArgs ?? []).filter((a) => a.trim() !== '');
+}
+
+/**
  * Ensure a single `--allowedTools` flag in the argv with `extras` (plus any
  * existing values from earlier flags) merged and deduped. Pure: returns a
  * new array. If neither side mentions allowed tools, returns argv unchanged.
@@ -628,7 +646,7 @@ function buildRemoteCmd(opts: {
   // on `claude` being on the remote PATH (default for sfwork workspaces).
   const { args: baseArgs } = resolveLaunch(opts.profile, opts.config);
   const psArgs = opts.projectSettings ? projectSettingsArgs(opts.projectSettings, opts.profile) : [];
-  const argv = ['claude', ...baseArgs, ...psArgs, ...(opts.extraArgs ?? [])];
+  const argv = ['claude', ...baseArgs, ...psArgs, ...cleanExtraArgs(opts.extraArgs)];
   return `${cdPrefix}exec ${shellQuoteArgv(argv)}`;
 }
 
