@@ -25,6 +25,19 @@ npm run dev
 
 The first launch is empty — click `+` in the Projects column to add a folder.
 
+## Extensions
+
+CCTC is extensible: third parties can add features (a sidebar nav entry + panel,
+optional command-palette commands and a nav badge, optional main-process
+capabilities) against the stable `@cctc/extension-sdk` contract — **without
+editing core**. Disk extensions load at runtime from `~/.cc-center/extensions/`,
+run isolated in a per-extension `utilityProcess`, and are permission-gated +
+user-consented.
+
+- **Overview & architecture:** [`docs/extensions.md`](docs/extensions.md)
+- **Build one:** [`docs/extensions-authoring.md`](docs/extensions-authoring.md)
+  — or scaffold with [`tools/create-cctc-extension`](tools/create-cctc-extension).
+
 ## Data
 
 Persisted under `~/.cc-center/`:

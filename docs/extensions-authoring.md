@@ -393,8 +393,12 @@ curated-trust for *panels* until that lands.
 
 ## Reference
 
+- **Overview & two-tier model:** [`extensions.md`](./extensions.md) — start here
+  for the big picture (built-in vs disk, architecture, doc map).
 - Contract source: [`packages/extension-sdk/src`](../packages/extension-sdk/src)
   (`index.ts`, `renderer.ts`, `main.ts`).
 - Worked sample (built artifact): [`examples/extensions/hello`](../examples/extensions/hello).
 - Sample source: [`tools/create-cctc-extension/sample-hello`](../tools/create-cctc-extension/sample-hello).
-- Architecture & phasing: [`extensions-sdk-findings.md`](./extensions-sdk-findings.md).
+- A real disk-extension conversion: [`extensions/gus`](../extensions/gus).
+- Architecture & phasing: [`extensions-sdk-findings.md`](./extensions-sdk-findings.md);
+  trust boundary [`extensions-phase3-design.md`](./extensions-phase3-design.md).
