@@ -1212,7 +1212,9 @@ body.resizing-col {
 
 .workspace {
   display: grid;
-  grid-template-rows: var(--tab-h) 1fr var(--status-h);
+  /* Topbar row is `auto`, not a fixed --tab-h: it now stacks two rows (the
+     mode switcher above the tab strip), so it must size to its own content. */
+  grid-template-rows: auto 1fr var(--status-h);
   background: var(--bg-base);
   min-width: 0;
   /* Grid item of .app-shell's 1fr row track. Without min-height:0 its
@@ -1242,11 +1244,13 @@ body.resizing-col {
   border-bottom: 1px solid var(--border);
 }
 
-/* Tabs row — the flex container the TabBar fills. */
+/* Tabs row — the flex container the TabBar fills. Needs a definite height:
+   tabs (.tab) size with height:100%, so without it the row collapses to 0. */
 .workspace-topbar-tabs {
   display: flex;
   align-items: stretch;
   min-width: 0;
+  height: 36px;
 }
 
 .workspace-topbar-tabs > .tabbar {
