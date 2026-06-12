@@ -9,11 +9,13 @@
 
 import { useMemo } from 'react';
 import type { AppModule } from '@shared/module-api';
-import { gusModule } from '../../../plugins/gus/module';
 import { zanaModule } from '../../../plugins/zana/module';
 import { useExtensionModules } from './loader';
 
-export const APP_MODULES: AppModule[] = [gusModule, zanaModule];
+// gus is no longer a built-in — it ships as a disk extension (GUS-EXT-B) and is
+// merged in at runtime via `useExtensionModules` / `mergeModules` below. zana
+// stays a built-in. See extensions/gus/.
+export const APP_MODULES: AppModule[] = [zanaModule];
 
 /** Built-in module ids, used to widen the NavId union at runtime. */
 export const MODULE_IDS = APP_MODULES.map((m) => m.id);

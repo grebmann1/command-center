@@ -304,7 +304,8 @@ const permissionBroker = new PermissionBroker({
     )
 });
 // P3-A: untrusted DISK extensions run OUT-OF-PROCESS, one `utilityProcess` each.
-// Built-in gus/zana stay in `moduleHost` (trusted, tier on provenance). The
+// Built-in zana stays in `moduleHost` (trusted, tier on provenance); gus now
+// ships as a disk extension (GUS-EXT-B) and runs out-of-process like any other. The
 // process host's storage broker reuses moduleHost's KV store, so disk-ext and
 // built-in storage share one on-disk implementation; the anti-spoof guarantee
 // is that a disk-ext CHILD reaches storage only via its broker, where the host

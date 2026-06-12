@@ -143,6 +143,15 @@ async function loadExtensionModule(entry: ExtensionEntry): Promise<ExtensionModu
       return makeErrorModule(entry, 'Renderer bundle could not be read.');
     }
     blobUrl = URL.createObjectURL(new Blob([js], { type: 'text/javascript' }));
+    // Expose the host's React on a global BEFORE importing the bundle. A blob
+    // import has no import map, so a bundle that ships shims for `react` /
+    // `react/jsx-runtime` (instead of leaving them as unresolvable bare imports)
+    // reads the host React from here. activate({ React }) also provides it, but
+    // a bundled dep can call a React API at MODULE-EVAL time — BEFORE activate —
+    // e.g. lucide-react's icon factory calls `forwardRef` at import. Setting the
+    // global up front covers that eval-time window so such bundles import
+    // cleanly. Bundles that import nothing (like the hello sample) ignore it.
+    (globalThis as Record<string, unknown>).__CCTC_HOST_REACT__ = React;
     // @vite-ignore keeps Vite from trying to analyze/bundle this dynamic import.
     const mod = (await import(/* @vite-ignore */ blobUrl)) as { default?: RendererEntry };
     const rendererEntry = mod.default;

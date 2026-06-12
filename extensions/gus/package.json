@@ -1,0 +1,17 @@
+{
+  "name": "@cctc-ext/gus",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GUS work board — first-party CCTC disk extension (dogfood of the runtime extension pipeline).",
+  "scripts": {
+    "build:renderer": "BUILD_TARGET=renderer vite build",
+    "build:main": "BUILD_TARGET=main vite build",
+    "build": "npm run build:renderer && npm run build:main",
+    "package": "node scripts/package.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "react": "^18"
+  }
+}

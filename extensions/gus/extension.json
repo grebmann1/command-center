@@ -1,0 +1,17 @@
+{
+  "id": "gus",
+  "title": "GUS",
+  "icon": "Ticket",
+  "titleLabel": "GUS",
+  "entry": {
+    "main": "main.js",
+    "renderer": "renderer.js"
+  },
+  "engines": {
+    "cctcApi": "^1.0.0"
+  },
+  "permissions": ["exec"],
+  "permissionScopes": {
+    "execAllowlist": ["sf"]
+  }
+}
