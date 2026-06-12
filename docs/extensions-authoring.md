@@ -150,14 +150,40 @@ navBadge: (host) => host.listProjects().length, // number | string | null (null/
   invoked on every render. For a precisely-live badge, recompute off
   `host.cache` / state updated from a `host.on` subscription.
 
-> **Runtime bundles cannot contribute `commands`/`navBadge` today.** These live
-> on the `AppModule`, but a runtime-loaded extension's `RendererEntry.activate()`
-> returns only the panel component, and the loader builds the `AppModule` from
-> the manifest + that panel — it carries no `commands`/`navBadge`. So today these
-> two contributions are exercised by **built-in** modules (e.g. `gus`). The
-> runtime `host.on` / `host.cache` surfaces, by contrast, work in a runtime
-> bundle — see the `hello` sample. Extending `RendererEntry` + the loader to
-> carry command/badge factories from a bundle is a follow-up.
+### Runtime bundles contribute `commands` / `navBadge` too
+
+A **runtime-loaded** extension reaches these same two extension points by
+returning the richer shape from `activate()`. `activate` may return EITHER the
+panel component directly (the original shape) OR an `ActivateResult`:
+
+```ts
+import type { RendererEntry, ModuleHost } from '@cctc/extension-sdk/renderer';
+
+const entry: RendererEntry = {
+  activate({ React, host }) {
+    const Panel = () => React.createElement('div', null, host.moduleId);
+    return {
+      panel: Panel,                                  // optional
+      commands: (h) => [                             // optional
+        { id: 'ping', label: 'Hello: ping', run: () => h.toast('pong from hello') }
+      ],
+      navBadge: (h) => h.listProjects().length       // optional — number | string | null
+    };
+  },
+};
+export default entry;
+```
+
+`ActivateResult` is `{ panel?, commands?, navBadge? }`, where `commands` and
+`navBadge` use the **exact same `(host) => …` signatures** as the `AppModule`
+fields above. The host loader normalizes the return — a bare component becomes
+`{ panel }`, an object passes through — and copies `commands` / `navBadge`
+straight onto the module, so a disk-installed extension lands in the command
+palette and the sidebar `.nav-badge` slot identically to a built-in. Returning
+just the component (no `commands` / `navBadge`) remains fully supported. See the
+[`hello` sample](../examples/extensions/hello) — it now returns this richer
+shape, contributing a `Hello: ping` command and a project-count badge alongside
+its panel.
 
 ## The main module (optional)
 

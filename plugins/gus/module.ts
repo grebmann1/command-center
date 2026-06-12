@@ -3,10 +3,10 @@
  * core's renderer registry imports this and wires it into the sidebar + shell.
  *
  * Also exercises the Phase 2 contribution points (`commands`, `navBadge`) as a
- * built-in. These live on the AppModule, and the runtime extension loader does
- * not today carry them from a renderer bundle (`RendererEntry.activate` returns
- * only a panel component), so a built-in module is the surface that proves the
- * shell wiring (CommandPalette + Sidebar `.nav-badge`) end-to-end.
+ * built-in. These live on the AppModule; runtime-loaded extensions reach the
+ * same points by returning an `ActivateResult` from `RendererEntry.activate`
+ * (see the `hello` sample). Either way the shell wiring (CommandPalette +
+ * Sidebar `.nav-badge`) consumes them from the merged module set.
  */
 
 import type { AppModule } from '@cctc/extension-sdk/renderer';

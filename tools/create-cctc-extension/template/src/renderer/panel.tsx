@@ -14,7 +14,7 @@ import type { RendererEntry, ModuleHost } from '@cctc/extension-sdk/renderer';
 
 const entry: RendererEntry = {
   activate({ React, host }) {
-    return function Panel(_props: { host: ModuleHost }) {
+    function Panel(_props: { host: ModuleHost }) {
       const [count, setCount] = React.useState(0);
 
       return React.createElement(
@@ -27,6 +27,20 @@ const entry: RendererEntry = {
           `clicked ${count} times`
         )
       );
+    }
+
+    // activate() may return the panel directly, or — as here — the richer
+    // ActivateResult so your extension also contributes to the command palette
+    // (⌘K) and the sidebar nav badge. All three fields are optional; drop the
+    // ones you don't need (returning just `Panel` also works).
+    return {
+      panel: Panel,
+      // Palette commands, namespaced by core as ext:<your-id>:<id>.
+      commands: (h: ModuleHost) => [
+        { id: 'say-hi', label: `${h.moduleId}: say hi`, run: () => h.toast('hi') }
+      ],
+      // A number | string | null badge on your sidebar nav entry (null = none).
+      navBadge: (h: ModuleHost) => h.listProjects().length
     };
   },
 };

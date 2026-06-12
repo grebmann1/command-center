@@ -307,6 +307,15 @@ export interface AppModule {
  * Built-in modules keep using `AppModule.panel` unchanged — this factory is the
  * *runtime* code path, not a replacement for it.
  *
+ * **Contributing commands / navBadge from a runtime bundle.** `activate` may
+ * return EITHER the panel component directly (the original, still-supported
+ * shape) OR an {@link ActivateResult} carrying `panel` alongside `commands`
+ * and/or `navBadge`. Those two use the **same `(host) => …` signatures** as
+ * {@link AppModule.commands} / {@link AppModule.navBadge}, so the host loader
+ * forwards them onto the built `AppModule` with no adaptation — a disk-installed
+ * extension now reaches the command palette and the sidebar badge slot exactly
+ * like a built-in. A bare component return is normalized to `{ panel }`.
+ *
  * @example
  * ```ts
  * // extension's renderer entry, built as ESM with `react` externalized
@@ -322,11 +331,64 @@ export interface AppModule {
  * };
  * export default entry;
  * ```
+ *
+ * @example
+ * ```ts
+ * // richer return: panel + a palette command + a nav badge
+ * const entry: RendererEntry = {
+ *   activate({ React, host }) {
+ *     const Panel = () => React.createElement('div', null, host.moduleId);
+ *     return {
+ *       panel: Panel,
+ *       commands: (h) => [{ id: 'ping', label: 'Hello: ping', run: () => h.toast('pong') }],
+ *       navBadge: (h) => h.listProjects().length,
+ *     };
+ *   },
+ * };
+ * export default entry;
+ * ```
  */
 export interface RendererEntry {
   /**
-   * Build the panel component. The host injects its own React instance and the
-   * capability bridge; the returned component is mounted with `{ host }`.
+   * Build the extension's renderer contributions. The host injects its own React
+   * instance and the capability bridge.
+   *
+   * Returns EITHER the panel `ComponentType<{ host }>` directly (normalized by
+   * the loader to `{ panel }`) OR an {@link ActivateResult} carrying any subset
+   * of `panel` / `commands` / `navBadge`. The returned panel is mounted with
+   * `{ host }`.
    */
-  activate(ctx: { React: typeof import('react'); host: ModuleHost }): ComponentType<{ host: ModuleHost }>;
+  activate(
+    ctx: { React: typeof import('react'); host: ModuleHost }
+  ): ComponentType<{ host: ModuleHost }> | ActivateResult;
+}
+
+/**
+ * The richer object an extension's {@link RendererEntry.activate} may return so a
+ * **runtime-loaded** bundle can contribute the same three extension points a
+ * built-in {@link AppModule} does — not just a panel. Every field is optional;
+ * the host loader normalizes a bare `ComponentType` return into `{ panel }` and
+ * copies these fields straight onto the built `AppModule`.
+ *
+ * `commands` / `navBadge` deliberately reuse the **exact `(host) => …`
+ * signatures** of {@link AppModule.commands} / {@link AppModule.navBadge}, so the
+ * loader forwards them with zero adaptation and the shell wiring (command
+ * palette, sidebar `.nav-badge`) treats a runtime extension identically to a
+ * built-in.
+ */
+export interface ActivateResult {
+  /** The panel component, mounted with `{ host }`. Optional — a module may contribute only commands/navBadge. */
+  panel?: ComponentType<{ host: ModuleHost }>;
+  /**
+   * Commands contributed to the command palette. Same contract as
+   * {@link AppModule.commands}: called with the live {@link ModuleHost}, returns
+   * a (possibly empty) `ExtensionCommand[]`.
+   */
+  commands?: (host: ModuleHost) => ExtensionCommand[];
+  /**
+   * Sidebar nav badge. Same contract as {@link AppModule.navBadge}: called with
+   * the live {@link ModuleHost}; return a `number | string` or `null`/`0`/`''`
+   * for no badge. Keep it cheap and synchronous.
+   */
+  navBadge?: (host: ModuleHost) => number | string | null;
 }

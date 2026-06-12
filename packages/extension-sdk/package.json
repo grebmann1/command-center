@@ -1,22 +1,38 @@
 {
   "name": "@cctc/extension-sdk",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.0",
   "description": "SDK contract for Claude Code Terminal Center extensions — the only core surface an extension may import.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/grebmann1/command-center"
+  },
   "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
   "exports": {
     ".": {
-      "types": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
     "./renderer": {
-      "types": "./src/renderer.ts"
+      "types": "./dist/renderer.d.ts",
+      "import": "./dist/renderer.js"
     },
     "./main": {
-      "types": "./src/main.ts"
+      "types": "./dist/main.d.ts",
+      "import": "./dist/main.js"
     },
     "./helpers": {
-      "types": "./src/helpers.ts"
+      "types": "./dist/helpers.d.ts",
+      "import": "./dist/helpers.js"
     }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
     "react": "^18",

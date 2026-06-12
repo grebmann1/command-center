@@ -16,9 +16,14 @@
 //     and it keeps climbing) plus the last-seen project list, cached so a
 //     remount paints immediately before the first event arrives. host.cache is
 //     in-memory + synchronous (vs host.storage, which is async + persisted).
+//
+// SDK-2 dogfood: activate() returns the RICHER shape — { panel, commands,
+// navBadge } — instead of a bare component, so this RUNTIME-loaded bundle now
+// contributes a command palette entry and a sidebar nav badge, not just a panel.
+// commands/navBadge use the same (host)=>… signatures as the built-in AppModule.
 const entry = {
   activate({ React, host }) {
-    return function HelloPanel() {
+    function HelloPanel() {
       // Seed from cache so a remount paints the previously-seen list at once,
       // then fall back to a fresh read. Cache is synchronous — no await.
       const [projects, setProjects] = React.useState(function () {
@@ -74,6 +79,23 @@ const entry = {
           'Say hello'
         )
       );
+    }
+
+    return {
+      panel: HelloPanel,
+      // A palette command (⌘K), namespaced by core as ext:hello:ping.
+      commands: function (h) {
+        return [
+          {
+            id: 'ping',
+            label: 'Hello: ping',
+            keywords: ['pong', 'greet'],
+            run: function () { h.toast('pong from hello'); }
+          }
+        ];
+      },
+      // Sidebar nav badge: the number of open projects. Cheap + synchronous.
+      navBadge: function (h) { return h.listProjects().length; }
     };
   },
 };

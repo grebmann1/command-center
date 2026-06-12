@@ -18,7 +18,7 @@
 import * as React from 'react';
 import { create } from 'zustand';
 import type { AppModule } from '@shared/module-api';
-import type { RendererEntry } from '@cctc/extension-sdk/renderer';
+import type { ActivateResult, RendererEntry } from '@cctc/extension-sdk/renderer';
 import type { ExtensionEntry } from '@shared/types';
 import { evictHost, getHost } from './ModulePanelHost';
 
@@ -80,6 +80,53 @@ function makeErrorModule(entry: ExtensionEntry, message: string): ExtensionModul
   };
 }
 
+/** The subset of `AppModule` an `activate()` return contributes to the module. */
+type NormalizedActivate = Pick<ActivateResult, 'panel' | 'commands' | 'navBadge'>;
+
+/**
+ * Pure: normalize whatever `RendererEntry.activate()` returned into the uniform
+ * `{ panel?, commands?, navBadge? }` shape the loader copies onto the built
+ * `ExtensionModule`. Backward-compatible:
+ *
+ *   - a **function/class** (a React component) → `{ panel: <it> }` (the original,
+ *     bare-component return shape);
+ *   - an **exotic component object** — `React.lazy` / `memo` / `forwardRef`
+ *     return objects (tagged with `$$typeof`), which are valid components but
+ *     not plain ActivateResults → `{ panel: <it> }`, preserving the original
+ *     code path that accepted object components;
+ *   - a **plain ActivateResult object** → its `panel` / `commands` / `navBadge`
+ *     are read through (each only when it has the right runtime type, so a
+ *     malformed field is dropped rather than trusted);
+ *   - **anything else** (null, string, number, …) → `{}` (the caller treats an
+ *     empty result, i.e. no panel, as a load failure and error-surfaces it).
+ *
+ * Kept side-effect-free and host-agnostic so it's unit-testable in isolation.
+ */
+export function normalizeActivateResult(result: unknown): NormalizedActivate {
+  // A React component is a function (function/arrow component) or, rarely, a
+  // class — both are `typeof 'function'`. This is the original return shape.
+  if (typeof result === 'function') {
+    return { panel: result as ActivateResult['panel'] };
+  }
+  if (result && typeof result === 'object') {
+    const r = result as Record<string, unknown>;
+    // React.lazy/memo/forwardRef components are objects carrying a `$$typeof`
+    // tag rather than panel/commands/navBadge — treat them as the panel itself,
+    // matching the pre-existing object-component code path.
+    if ('$$typeof' in r && !('panel' in r) && !('commands' in r) && !('navBadge' in r)) {
+      return { panel: r as unknown as ActivateResult['panel'] };
+    }
+    const out: NormalizedActivate = {};
+    if (typeof r.panel === 'function' || (r.panel && typeof r.panel === 'object' && '$$typeof' in (r.panel as object))) {
+      out.panel = r.panel as ActivateResult['panel'];
+    }
+    if (typeof r.commands === 'function') out.commands = r.commands as ActivateResult['commands'];
+    if (typeof r.navBadge === 'function') out.navBadge = r.navBadge as ActivateResult['navBadge'];
+    return out;
+  }
+  return {};
+}
+
 /**
  * Load one extension's renderer bundle into an `ExtensionModule`. Returns an
  * error module (never throws) when the bundle is missing or fails to
@@ -104,16 +151,38 @@ async function loadExtensionModule(entry: ExtensionEntry): Promise<ExtensionModu
     // Use the SAME cached host ModulePanelHost will inject as the `host` prop,
     // so the panel closes over one host instance and `evictHost` releases it.
     const host = getHost(entry.id);
-    const Panel = rendererEntry.activate({ React, host });
-    if (typeof Panel !== 'function' && typeof Panel !== 'object') {
-      return makeErrorModule(entry, 'activate() did not return a component.');
+    // activate() may return a bare component (original shape) OR an
+    // ActivateResult ({ panel?, commands?, navBadge? }). Normalize both, then
+    // copy the contributions straight onto the AppModule — the Phase 2 shell
+    // wiring already consumes commands/navBadge from the merged set, so no shell
+    // change is needed beyond populating these fields.
+    const { panel, commands, navBadge } = normalizeActivateResult(
+      rendererEntry.activate({ React, host })
+    );
+    // A module is usable if it contributes ANY of the three extension points.
+    // A panel-less module that contributes only commands/navBadge is valid (its
+    // nav entry renders the .module-no-panel placeholder when selected) — only a
+    // fully-empty result is a load failure. This mirrors built-in panel-less
+    // modules; rejecting the runtime case here would break the documented
+    // contract (AppModule.panel / ActivateResult.panel are optional).
+    const hasPanel = typeof panel === 'function' || (typeof panel === 'object' && panel !== null);
+    const contributes = hasPanel || typeof commands === 'function' || typeof navBadge === 'function';
+    if (!contributes) {
+      return makeErrorModule(
+        entry,
+        'activate() returned nothing usable (no panel, commands, or navBadge).'
+      );
     }
     return {
       id: entry.id,
       title: manifest.title,
       icon: manifest.icon,
       titleLabel: manifest.titleLabel,
-      panel: Panel
+      // May legitimately be undefined now — AppModule.panel is optional (Phase 2)
+      // and ModulePanelHost renders .module-no-panel for a no-panel module.
+      panel: hasPanel ? panel : undefined,
+      commands,
+      navBadge
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

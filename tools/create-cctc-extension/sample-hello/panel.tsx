@@ -16,12 +16,17 @@
  * project switch) and host.cache (in-memory/sync scratch that survives unmount —
  * a mount counter + the last-seen project list). See examples/extensions/hello/
  * renderer.js for the matching runnable artifact.
+ *
+ * SDK-2 dogfood: activate() returns the richer { panel, commands, navBadge }
+ * ActivateResult — so this runtime-loaded bundle contributes a palette command
+ * and a sidebar nav badge, not just a panel. Keep this in sync with the runnable
+ * artifact at examples/extensions/hello/renderer.js.
  */
 import type { RendererEntry, ModuleHost } from '@cctc/extension-sdk/renderer';
 
 const entry: RendererEntry = {
   activate({ React, host }) {
-    return function HelloPanel(_props: { host: ModuleHost }) {
+    function HelloPanel(_props: { host: ModuleHost }) {
       // Seed from cache so a remount paints the previously-seen list at once,
       // then fall back to a fresh read. Cache is synchronous — no await.
       const [projects, setProjects] = React.useState(
@@ -79,6 +84,21 @@ const entry: RendererEntry = {
           'Say hello'
         )
       );
+    }
+
+    return {
+      panel: HelloPanel,
+      // A palette command (⌘K), namespaced by core as ext:hello:ping.
+      commands: (h: ModuleHost) => [
+        {
+          id: 'ping',
+          label: 'Hello: ping',
+          keywords: ['pong', 'greet'],
+          run: () => h.toast('pong from hello')
+        }
+      ],
+      // Sidebar nav badge: the number of open projects. Cheap + synchronous.
+      navBadge: (h: ModuleHost) => h.listProjects().length
     };
   },
 };
