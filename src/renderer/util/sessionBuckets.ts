@@ -10,7 +10,6 @@ export type SessionBucketId =
   | 'running' // working agents + active non-claude shells
   | 'done' // finished its turn, unseen
   | 'idle' // at the prompt, seen
-  | 'background' // headless
   | 'exited'; // pty closed (crashed sorts first within)
 
 export interface SessionBucket {
@@ -25,21 +24,22 @@ const BUCKET_ORDER: { id: SessionBucketId; label: string }[] = [
   { id: 'running', label: 'Running' },
   { id: 'done', label: 'Done' },
   { id: 'idle', label: 'Idle' },
-  { id: 'background', label: 'Background' },
   { id: 'exited', label: 'Exited' }
 ];
 
 /**
  * Classify a single session into its bucket. Rules are applied in order:
  *  1. exited pty → exited (regardless of agent state).
- *  2. headless → background (mirrors the existing backgroundTerminals() split).
- *  3. else by live agent state (default 'unknown' when absent):
+ *  2. else by live agent state (default 'unknown' when absent):
  *     blocked → blocked, working → running, done → done, idle → idle,
  *     unknown → running if the pty is running, else idle.
+ *
+ * Hidden (headless) sessions are NOT a bucket of their own — closing a tab
+ * keeps the session alive and listed under its real status, so it sorts by
+ * agent state just like a visible tab. Clicking its row re-opens it.
  */
 function classify(session: TerminalSession, agent: AgentState): SessionBucketId {
   if (session.status === 'exited') return 'exited';
-  if (session.headless) return 'background';
   switch (agent) {
     case 'blocked':
       return 'blocked';
@@ -73,11 +73,13 @@ export function bucketSessions(
     running: [],
     done: [],
     idle: [],
-    background: [],
     exited: []
   };
 
   for (const session of sessions) {
+    // Scheduler-spawned jobs are surfaced via the inbox, not the user's
+    // session list — keep them out of the buckets entirely.
+    if (session.scheduled) continue;
     const agent = agentById[session.id] ?? 'unknown';
     byBucket[classify(session, agent)].push(session);
   }

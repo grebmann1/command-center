@@ -661,13 +661,6 @@ interface DataState {
    * "prefer un-detach over reopen-closed" behavior.
    */
   restoreLastDetached: (projectId: string) => Promise<string | null>;
-  /**
-   * Terminate every background (headless, still-live) session in a project.
-   * Since closing a tab now only hides it, background sessions accumulate;
-   * this is the bulk "clean up the background" escape hatch behind the tray's
-   * trash affordance. Returns the count actually terminated.
-   */
-  closeAllBackground: (projectId: string) => Promise<number>;
   restartTerminal: (sessionId: string, projectId: string) => Promise<TerminalSession | null>;
   reorderTerminal: (projectId: string, fromId: string, toId: string) => void;
   renameTerminal: (projectId: string, sessionId: string, title: string) => void;
@@ -711,14 +704,25 @@ export function visibleTerminals(list: TerminalSession[] | undefined): TerminalS
 }
 
 /**
- * Detached (background) sessions for a project: headless and still live.
- * These are the sessions surfaced by the Background (N) affordance — the
- * user sent them to the background with the explicit Detach action and can
- * resume them (re-attaching the same live pty). Exited-while-detached
- * sessions are reaped in markExited, so anything here has a running pty.
+ * Sessions a project shows in its vertical lists (focus view + the inline
+ * project-row expansion): everything the user opened, whether currently shown
+ * in the tab strip or hidden (closed out of the strip but still alive). Only
+ * scheduler-spawned jobs are excluded — those are surfaced via the inbox, not
+ * the session list. Clicking a hidden session's row re-opens it as a tab.
+ */
+export function listedTerminals(list: TerminalSession[] | undefined): TerminalSession[] {
+  return (list ?? []).filter((t) => !t.scheduled);
+}
+
+/**
+ * Hidden, still-live sessions for a project: headless and not exited. A closed
+ * tab whose process keeps running lands here (also the scheduler's own runs).
+ * A user-hidden session that exits on its own is downgraded to an exited
+ * tombstone (and pruned from detachedStack) in markExited, so anything here
+ * has a running pty. Feeds the launcher's "Still running" quick-resume list.
  */
 export function backgroundTerminals(list: TerminalSession[] | undefined): TerminalSession[] {
-  return (list ?? []).filter((t) => t.headless);
+  return (list ?? []).filter((t) => t.headless && t.status !== 'exited');
 }
 
 export function sortProjectsForDisplay(projects: Project[]): Project[] {
@@ -1412,17 +1416,6 @@ export const useData = create<DataState>((set, get) => ({
     return alive ? sessionId : null;
   },
 
-  async closeAllBackground(projectId) {
-    const victims = backgroundTerminals(get().terminals[projectId]);
-    // closeTerminal handles the per-session kill IPC + state cleanup (terminals
-    // map, detachedStack, unread, split slots). Run them in order; each await
-    // keeps the optimistic state updates from interleaving confusingly.
-    for (const t of victims) {
-      await get().closeTerminal(t.id, projectId);
-    }
-    return victims.length;
-  },
-
   async restartTerminal(sessionId, projectId) {
     const list = get().terminals[projectId] || [];
     const idx = list.findIndex((t) => t.id === sessionId);
@@ -1577,21 +1570,21 @@ export const useData = create<DataState>((set, get) => ({
       for (const pid of Object.keys(terminals)) {
         const tab = terminals[pid].find((t) => t.id === sessionId);
         if (!tab) continue;
-        // Reap zombies: a session that exits while detached (headless) would
-        // otherwise linger forever as a dead record in the Background list —
-        // its pty is already gone, so it can be neither resumed nor killed.
-        // Drop it outright and surface the exit so the user isn't surprised.
-        // Scheduled (background-job) sessions are reaped the same way even when
-        // visible: a scheduled run promoted to a tab (e.g. opened from the
-        // inbox) should clean up its tab when the job ends, not leave a
-        // "[session exited]" tombstone behind. User-opened tabs keep theirs.
+        // Reap scheduler jobs: a scheduled (background-job) run is surfaced via
+        // the inbox, never the session list, so when it ends drop it outright
+        // and toast — even if it was promoted to a visible tab from the inbox,
+        // it shouldn't leave a "[session exited]" tombstone behind.
+        // User-opened sessions keep their tombstone whether or not they were
+        // hidden from the tab strip — a closed-but-running tab that finishes
+        // stays in the vertical list under "Exited" so the user can see how it
+        // ended (and dismiss it), rather than vanishing silently.
         // A dead pty no longer drives a live agent state — clear it (deferred,
         // so we don't nest a useAgentStatus `set` inside this one) so the
         // project rollup dot stops showing the session's last status. Applies
         // whether the tab is reaped (zombie) or kept as an "exited" tombstone.
         const owningProject = pid;
         queueMicrotask(() => useAgentStatus.getState().clear(sessionId, owningProject));
-        if (tab.headless || tab.scheduled) {
+        if (tab.scheduled) {
           terminals[pid] = terminals[pid].filter((t) => t.id !== sessionId);
           detachedStack[pid] = (detachedStack[pid] || []).filter((id) => id !== sessionId);
           const code = exitCode ?? tab.exitCode;
@@ -1602,7 +1595,7 @@ export const useData = create<DataState>((set, get) => ({
             useUi
               .getState()
               .pushToast(
-                `Background session “${tab.title}” ended${
+                `Scheduled run “${tab.title}” ended${
                   code != null && code !== 0 ? ` (exit ${code})` : ''
                 }`,
                 code != null && code !== 0 ? 'error' : 'info'
@@ -1614,6 +1607,13 @@ export const useData = create<DataState>((set, get) => ({
               ? { ...t, status: 'exited' as const, exitCode: exitCode ?? t.exitCode }
               : t
           );
+          // It's now an exited tombstone, not a restorable hidden session, so
+          // drop it from the detach stack — otherwise ⌘⇧T would pop this dead
+          // id and the dead-pty path in restoreTerminal would silently delete
+          // the tombstone instead of restoring a live session. detachedStack
+          // must only ever hold sessions with a running pty (see
+          // backgroundTerminals' contract).
+          detachedStack[pid] = (detachedStack[pid] || []).filter((id) => id !== sessionId);
         }
       }
       return { terminals, detachedStack };

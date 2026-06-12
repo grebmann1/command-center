@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Moon, Terminal as TerminalIcon } from 'lucide-react';
+import { Terminal as TerminalIcon } from 'lucide-react';
 import type { ClaudeSessionSummary, LaunchProfileId, Project, TerminalSession } from '@shared/types';
 import { ClaudeSessionsList } from './ClaudeSessionsList';
 import { profileIcon } from '../util/profileIcon';
@@ -215,7 +215,7 @@ export function LaunchPanel({
       {bg.length > 0 && onResumeBackground && (
         <div className="launch-background">
           <div className="launch-section-label">
-            <Moon size={12} aria-hidden /> Background ({bg.length})
+            <TerminalIcon size={12} aria-hidden /> Still running ({bg.length})
           </div>
           <div className="launch-bg-list">
             {bg.map((t) => (

@@ -47,7 +47,6 @@ export function Workspace() {
   const closeTerminal = useData((s) => s.closeTerminal);
   const hideTerminal = useData((s) => s.hideTerminal);
   const restoreTerminal = useData((s) => s.restoreTerminal);
-  const closeAllBackground = useData((s) => s.closeAllBackground);
   const reorderTerminal = useData((s) => s.reorderTerminal);
   const renameTerminal = useData((s) => s.renameTerminal);
   const restartTerminal = useData((s) => s.restartTerminal);
@@ -226,10 +225,6 @@ export function Workspace() {
             onSelect={(id) => project && selectTab(project.id, id)}
             onClose={(id) => project && closeTerminal(id, project.id)}
             onDetach={(id) => project && hideTerminal(id, project.id)}
-            backgroundTabs={backgroundTabs}
-            onResumeBackground={(id) => project && restoreTerminal(id, project.id)}
-            onKillBackground={(id) => project && closeTerminal(id, project.id)}
-            onKillAllBackground={() => project && void closeAllBackground(project.id)}
             onNew={handleNewTab}
             onOpenLauncher={() => setLauncherOpen(true)}
             onReorder={(from, to) => project && reorderTerminal(project.id, from, to)}

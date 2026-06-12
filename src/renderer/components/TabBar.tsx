@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, X, Pin, Trash2, ChevronLeft, Moon } from 'lucide-react';
+import { Plus, X, Pin } from 'lucide-react';
 import type { LaunchProfileId, TerminalSession } from '@shared/types';
 import { useUi, useAgentStatus } from '../store';
 import { getTerminal } from '../util/findRegistry';
@@ -33,14 +33,6 @@ function AgentStatusDot({ sessionId }: { sessionId: string }) {
   );
 }
 
-/** Persisted, app-global preference for whether the in-strip background tray is
- *  expanded. A plain UI pref (not per-project), so it lives in localStorage
- *  rather than IPC config — same pattern as cc.sidebarCollapsed. */
-const BG_EXPANDED_KEY = 'cc.bgTrayExpanded';
-function readBgExpanded(): boolean {
-  return typeof localStorage !== 'undefined' && localStorage.getItem(BG_EXPANDED_KEY) === '1';
-}
-
 interface Props {
   tabs: TerminalSession[];
   activeTabId: string | undefined;
@@ -53,24 +45,14 @@ interface Props {
    */
   onClose: (id: string) => void;
   /**
-   * Send a session to the background without killing it (detach). The pty
-   * keeps running headless and is surfaced by the Background (N) list, from
-   * which it can be resumed (re-attaching the same live pty). This is what the
-   * X button, middle-click, ⌘W, and the context-menu "Hide" items do for live
-   * sessions — closing is non-destructive; only "Delete" terminates.
+   * Close a session out of the tab strip without killing it. The pty keeps
+   * running headless; the session stays listed in the project's vertical list
+   * under its real status, and clicking that row re-opens it (re-attaching the
+   * same live pty). This is what the X button, middle-click, ⌘W, and the
+   * context-menu "Hide" items do for live sessions — closing is non-destructive;
+   * only "Delete" terminates.
    */
   onDetach?: (id: string) => void;
-  /**
-   * Detached (background) sessions for this project — shown in the new-tab
-   * popover's "Background" section so the user can resume or kill one.
-   */
-  backgroundTabs?: TerminalSession[];
-  /** Resume a background session back into the tab strip (same live pty). */
-  onResumeBackground?: (id: string) => void;
-  /** Kill a background session outright from the Background list. */
-  onKillBackground?: (id: string) => void;
-  /** Kill ALL background sessions for this project (bulk cleanup). */
-  onKillAllBackground?: () => void;
   onNew: (profile: LaunchProfileId) => void;
   /** Open the rich launcher (instruction + profile/model/mode + resume). The
    *  "+" button routes here; the old inline profile dropdown is gone. */
@@ -101,31 +83,15 @@ interface TabContextMenu {
   y: number;
 }
 
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgroundTabs, onResumeBackground, onKillBackground, onKillAllBackground, onNew, onOpenLauncher, onReorder, onRename, onDuplicate, onRestart, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
+export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNew, onOpenLauncher, onReorder, onRename, onDuplicate, onRestart, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
   const splitSet = new Set((splitTabIds ?? []).filter((x): x is string => !!x));
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [tabMenu, setTabMenu] = useState<TabContextMenu | null>(null);
-  // Whether the in-strip background tray is expanded (persisted, app-global).
-  const [bgExpanded, setBgExpanded] = useState(readBgExpanded);
   const anchor = useRef<HTMLButtonElement>(null);
   const unread = useUi((s) => s.unread);
-
-  const bg = backgroundTabs ?? [];
-  const hasBg = bg.length > 0;
-  const toggleBgTray = () => {
-    setBgExpanded((v) => {
-      const next = !v;
-      try {
-        localStorage.setItem(BG_EXPANDED_KEY, next ? '1' : '0');
-      } catch {
-        /* ignore quota errors */
-      }
-      return next;
-    });
-  };
 
   const startRename = (t: TerminalSession) => {
     if (!onRename) return;
@@ -154,17 +120,18 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
     };
   }, [tabMenu]);
 
-  // Close one tab = HIDE it, not destroy it. A live session detaches to the
-  // background (its pty keeps running, resumable from the Background list); an
-  // exited tab has no process left, so it's just dismissed. The process is
-  // only ever terminated via the context-menu "Delete" or the project-list
-  // row's X — see `deleteOne`. No confirm here: hiding is non-destructive.
+  // Close one tab = remove it from the strip, not destroy it. A live session
+  // keeps its pty running and stays in the project's vertical list under its
+  // real status (click that row to re-open it); an exited tab has no process
+  // left, so it's just dismissed. The process is only ever terminated via the
+  // context-menu "Delete" or the project-list row's X — see `deleteOne`. No
+  // confirm here: closing is non-destructive.
   const closeOne = (t: TerminalSession) => {
     if (t.status === 'exited' || !onDetach) {
       onClose(t.id); // dead tombstone (or no detach wired) — just remove it
       return;
     }
-    onDetach(t.id); // live — send to background, keep the process alive
+    onDetach(t.id); // live — remove from the strip, keep the process alive
   };
 
   // Destroy one tab: terminate the process and remove the tab. Live sessions
@@ -179,9 +146,9 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
     }
   };
 
-  // Bulk close = bulk hide: detach every live, non-pinned target to the
-  // background and dismiss any exited tombstones. Non-destructive, so no
-  // confirm — matches the single-tab close gesture.
+  // Bulk close: remove every live, non-pinned target from the strip (its pty
+  // keeps running, still listed in the vertical list) and dismiss any exited
+  // tombstones. Non-destructive, so no confirm — matches the single-tab close.
   const bulkClose = (targets: TerminalSession[]) => {
     for (const t of targets) {
       if (t.pinned) continue;
@@ -201,15 +168,9 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
     for (const t of tabs) if (t.status === 'exited' && !t.pinned) onClose(t.id);
   };
 
-  // The chip toggles the strip between two views: live tabs (default) and the
-  // background sessions. We never show both at once — easier to scan and to
-  // maintain. If the tray is "open" but there's nothing in the background, fall
-  // back to the live view so the strip is never empty-by-accident.
-  const showBackground = bgExpanded && hasBg;
-
   return (
     <div className="tabbar" role="tablist">
-      {!showBackground && tabs.map((t) => (
+      {tabs.map((t) => (
         <div
           key={t.id}
           className={`tab ${activeTabId === t.id ? 'active' : ''} ${
@@ -312,11 +273,11 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
             <button
               type="button"
               className="tab-close"
-              aria-label={t.status === 'exited' ? `Dismiss ${t.title}` : `Hide ${t.title}`}
+              aria-label={t.status === 'exited' ? `Dismiss ${t.title}` : `Close ${t.title}`}
               title={
                 t.status === 'exited'
                   ? 'Dismiss tab'
-                  : 'Hide tab — keeps the process running in the background. Right-click → Delete to end it.'
+                  : 'Close tab — keeps the process running, still listed in the sidebar. Right-click → Delete to end it.'
               }
               onClick={(e) => {
                 e.stopPropagation();
@@ -332,89 +293,6 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
           )}
         </div>
       ))}
-      {hasBg && (
-        <>
-          <button
-            type="button"
-            className={`tab-bg-chip ${showBackground ? 'is-open' : ''}`}
-            aria-pressed={showBackground}
-            title={
-              showBackground
-                ? 'Showing background sessions — click to return to live tabs'
-                : `${bg.length} session${bg.length > 1 ? 's' : ''} running in the background — click to view`
-            }
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleBgTray();
-            }}
-          >
-            {showBackground ? (
-              <>
-                <ChevronLeft size={12} aria-hidden />
-                <span className="tab-bg-chip-label">live tabs</span>
-              </>
-            ) : (
-              <>
-                <Moon size={11} aria-hidden />
-                <span className="tab-bg-chip-count">{bg.length}</span>
-                <span className="tab-bg-chip-label">background</span>
-              </>
-            )}
-          </button>
-          {showBackground &&
-            bg.map((t) => (
-              <div
-                key={t.id}
-                className="tab tab-ghost"
-                role="tab"
-                aria-selected={false}
-                title={`${t.title} · ${t.profile} — running in the background. Click to open it.`}
-                onClick={() => onResumeBackground?.(t.id)}
-              >
-                <span className={`tab-profile-icon profile-${t.profile}`} aria-hidden="true">
-                  {profileIcon(t.profile)}
-                </span>
-                <span className="tab-title">{t.title}</span>
-                {onKillBackground && (
-                  <button
-                    type="button"
-                    className="tab-close"
-                    aria-label={`Close ${t.title}`}
-                    title="Terminate this background session"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.currentTarget.blur();
-                      onKillBackground(t.id);
-                    }}
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </div>
-            ))}
-          {showBackground && onKillAllBackground && bg.length > 1 && (
-            <button
-              type="button"
-              className="tab-bg-killall"
-              title={`Terminate all ${bg.length} background sessions`}
-              onClick={(e) => {
-                e.stopPropagation();
-                e.currentTarget.blur();
-                if (
-                  window.confirm(
-                    `Terminate all ${bg.length} background session${bg.length > 1 ? 's' : ''}? Their processes will be ended.`
-                  )
-                ) {
-                  onKillAllBackground();
-                }
-              }}
-            >
-              <Trash2 size={12} aria-hidden />
-              <span>Close all</span>
-            </button>
-          )}
-        </>
-      )}
       <button
         ref={anchor}
         className="tab-add"
@@ -538,23 +416,23 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, backgro
             <button
               onClick={() => { setTabMenu(null); closeOne(t); }}
               disabled={!!t.pinned}
-              title="Hide this tab. The process keeps running in the background; resume it from the + menu or with ⌘⇧T."
+              title="Close this tab. The process keeps running and stays in the sidebar; click its row or press ⌘⇧T to re-open it."
             >
-              {t.status === 'exited' ? 'Dismiss' : 'Hide'}
+              {t.status === 'exited' ? 'Dismiss' : 'Close'}
             </button>
             <button
               onClick={() => { setTabMenu(null); closeOthers(t.id); }}
               disabled={!hasOthers}
-              title="Hide all other tabs (their processes keep running in the background)."
+              title="Close all other tabs (their processes keep running, still listed in the sidebar)."
             >
-              Hide others
+              Close others
             </button>
             <button
               onClick={() => { setTabMenu(null); closeToRight(t.id); }}
               disabled={!hasRight}
-              title="Hide tabs to the right (their processes keep running in the background)."
+              title="Close tabs to the right (their processes keep running, still listed in the sidebar)."
             >
-              Hide to the right
+              Close to the right
             </button>
             <div className="tab-context-sep" />
             <button

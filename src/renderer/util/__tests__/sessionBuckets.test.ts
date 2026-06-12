@@ -110,21 +110,33 @@ describe('bucketSessions — exited precedence', () => {
   });
 });
 
-describe('bucketSessions — headless (background) precedence', () => {
-  it('headless goes to background regardless of agent state', () => {
+describe('bucketSessions — hidden (headless) sessions classify by status', () => {
+  it('a hidden tab sorts by its agent state, not into a separate bucket', () => {
     const sessions = [
       session({ id: 'a', headless: true }),
       session({ id: 'b', headless: true })
     ];
-    // agent says working/blocked but headless wins
+    // headless no longer overrides — they land in their real status buckets.
     expect(idsByBucket(sessions, { a: 'working', b: 'blocked' })).toEqual({
-      background: ['a', 'b']
+      blocked: ['b'],
+      running: ['a']
     });
   });
 
-  it('exited beats headless (a dead headless pty is exited, not background)', () => {
+  it('a hidden tab still goes to exited once its pty dies', () => {
     const sessions = [session({ id: 'a', headless: true, status: 'exited', exitCode: 0 })];
     expect(idsByBucket(sessions, { a: 'working' })).toEqual({ exited: ['a'] });
+  });
+
+  it('excludes scheduler-spawned jobs from the buckets entirely', () => {
+    const sessions = [
+      session({ id: 'job', scheduled: true, headless: true }),
+      session({ id: 'tab', status: 'running' })
+    ];
+    // The scheduled job is surfaced via the inbox, not the session list.
+    expect(idsByBucket(sessions, { job: 'working', tab: 'working' })).toEqual({
+      running: ['tab']
+    });
   });
 });
 
@@ -139,7 +151,6 @@ describe('bucketSessions — empty-bucket omission & ordering', () => {
   it('returns buckets in display order (most-urgent first) with correct labels', () => {
     const sessions = [
       session({ id: 'ex', status: 'exited', exitCode: 0 }),
-      session({ id: 'bg', headless: true }),
       session({ id: 'idle', status: 'starting' }),
       session({ id: 'done' }),
       session({ id: 'run', status: 'running' }),
@@ -152,21 +163,13 @@ describe('bucketSessions — empty-bucket omission & ordering', () => {
       blk: 'blocked'
     };
     const buckets = bucketSessions(sessions, agentById);
-    const order: SessionBucketId[] = [
-      'blocked',
-      'running',
-      'done',
-      'idle',
-      'background',
-      'exited'
-    ];
+    const order: SessionBucketId[] = ['blocked', 'running', 'done', 'idle', 'exited'];
     expect(buckets.map((b) => b.id)).toEqual(order);
     expect(buckets.map((b) => b.label)).toEqual([
       'Needs you',
       'Running',
       'Done',
       'Idle',
-      'Background',
       'Exited'
     ]);
   });

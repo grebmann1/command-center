@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, EyeOff, Layers, Settings, ChevronRight, ArrowLeft, RotateCcw, Activity } from 'lucide-react';
+import { Plus, Search, Trash2, X, Check, Pencil, Code2, FolderOpen, TerminalSquare, LayoutDashboard, Settings2, Network, ClipboardCopy, Inbox as InboxIcon, Layers, Settings, ChevronRight, ArrowLeft, Activity } from 'lucide-react';
 import { CursorIcon } from './icons/CursorIcon';
 import {
   useData,
@@ -12,8 +12,7 @@ import {
   useScheduler,
   useScheduleGroups,
   sortProjectsForDisplay,
-  visibleTerminals,
-  backgroundTerminals,
+  listedTerminals,
   applyListPaneWidth,
   LIST_PANE_MIN,
   LIST_PANE_MAX
@@ -161,8 +160,9 @@ function ProjectFocusView({ project }: { project: Project }) {
   const agentById = useAgentStatus((s) => s.byId);
 
   const buckets = useMemo(
-    // Pass the FULL list (visible + headless); bucketSessions partitions
-    // background itself via the headless flag.
+    // Pass the FULL list (visible + hidden). Hidden tabs (closed but still
+    // running) classify by their real status — clicking a row re-opens them.
+    // Scheduler jobs are filtered out inside bucketSessions.
     () => bucketSessions(sessions ?? [], agentById),
     [sessions, agentById]
   );
@@ -266,7 +266,6 @@ function ProjectFocusView({ project }: { project: Project }) {
           buckets.map((bucket) => {
             const sectionKey = `focus:${project.id}:${bucket.id}`;
             const collapsed = !!collapsedSections[sectionKey];
-            const isBackground = bucket.id === 'background';
             return (
               <div key={bucket.id} className="focus-bucket">
                 <SectionHeader
@@ -280,6 +279,10 @@ function ProjectFocusView({ project }: { project: Project }) {
                       const exited = t.status === 'exited';
                       const bad = exited && (t.exitCode ?? 0) !== 0;
                       const isUnread = !!unread[t.id] && activeTab !== t.id;
+                      // A "hidden" session is one closed out of the tab strip
+                      // but still alive (headless). Clicking its row re-opens
+                      // it as a tab; a visible session's row just selects it.
+                      const hidden = !!t.headless && !exited;
                       return (
                         <div
                           key={t.id}
@@ -289,7 +292,7 @@ function ProjectFocusView({ project }: { project: Project }) {
                           } ${bad ? 'exited-bad' : ''} ${isUnread ? 'unread' : ''}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (isBackground) {
+                            if (hidden) {
                               void restoreTerminal(t.id, project.id);
                             } else {
                               selectProject(project.id);
@@ -298,12 +301,12 @@ function ProjectFocusView({ project }: { project: Project }) {
                           }}
                           aria-label={isUnread ? `${t.title} · unread output` : undefined}
                           title={
-                            isBackground
-                              ? `${t.title} · running in the background — click to resume`
-                              : exited && t.exitCode != null
-                                ? `${t.title} · exited (code ${t.exitCode})`
-                                : isUnread
-                                  ? `${t.title} · unread output`
+                            exited && t.exitCode != null
+                              ? `${t.title} · exited (code ${t.exitCode})`
+                              : isUnread
+                                ? `${t.title} · unread output`
+                                : hidden
+                                  ? `${t.title} · click to open`
                                   : t.title
                           }
                         >
@@ -323,31 +326,11 @@ function ProjectFocusView({ project }: { project: Project }) {
                               ✗{t.exitCode}
                             </span>
                           )}
-                          {isBackground && (
-                            <button
-                              type="button"
-                              className="project-terminal-close"
-                              aria-label={`Resume ${t.title}`}
-                              title="Resume into a tab"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                void restoreTerminal(t.id, project.id);
-                              }}
-                            >
-                              <RotateCcw size={13} />
-                            </button>
-                          )}
                           <button
                             type="button"
                             className="project-terminal-close"
                             aria-label={exited ? `Dismiss ${t.title}` : `Delete ${t.title}`}
-                            title={
-                              isBackground
-                                ? 'Terminate this background session'
-                                : exited
-                                  ? 'Dismiss'
-                                  : 'Delete (ends the process)'
-                            }
+                            title={exited ? 'Dismiss' : 'Delete (ends the process)'}
                             onClick={(e) => {
                               e.stopPropagation();
                               if (
@@ -484,6 +467,7 @@ function ProjectsList() {
   const projects = useData((s) => s.projects);
   const terminals = useData((s) => s.terminals);
   const closeTerminal = useData((s) => s.closeTerminal);
+  const restoreTerminal = useData((s) => s.restoreTerminal);
   const addProject = useData((s) => s.addProject);
   const addProjectByPath = useData((s) => s.addProjectByPath);
   const addRemoteProject = useData((s) => s.addRemoteProject);
@@ -553,13 +537,12 @@ function ProjectsList() {
     if (focusedProjectId && !focusedProject) exitProjectFocus();
   }, [focusedProjectId, focusedProject, exitProjectFocus]);
 
-  // A project is "active" when it has at least one live session — a non-exited
-  // visible terminal or one running in the background. Keeps the selected
-  // project visible regardless, so toggling the filter never hides the row the
-  // user is currently in.
+  // A project is "active" when it has at least one live session — any listed
+  // (visible or hidden-but-running) session whose pty hasn't exited. Keeps the
+  // selected project visible regardless, so toggling the filter never hides the
+  // row the user is currently in.
   const projectHasRunningAgents = (p: Project) =>
-    visibleTerminals(terminals[p.id]).some((t) => t.status !== 'exited') ||
-    backgroundTerminals(terminals[p.id]).length > 0;
+    listedTerminals(terminals[p.id]).some((t) => t.status !== 'exited');
 
   const visibleProjects = (() => {
     let list = sortedProjects;
@@ -841,7 +824,7 @@ function ProjectsList() {
               }}
             >
               {(() => {
-                const list = visibleTerminals(terminals[p.id]);
+                const list = listedTerminals(terminals[p.id]);
                 const hasUnread = list.some((t) => unread[t.id]);
                 return (
                   <span
@@ -917,17 +900,17 @@ function ProjectsList() {
                *  run-count badge so "needs you" reads at a glance. */}
               <ProjectRollupDot projectId={p.id} />
               {(() => {
-                const list = visibleTerminals(terminals[p.id]);
-                const background = backgroundTerminals(terminals[p.id]);
+                // Count across all listed sessions (visible + hidden-but-alive);
+                // a closed-but-running tab still counts toward the project total.
+                const list = listedTerminals(terminals[p.id]);
                 const running = list.filter((t) => t.status !== 'exited').length;
                 const exited = list.filter((t) => t.status === 'exited').length;
                 const crashed = list.filter(
                   (t) => t.status === 'exited' && (t.exitCode ?? 0) !== 0
                 ).length;
-                if (list.length === 0 && background.length === 0) return null;
+                if (list.length === 0) return null;
                 const expanded = !!projectExpanded[p.id];
                 const titleParts = [`${running} running`, `${exited} exited`];
-                if (background.length > 0) titleParts.push(`${background.length} background`);
                 if (crashed > 0) titleParts.push(`${crashed} crashed`);
                 return (
                   <button
@@ -944,15 +927,6 @@ function ProjectsList() {
                   >
                     {running}
                     {exited > 0 && <span className="project-badge-exited">·{exited}</span>}
-                    {background.length > 0 && (
-                      <span
-                        className="project-badge-bg"
-                        title={`${background.length} running in the background`}
-                      >
-                        <EyeOff size={9} strokeWidth={2.5} />
-                        {background.length}
-                      </span>
-                    )}
                     {crashed > 0 && (
                       <span className="project-badge-crashed" aria-hidden="true" />
                     )}
@@ -961,7 +935,7 @@ function ProjectsList() {
               })()}
             </div>
             {(() => {
-              const list = visibleTerminals(terminals[p.id]);
+              const list = listedTerminals(terminals[p.id]);
               if (!projectExpanded[p.id] || list.length === 0) return null;
               const activeTab = selectedId === p.id ? selectedTabId[p.id] : undefined;
               return (
@@ -970,6 +944,8 @@ function ProjectsList() {
                     const exited = t.status === 'exited';
                     const bad = exited && (t.exitCode ?? 0) !== 0;
                     const isUnread = !!unread[t.id] && activeTab !== t.id;
+                    // Hidden (closed but still running) → click re-opens it.
+                    const hidden = !!t.headless && !exited;
                     return (
                     <div
                       key={t.id}
@@ -979,8 +955,12 @@ function ProjectsList() {
                       } ${bad ? 'exited-bad' : ''} ${isUnread ? 'unread' : ''}`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        selectProject(p.id);
-                        selectTab(p.id, t.id);
+                        if (hidden) {
+                          void restoreTerminal(t.id, p.id);
+                        } else {
+                          selectProject(p.id);
+                          selectTab(p.id, t.id);
+                        }
                       }}
                       aria-label={isUnread ? `${t.title} · unread output` : undefined}
                       title={
@@ -988,7 +968,9 @@ function ProjectsList() {
                           ? `${t.title} · exited (code ${t.exitCode})`
                           : isUnread
                             ? `${t.title} · unread output`
-                            : t.title
+                            : hidden
+                              ? `${t.title} · click to open`
+                              : t.title
                       }
                     >
                       <span
@@ -1112,7 +1094,7 @@ function ProjectsList() {
               </button>
               {(() => {
                 const armed = confirmDeleteId === p.id;
-                const running = visibleTerminals(terminals[p.id]).filter((t) => t.status !== 'exited').length;
+                const running = listedTerminals(terminals[p.id]).filter((t) => t.status !== 'exited').length;
                 return (
                   <button
                     className={`project-menu-item danger ${armed ? 'project-delete-armed' : ''}`}
