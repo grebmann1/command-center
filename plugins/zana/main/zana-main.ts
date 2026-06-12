@@ -781,12 +781,16 @@ export const zanaMainModule: MainModule = {
         let file = '';
         try {
           const source = await resolveSource(opts);
-          const dbBacked = await hasTicketsDb(source.path);
+          const dbBacked = await useTicketsDb(source.path, log);
 
           // Read the CURRENT assignee state from whichever backend holds it, so
-          // the field computation below is identical for both paths.
+          // the field computation below is identical for both paths. For the
+          // JSON path we read the file ONCE and keep the parsed object for the
+          // later rewrite — re-reading risks racing a deletion and then writing
+          // a stripped ticket over a vanished file.
           let prevAssigneeName: string | null;
           let prevAssigneeId: string | null;
+          let jsonRaw: any = null;
           if (dbBacked) {
             const current = readTicketDetailFromDb(source.path, opts.id, log);
             if (!current) throw new Error('Ticket not found');
@@ -794,12 +798,12 @@ export const zanaMainModule: MainModule = {
             prevAssigneeId = current.assigneeId ?? null;
           } else {
             file = path.join(source.path, 'tickets', opts.id, 'ticket.json');
-            const raw = await readJson<any>(file, log);
-            if (!raw || typeof raw !== 'object') {
+            jsonRaw = await readJson<any>(file, log);
+            if (!jsonRaw || typeof jsonRaw !== 'object') {
               throw new Error('Ticket not found');
             }
-            prevAssigneeName = typeof raw.assigneeName === 'string' ? raw.assigneeName : null;
-            prevAssigneeId = typeof raw.assigneeId === 'string' ? raw.assigneeId : null;
+            prevAssigneeName = typeof jsonRaw.assigneeName === 'string' ? jsonRaw.assigneeName : null;
+            prevAssigneeId = typeof jsonRaw.assigneeId === 'string' ? jsonRaw.assigneeId : null;
           }
 
           const profileId =
@@ -868,8 +872,9 @@ export const zanaMainModule: MainModule = {
             );
           }
 
-          const raw = (await readJson<any>(file, log)) ?? {};
+          // Reuse the object read above (never re-read — see note there).
           // Preserve every unmodelled field; only touch the assignment fields.
+          const raw = jsonRaw;
           raw.assigneeProfileId = newProfileId;
           raw.assigneeName = newAssigneeName;
           raw.assigneeId = newAssigneeId;
