@@ -83,9 +83,16 @@ input {
 
 .app-shell {
   display: grid;
-  grid-template-columns: var(--col-nav) var(--col-list) 1fr;
+  /* minmax(0, 1fr) on the workspace column — a bare 1fr is minmax(auto, 1fr),
+     whose min is the track's min-content width, so wide content deep inside
+     the workspace (e.g. the Library preview) expands this top-level track past
+     the viewport and clips everything (including the list pane) at the window
+     edge. Pinning the min to 0 keeps the column inside the shell. */
+  grid-template-columns: var(--col-nav) var(--col-list) minmax(0, 1fr);
   grid-template-rows: var(--titlebar-h) 1fr;
   height: 100vh;
+  /* Final backstop: the shell itself never scrolls horizontally. */
+  overflow: hidden;
 }
 
 /* Collapsed sidebar: shrink the nav column to an icon-only rail. */
@@ -389,6 +396,15 @@ input {
   padding: 0;
   margin: 8px 8px;
   overflow: hidden;
+  border-top: 1px solid var(--border);
+}
+
+/* Standalone separator (no heading text) — sets Settings apart from the nav
+ * destinations above it. Same rule the collapsed extensions divider draws, so
+ * the two separators read consistently. */
+.nav-divider {
+  height: 0;
+  margin: 8px 8px;
   border-top: 1px solid var(--border);
 }
 
@@ -2633,6 +2649,7 @@ body.resizing-col {
 }
 
 .palette-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2644,8 +2661,46 @@ body.resizing-col {
   font-size: 13px;
 }
 
+/* Stronger active-row treatment: a clearer fill plus a left accent bar so the
+   highlight reads as a discrete selection moving row-to-row, not a faint
+   background that's easy to lose when the list scrolls under the cursor. */
 .palette-item.active {
   background: var(--bg-hover);
+  box-shadow: inset 2px 0 0 var(--accent-blue);
+}
+
+.palette-item.active .palette-icon {
+  color: var(--accent-blue);
+}
+
+/* Keyboard-hint chip on the right of a row (⇥ to complete, ↵ to launch, etc.).
+   Only legible on the active row, dim elsewhere, so it doesn't add noise. */
+.palette-kbd {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity 0.08s ease;
+  white-space: nowrap;
+}
+
+.palette-item.active .palette-kbd {
+  opacity: 1;
+}
+
+/* `#` launch committed banner: the single "Launch in <target> ▸ prompt" row. */
+.palette-launch-banner .palette-label strong {
+  color: var(--accent-blue);
+  font-weight: 600;
+}
+
+.palette-hint-inline {
+  color: var(--text-dim);
+  font-style: italic;
 }
 
 .palette-icon {
@@ -3106,7 +3161,11 @@ body.resizing-col {
 
 .explorer-view {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  /* minmax(0, 1fr) — a bare 1fr is minmax(auto, 1fr), whose min is the track's
+     min-content width, so wide preview content (long headers, tables, code)
+     expands the column and pushes the whole grid past the workspace edge.
+     Pinning the min to 0 lets the track shrink and the content scroll inside. */
+  grid-template-columns: 260px minmax(0, 1fr);
   /* Constrain the single row to the available height; without this the
      implicit row auto-sizes to content, so normal-flow children (the markdown
      preview) grow the track instead of scrolling within it. */
@@ -3782,6 +3841,278 @@ body.resizing-col {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+}
+
+/* ── Agents view (nav === 'agents') ─────────────────────────────────────── */
+
+/* Column 3: header row + the terminal frame the surface portals into. */
+.agents-view {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: var(--bg-base);
+  min-width: 0;
+  min-height: 0;
+}
+
+.agents-terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  min-height: 38px;
+}
+
+.agents-terminal-header .grow {
+  flex: 1;
+}
+
+.agents-terminal-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agents-terminal-title.muted {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.agents-terminal-project {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.agents-open-projects {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.agents-open-projects:hover {
+  background: var(--bg-hover, var(--bg-panel));
+}
+
+/* The portal target: mirror .terminal-host so .terminal-surface { inset:0 }
+   fills it identically to the Projects workspace. */
+.agents-terminal-frame {
+  position: relative;
+  background: var(--bg-panel);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.agents-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 4px;
+  text-align: center;
+  color: var(--text-muted);
+  padding: 24px;
+}
+
+.agents-empty h3 {
+  margin: 8px 0 0;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.agents-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* ── Agents list (column 2) ─────────────────────────────────────────────── */
+
+.agents-list-pane .list-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agents-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+
+/* Flex column so the at-rest sections can be pushed to the bottom. */
+.agents-list-pane .list-body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Background + Recently-finished live in here; margin-top:auto floats the
+   whole block to the bottom of the list, below the live status groups, even
+   when there are no foreground agents above them. */
+.agents-rest {
+  margin-top: auto;
+}
+
+.agents-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.agents-group-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 9px;
+}
+
+/* The "Needs you" header reads red so a blocked agent is unmissable even
+   before you scan the dots. */
+.agents-group-label.group-blocked {
+  color: var(--danger);
+}
+
+.agents-group-label.group-blocked .agents-group-count {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+/* Background + finished sections sit visually quieter than the live groups —
+   they're not where your attention belongs moment-to-moment. */
+.agents-group-label.group-background,
+.agents-group-label.group-finished {
+  opacity: 0.85;
+}
+
+.agents-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+  border-left: 2px solid transparent;
+}
+
+.agents-row:hover {
+  background: var(--bg-hover, var(--bg-panel));
+}
+
+.agents-row.active {
+  background: var(--bg-elevated);
+  border-left-color: var(--accent-gold);
+}
+
+.agents-row.exited {
+  opacity: 0.6;
+}
+
+.agents-row-icon {
+  display: inline-flex;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.agents-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.agents-row-title-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.agents-row-title {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agents-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.agents-row-project {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}
+
+.agents-row-duration {
+  font-variant-numeric: tabular-nums;
+}
+
+.agents-row-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.agents-row-badge.bad {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.agents-list-empty {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+}
+
+.agents-list-empty p {
+  margin: 6px 0 0;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.agents-list-empty span {
+  font-size: 12px;
 }
 
 .inbox-detail-empty,

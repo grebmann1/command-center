@@ -211,6 +211,11 @@ export function Sidebar() {
           </div>
         )}
 
+        {/* Settings is system-level, not a content destination like the nav
+         * above it — set it apart with a divider. A text heading would be
+         * redundant over a single "Settings" row, so just a rule (matching the
+         * divider the collapsed rail draws for the Extensions section). */}
+        <div className="nav-divider" role="separator" />
         {renderNavItem(settingsNavItem)}
       </div>
 
