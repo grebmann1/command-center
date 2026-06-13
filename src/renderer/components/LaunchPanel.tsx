@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal as TerminalIcon } from 'lucide-react';
 import type { ClaudeSessionSummary, LaunchProfileId, Project, TerminalSession } from '@shared/types';
 import { ClaudeSessionsList } from './ClaudeSessionsList';
-import { profileIcon } from '../util/profileIcon';
+import { profileIcon, personaIcon } from '../util/profileIcon';
+import { usePersonas } from '../store';
 
 /**
  * The "+" launcher. The user types an instruction, picks a profile
@@ -44,6 +45,10 @@ function titleFromPrompt(prompt: string): string {
 export interface LaunchOptions {
   extraArgs?: string[];
   title?: string;
+  /** When set, launch as this persona (its flags are layered in by the main
+   *  process); the chosen `profile` becomes the persona's base unless the
+   *  persona declares its own `baseProfile`. */
+  personaId?: string;
 }
 
 interface Props {
@@ -72,8 +77,22 @@ export function LaunchPanel({
 }: Props) {
   const [prompt, setPrompt] = useState('');
   const [profileId, setProfileId] = useState<LauncherProfile>('claude');
+  // Optional persona selection. null = launch the bare profile (today's
+  // behavior). Picking a persona layers its flags onto the base profile.
+  const [personaId, setPersonaId] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Personas surfaced for this project: builtin + global + this project's own.
+  // The store already merges sources; filter project-scoped ones to this project.
+  const allPersonas = usePersonas((s) => s.personas);
+  const personas = allPersonas.filter(
+    (p) =>
+      typeof p.source !== 'object' ||
+      p.source === null ||
+      p.source.projectId === project.id
+  );
+  const selectedPersona = personaId ? personas.find((p) => p.id === personaId) ?? null : null;
 
   const descriptor = PROFILES.find((p) => p.id === profileId) ?? PROFILES[0];
 
@@ -132,10 +151,17 @@ export function LaunchPanel({
       if (body.startsWith('-')) extraArgs.push('--');
       extraArgs.push(body);
     }
-    const title = body ? titleFromPrompt(body) : descriptor.label;
-    onLaunch(descriptor.profile, {
+    // A persona's base profile (if it declares one) wins over the segmented
+    // choice; otherwise the persona layers onto the selected profile. The main
+    // process re-resolves this, but we pass the best base so the title/icon match.
+    const baseProfile = selectedPersona?.baseProfile ?? descriptor.profile;
+    const title = body
+      ? titleFromPrompt(body)
+      : selectedPersona?.name ?? descriptor.label;
+    onLaunch(baseProfile, {
       extraArgs: extraArgs.length > 0 ? extraArgs : undefined,
-      title: title || undefined
+      title: title || undefined,
+      personaId: selectedPersona?.id
     });
     onClose?.();
   };
@@ -193,6 +219,38 @@ export function LaunchPanel({
           ))}
         </div>
       </div>
+
+      {personas.length > 0 && (
+        <div className="launch-row">
+          <span className="launch-row-label">Persona</span>
+          <div className="launch-personas" role="group" aria-label="Persona">
+            <button
+              type="button"
+              className={personaId === null ? 'launch-persona active' : 'launch-persona'}
+              onClick={() => setPersonaId(null)}
+              aria-pressed={personaId === null}
+              title="Launch the bare profile, no persona"
+            >
+              None
+            </button>
+            {personas.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={personaId === p.id ? 'launch-persona active' : 'launch-persona'}
+                onClick={() => setPersonaId((cur) => (cur === p.id ? null : p.id))}
+                aria-pressed={personaId === p.id}
+                title={p.description ?? p.name}
+              >
+                <span className="tab-profile-icon" aria-hidden="true">
+                  {personaIcon(p)}
+                </span>
+                {p.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="launch-actions">
         <button

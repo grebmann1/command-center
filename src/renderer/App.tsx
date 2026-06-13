@@ -7,6 +7,7 @@ import { AgentsView } from './components/AgentsView';
 import { OverviewPanel } from './components/OverviewPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { SchedulerPanel } from './components/SchedulerPanel';
+import { PersonasPanel } from './components/PersonasPanel';
 import { SkillsPanel } from './components/SkillsPanel';
 import { PluginsPanel } from './components/PluginsPanel';
 import { McpPanel } from './components/McpPanel';
@@ -59,6 +60,10 @@ export function App() {
     }
     if (nav === 'scheduler') {
       document.title = `${inboxBadge}Scheduler · ${base}`;
+      return;
+    }
+    if (nav === 'personas') {
+      document.title = `${inboxBadge}Personas · ${base}`;
       return;
     }
     if (nav === 'skills') {
@@ -244,6 +249,7 @@ export function App() {
       {nav === 'projects' && overviewOpen && <OverviewPanel />}
       {nav === 'inbox' && <InboxView />}
       {nav === 'scheduler' && <SchedulerPanel />}
+      {nav === 'personas' && <PersonasPanel />}
       {nav === 'plugins' && <PluginsPanel />}
       {nav === 'skills' && <SkillsPanel />}
       {nav === 'mcp' && <McpPanel />}

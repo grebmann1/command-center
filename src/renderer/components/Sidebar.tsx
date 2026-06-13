@@ -2,6 +2,7 @@ import {
   BookOpen,
   Bot,
   Clock,
+  Drama,
   FolderGit2,
   Inbox,
   Plug,
@@ -58,6 +59,7 @@ const coreNavItems: NavEntry[] = [
   { id: 'agents', label: 'Agents', icon: Bot },
   { id: 'projects', label: 'Projects', icon: FolderGit2 },
   { id: 'scheduler', label: 'Scheduler', icon: Clock },
+  { id: 'personas', label: 'Personas', icon: Drama },
   { id: 'plugins', label: 'Plugins', icon: Puzzle },
   { id: 'skills', label: 'Skills', icon: BookOpen },
   { id: 'mcp', label: 'MCP', icon: Plug }

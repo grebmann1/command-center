@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X, Pin } from 'lucide-react';
 import type { LaunchProfileId, TerminalSession } from '@shared/types';
-import { useUi, useAgentStatus } from '../store';
+import { useUi, useAgentStatus, usePersonas } from '../store';
 import { getTerminal } from '../util/findRegistry';
-import { profileIcon } from '../util/profileIcon';
+import { profileIcon, personaIcon } from '../util/profileIcon';
 import type { AgentState } from '@shared/types';
 
 /** Human label for the status dot's tooltip + aria. */
@@ -92,6 +92,9 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNew, 
   const [tabMenu, setTabMenu] = useState<TabContextMenu | null>(null);
   const anchor = useRef<HTMLButtonElement>(null);
   const unread = useUi((s) => s.unread);
+  // Raw personas slice (stable ref; only changes on an actual update) so a tab
+  // launched as a persona can show that persona's icon/label on its chip.
+  const personas = usePersonas((s) => s.personas);
 
   const startRename = (t: TerminalSession) => {
     if (!onRename) return;
@@ -233,9 +236,23 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNew, 
           }}
         >
           {unread[t.id] && activeTabId !== t.id && <span className="tab-unread" />}
-          <span className={`tab-profile-icon profile-${t.profile}`} aria-hidden="true">
-            {profileIcon(t.profile)}
-          </span>
+          {(() => {
+            // A persona-launched tab shows the persona's icon (falling back to
+            // the base-profile icon inside personaIcon); otherwise the plain
+            // profile icon. If the persona was deleted since launch, fall back.
+            const persona = t.personaId
+              ? personas.find((p) => p.id === t.personaId)
+              : undefined;
+            return (
+              <span
+                className={`tab-profile-icon profile-${t.profile}`}
+                aria-hidden="true"
+                title={persona?.name}
+              >
+                {persona ? personaIcon(persona) : profileIcon(t.profile)}
+              </span>
+            );
+          })()}
           <AgentStatusDot sessionId={t.id} />
           {renamingId === t.id ? (
             <input
