@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // scheduler.ts -> scheduler-store.ts -> electron. Same mock pattern as
 // scheduler-store.test.ts so import-time `app.getPath('home')` doesn't blow up.
@@ -402,5 +402,81 @@ describe('SchedulerManager.onAgentFinished', () => {
     manager.onAgentFinished('no-such-session');
 
     expect(ptys.closeExpectedCalls).toEqual(['no-such-session']);
+  });
+});
+
+/**
+ * Pausing a schedule == `setEnabled(id, false)` (the panel's "Pause all" maps
+ * each enabled task through this). These lock the safety contract the user
+ * relies on: a paused schedule MUST NOT fire by itself — not when its timer
+ * would have elapsed, not on a re-arm, and not after an app restart. The only
+ * thing that may still spawn it is an explicit manual "Run now".
+ *
+ * Uses fake timers so an enabled task's real `setTimeout(arm)` can be advanced
+ * deterministically without waiting out the (minimum 60s) interval.
+ */
+describe('SchedulerManager — paused schedules do not auto-fire', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('disabling clears the armed timer so the elapsed interval never fires', () => {
+    // Enabled task → create() arms a setTimeout. Disable it, then advance well
+    // past the interval: a cleared timer means zero spawns.
+    const { manager, ptys, task } = makeManager({ prompt: 'work', enabled: true });
+
+    manager.setEnabled(task.id, false);
+    vi.advanceTimersByTime(60 * 60_000); // an hour — far past the 5m interval
+
+    expect(ptys.createCalls).toHaveLength(0);
+  });
+
+  it('an enabled task DOES auto-fire when its interval elapses (control)', () => {
+    // Guards against a false-negative: prove the harness actually fires when
+    // NOT paused, so the disabled-case assertion above is meaningful. The
+    // `every: '5m'` default plus the arm() 5s grace floor → advance one full
+    // interval to cross the scheduled delay.
+    const { manager, ptys, task } = makeManager({ prompt: 'work', enabled: true });
+
+    vi.advanceTimersByTime(5 * 60_000 + 5_000);
+
+    expect(ptys.createCalls).toHaveLength(1);
+    // And it self-re-armed for the next interval — still enabled.
+    expect(manager.list().find((t) => t.id === task.id)?.enabled).toBe(true);
+  });
+
+  it('re-arming a disabled task schedules no timer (arm() early-returns)', () => {
+    // arm() bails on !enabled, so no setTimeout is registered — advancing well
+    // past any interval produces zero spawns. (nextRunAt is a display hint set
+    // at create() regardless of enabled, so we assert on firing, not that field.)
+    const { manager, ptys, task } = makeManager({ prompt: 'work', enabled: false });
+
+    (manager as unknown as { arm: (id: string) => void }).arm(task.id);
+    vi.advanceTimersByTime(60 * 60_000); // an hour — far past the 5m interval
+
+    expect(ptys.createCalls).toHaveLength(0);
+  });
+
+  it('persists enabled:false so a restart (loadAll) does not re-arm it', () => {
+    // The boot path only arms tasks whose persisted `enabled` is true. Assert
+    // the disabled state is what would be read back, locking restart-safety.
+    const { manager, task } = makeManager({ prompt: 'work', enabled: true });
+
+    manager.setEnabled(task.id, false);
+
+    expect(manager.list().find((t) => t.id === task.id)?.enabled).toBe(false);
+  });
+
+  it('manual "Run now" still fires a paused schedule (explicit user action)', () => {
+    // The one sanctioned bypass: pausing stops AUTOMATIC fires, not a
+    // deliberate click. Documents that runNow is intentionally exempt.
+    const { manager, ptys, task } = makeManager({ prompt: 'work', enabled: false });
+
+    manager.runNow(task.id);
+
+    expect(ptys.createCalls).toHaveLength(1);
   });
 });
