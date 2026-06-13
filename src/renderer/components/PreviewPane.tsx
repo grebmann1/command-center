@@ -9,20 +9,23 @@ import {
   X,
   Bug,
   RefreshCw,
-  History
+  History,
+  ChevronRight,
+  ChevronDown
 } from 'lucide-react';
 import { useData, useUi } from '../store';
 import { getTerminal } from '../util/findRegistry';
+import {
+  groupDetectedUrls,
+  primaryPreviewUrl,
+  type DetectedUrl,
+  type OriginGroup
+} from '../util/previewUrls';
 import type { ElectronWebviewElement } from '../types/webview';
 import type { TerminalSession } from '@shared/types';
 
 interface Props {
   projectId: string;
-}
-
-interface DetectedUrl {
-  url: string;
-  fromTabTitle: string;
 }
 
 // Viewport presets for simulating different screen sizes. `fit` lets the
@@ -178,26 +181,26 @@ export function PreviewPane({ projectId }: Props) {
     return () => window.clearInterval(id);
   }, [tabs]);
 
-  // First localhost URL we ever see — promote it as the auto-load target so
-  // a fresh "open Preview" lands on the dev server instead of about:blank.
-  // Only fires while target is still about:blank (don't yank the user away
-  // once they navigated somewhere).
+  // Collapse the flat scrape into origin groups (one row per dev server, with
+  // its distinct paths folded underneath). See util/previewUrls.ts.
+  const grouped = useMemo(() => groupDetectedUrls(detected), [detected]);
+
+  // Best-ranked local dev server we ever see — promote it as the auto-load
+  // target so a fresh "open Preview" lands on the dev server instead of
+  // about:blank. Only fires while target is still about:blank (don't yank the
+  // user away once they navigated somewhere).
   useEffect(() => {
     if (target !== 'about:blank') return;
-    const local = detected.find(
-      (d) =>
-        d.url.startsWith('http://localhost') ||
-        d.url.startsWith('http://127.0.0.1')
-    );
-    if (local) {
-      setTarget(local.url);
-      setAddr(local.url);
+    const primary = primaryPreviewUrl(grouped);
+    if (primary) {
+      setTarget(primary);
+      setAddr(primary);
       setBusy(true);
-      lastUrlByProject.set(projectId, local.url);
-      recordVisit(local.url);
+      lastUrlByProject.set(projectId, primary);
+      recordVisit(primary);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detected, target, projectId]);
+  }, [grouped, target, projectId]);
 
   // External nav requests (e.g. terminal link click). Re-fires on nonce bump
   // so the same URL can be re-requested. The `navigate` function is defined
@@ -218,20 +221,6 @@ export function PreviewPane({ projectId }: Props) {
     // effect doesn't require it in the dep array.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navRequest, projectId]);
-
-  // Group detected URLs: localhost first, then everything else.
-  const grouped = useMemo(() => {
-    const local: DetectedUrl[] = [];
-    const remote: DetectedUrl[] = [];
-    for (const d of detected) {
-      const isLocal =
-        d.url.startsWith('http://localhost') ||
-        d.url.startsWith('http://127.0.0.1') ||
-        d.url.startsWith('http://0.0.0.0');
-      (isLocal ? local : remote).push(d);
-    }
-    return { local, remote };
-  }, [detected]);
 
   // Recents: persisted URLs minus anything currently visible as a live
   // detected URL (avoids showing the same item twice in the rail).
@@ -398,17 +387,21 @@ export function PreviewPane({ projectId }: Props) {
         ) : (
           <>
             {grouped.local.length > 0 && (
-              <UrlGroup
-                title="Local"
-                items={grouped.local}
-                onPick={navigate}
-                activeUrl={target}
-              />
+              <div className="preview-rail-group">
+                <div className="preview-rail-label">Local</div>
+                {grouped.local.map((g) => (
+                  <OriginRow
+                    key={g.origin}
+                    group={g}
+                    onPick={navigate}
+                    activeUrl={target}
+                  />
+                ))}
+              </div>
             )}
             {grouped.remote.length > 0 && (
-              <UrlGroup
-                title="Remote"
-                items={grouped.remote}
+              <OtherGroup
+                groups={grouped.remote}
                 onPick={navigate}
                 activeUrl={target}
               />
@@ -580,32 +573,103 @@ export function PreviewPane({ projectId }: Props) {
   );
 }
 
-function UrlGroup({
-  title,
-  items,
+// One row per origin (dev server). Clicking the row navigates to its freshest
+// path. When the origin has more than one distinct path, a disclosure toggle
+// reveals the rest as a compact collapsed sub-list.
+function OriginRow({
+  group,
   onPick,
   activeUrl
 }: {
-  title: string;
-  items: DetectedUrl[];
+  group: OriginGroup;
   onPick: (url: string) => void;
   activeUrl: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const primaryUrl = group.paths[0]?.url ?? group.origin;
+  // Active if the user is anywhere under this origin (the webview may be on a
+  // deeper path than the one we'd auto-pick).
+  const isActive =
+    activeUrl === primaryUrl || activeUrl.startsWith(group.origin);
+  const extraCount = group.paths.length - 1;
+
+  return (
+    <div className="preview-origin">
+      <div className={`preview-rail-item origin ${isActive ? 'active' : ''}`}>
+        <button
+          type="button"
+          className="preview-origin-pick"
+          onClick={() => onPick(primaryUrl)}
+          title={`${primaryUrl} · from ${group.fromTabTitle}`}
+        >
+          <span className="preview-rail-url">{group.display}</span>
+          <span className="preview-rail-from">{group.fromTabTitle}</span>
+        </button>
+        {extraCount > 0 && (
+          <button
+            type="button"
+            className="preview-origin-toggle"
+            onClick={() => setOpen((o) => !o)}
+            title={open ? 'Hide paths' : `Show ${extraCount} more path${extraCount > 1 ? 's' : ''}`}
+            aria-label={open ? 'Hide paths' : 'Show paths'}
+            aria-expanded={open}
+          >
+            {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span className="preview-origin-count">{group.paths.length}</span>
+          </button>
+        )}
+      </div>
+      {open && extraCount > 0 && (
+        <div className="preview-origin-paths">
+          {group.paths.map((p) => (
+            <button
+              key={p.url}
+              type="button"
+              className={`preview-origin-path ${activeUrl === p.url ? 'active' : ''}`}
+              onClick={() => onPick(p.url)}
+              title={p.url}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Remote / 3rd-party origins, folded into a collapsed section so they don't
+// crowd out the dev servers. Closed by default.
+function OtherGroup({
+  groups,
+  onPick,
+  activeUrl
+}: {
+  groups: OriginGroup[];
+  onPick: (url: string) => void;
+  activeUrl: string;
+}) {
+  const [open, setOpen] = useState(false);
   return (
     <div className="preview-rail-group">
-      <div className="preview-rail-label">{title}</div>
-      {items.map((d) => (
-        <button
-          key={d.url}
-          type="button"
-          className={`preview-rail-item ${activeUrl === d.url ? 'active' : ''}`}
-          onClick={() => onPick(d.url)}
-          title={`${d.url} · from ${d.fromTabTitle}`}
-        >
-          <span className="preview-rail-url">{d.url}</span>
-          <span className="preview-rail-from">{d.fromTabTitle}</span>
-        </button>
-      ))}
+      <button
+        type="button"
+        className="preview-rail-label preview-rail-label-btn"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        Other ({groups.length})
+      </button>
+      {open &&
+        groups.map((g) => (
+          <OriginRow
+            key={g.origin}
+            group={g}
+            onPick={onPick}
+            activeUrl={activeUrl}
+          />
+        ))}
     </div>
   );
 }
