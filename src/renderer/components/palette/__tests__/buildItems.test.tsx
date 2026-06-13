@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { buildPaletteItems, type PaletteBuildContext } from '../buildItems.js';
 import type { WhenContext } from '../whenContext.js';
 import type { AppModule } from '@shared/module-api';
-import type { Project, TerminalSession, ScheduledTask, SlashCommand } from '@shared/types';
+import type { Project, TerminalSession, ScheduledTask } from '@shared/types';
 
 // The builder calls getHost(moduleId) for any module that contributes commands;
 // stub the module-host bridge so we don't pull in the live store/IPC wiring.
@@ -51,13 +51,10 @@ function baseCtx(over: Partial<PaletteBuildContext> = {}): PaletteBuildContext {
     activeTab: tab,
     scheduledTasks: [] as ScheduledTask[],
     modules: [],
-    slashCommands: [] as SlashCommand[],
     overviewOpen: false,
     whenCtx,
     onClose: noop,
     launch: noop,
-    launchCommand: noop,
-    sendCommandToActiveTab: noop,
     addProject: asyncNoop,
     setNav: noop,
     selectProject: noop,
@@ -170,64 +167,3 @@ describe('buildPaletteItems', () => {
   });
 });
 
-function cmd(over: Partial<SlashCommand> = {}): SlashCommand {
-  return {
-    id: 'user:eq',
-    name: 'eq',
-    invocation: '/eq',
-    scope: 'user',
-    path: '/x/eq.md',
-    ...over
-  };
-}
-
-describe('buildPaletteItems — slash commands', () => {
-  it('emits a Commands category, keyed cmd:<id>, when a project is selected', () => {
-    const items = buildPaletteItems(baseCtx({ slashCommands: [cmd()] }));
-    const cmds = items.filter((i) => i.category === 'Commands');
-    expect(cmds.map((i) => i.key)).toContain('cmd:user:eq');
-    expect(cmds.find((i) => i.key === 'cmd:user:eq')!.label).toContain('/eq');
-  });
-
-  it('omits all slash commands when no project is selected (nowhere to launch)', () => {
-    const items = buildPaletteItems(baseCtx({
-      slashCommands: [cmd()],
-      selectedProject: null,
-      selectedProjectTabs: [],
-      activeTab: undefined
-    }));
-    expect(items.some((i) => i.category === 'Commands')).toBe(false);
-  });
-
-  it('adds an active-tab entry only when the focused tab is a live Claude session', () => {
-    const claudeTab = { ...makeTab('t1'), profile: 'claude', status: 'running' } as TerminalSession;
-    const withClaude = buildPaletteItems(baseCtx({
-      slashCommands: [cmd()], activeTab: claudeTab, selectedProjectTabs: [claudeTab]
-    })).map((i) => i.key);
-    expect(withClaude).toContain('cmd:user:eq');         // new-tab entry
-    expect(withClaude).toContain('cmd:user:eq:active');  // in-tab entry
-
-    const shellTab = { ...makeTab('t2'), profile: 'shell', status: 'running' } as TerminalSession;
-    const withShell = buildPaletteItems(baseCtx({
-      slashCommands: [cmd()], activeTab: shellTab, selectedProjectTabs: [shellTab]
-    })).map((i) => i.key);
-    expect(withShell).toContain('cmd:user:eq');
-    expect(withShell).not.toContain('cmd:user:eq:active'); // shell isn't a Claude session
-
-    const exitedClaude = { ...makeTab('t3'), profile: 'claude', status: 'exited' } as TerminalSession;
-    const withExited = buildPaletteItems(baseCtx({
-      slashCommands: [cmd()], activeTab: exitedClaude, selectedProjectTabs: [exitedClaude]
-    })).map((i) => i.key);
-    expect(withExited).not.toContain('cmd:user:eq:active'); // dead session — can't send
-  });
-
-  it('launchCommand fires with the invocation when a new-tab command runs', () => {
-    let launched: { invocation: string; yolo: boolean } | null = null;
-    const items = buildPaletteItems(baseCtx({
-      slashCommands: [cmd()],
-      launchCommand: (invocation, yolo) => { launched = { invocation, yolo }; }
-    }));
-    items.find((i) => i.key === 'cmd:user:eq')!.run();
-    expect(launched).toEqual({ invocation: '/eq', yolo: false });
-  });
-});

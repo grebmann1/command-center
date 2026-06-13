@@ -24,6 +24,7 @@ const LibraryView = lazy(() =>
   import('./LibraryView').then((m) => ({ default: m.LibraryView }))
 );
 import type { LaunchProfileId } from '@shared/types';
+import { knownProfile } from '../util/launchProfile';
 
 export function Workspace() {
   const projects = useData((s) => s.projects);
@@ -88,7 +89,7 @@ export function Workspace() {
 
   const handleNewTab = async (
     profile: LaunchProfileId,
-    opts?: { extraArgs?: string[]; title?: string }
+    opts?: { extraArgs?: string[]; title?: string; personaId?: string }
   ) => {
     if (!project) return;
     const session = await createTerminal(project.id, profile, 80, 24, opts);
@@ -106,13 +107,8 @@ export function Workspace() {
 
   // First entry in defaultAgents wins for one-click "+" semantics. We trust
   // the value as a LaunchProfileId only if it matches the known set; an
-  // unknown string falls back to the picker.
-  const KNOWN_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
-  const projectDefaultProfile = (() => {
-    const first = project?.defaultAgents?.[0];
-    if (!first) return undefined;
-    return (KNOWN_PROFILES as string[]).includes(first) ? (first as LaunchProfileId) : undefined;
-  })();
+  // unknown string falls back to the picker (undefined).
+  const projectDefaultProfile = knownProfile(project?.defaultAgents?.[0]);
 
   // Split layouts (vertical/horizontal/grid) are wired up in the store and
   // TerminalSurface but the toolbar picker is hidden for now — feels off in

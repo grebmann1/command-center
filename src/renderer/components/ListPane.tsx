@@ -21,6 +21,7 @@ import { groupIcon, GROUP_FALLBACK_COLOR } from './scheduleGroupMeta';
 import { ScheduleGroupsModal } from './ScheduleGroupsModal';
 import type { OpenTarget, LaunchProfileId, Project, AgentState } from '@shared/types';
 import { useMergedModules } from '../modules';
+import { projectDefaultProfile } from '../util/launchProfile';
 import { InboxSidebar } from './InboxSidebar';
 import { AgentsListPane } from './AgentsView';
 import { AddRemoteProjectDialog } from './AddRemoteProjectDialog';
@@ -118,22 +119,12 @@ function ProjectRollupDot({ projectId }: { projectId: string }) {
   );
 }
 
-const KNOWN_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
-
 /** Quick-launch profiles offered by the focus-view "+" dropdown, in order. */
 const FOCUS_NEW_PROFILES: { profile: LaunchProfileId; label: string }[] = [
   { profile: 'claude', label: 'claude' },
   { profile: 'claude-yolo', label: 'claude --yolo' },
   { profile: 'shell', label: 'shell' }
 ];
-
-/** First entry in defaultAgents wins for one-click "+" semantics, but only if
- *  it's a known profile id; otherwise default to 'claude'. Mirrors Workspace. */
-function projectDefaultProfile(project: Project): LaunchProfileId {
-  const first = project.defaultAgents?.[0];
-  if (first && (KNOWN_PROFILES as string[]).includes(first)) return first as LaunchProfileId;
-  return 'claude';
-}
 
 /**
  * Focus mode: the column drills into a single project, showing all its sessions
@@ -372,6 +363,9 @@ export function ListPane() {
   if (nav === 'skills' || nav === 'mcp' || nav === 'plugins') {
     return <CataloguePane nav={nav as 'skills' | 'mcp' | 'plugins'} />;
   }
+  // Personas owns the whole content area (read-only catalogue with its own
+  // toolbar) — no Projects list column, same as the app-module panels below.
+  if (nav === 'personas') return null;
   // App modules (built-ins + runtime extensions) own the whole content area and
   // bring their own filter rail — they don't want the Projects list column.
   if (modules.some((m) => m.id === nav)) return null;

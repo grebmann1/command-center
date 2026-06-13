@@ -7,12 +7,12 @@
 import {
   Folder, TerminalSquare, Plus, Code2, FolderOpen, FileSearch, Sparkles, Play,
   Zap, Keyboard, History, Search, Inbox, RotateCcw, Trash2, Copy, Pin, PinOff,
-  Globe, BookOpen, Clock, LayoutGrid, RotateCw, Undo2, Puzzle, Slash
+  Globe, BookOpen, Clock, LayoutGrid, RotateCw, Undo2, Puzzle
 } from 'lucide-react';
 import { CursorIcon } from '../icons/CursorIcon';
 import { visibleTerminals, useUi } from '../../store';
 import type {
-  LaunchProfileId, OpenTarget, Project, TerminalSession, ScheduledTask, SlashCommand
+  LaunchProfileId, OpenTarget, Project, TerminalSession, ScheduledTask
 } from '@shared/types';
 import type { AppModule } from '@shared/module-api';
 import { getHost } from '../../modules/ModulePanelHost';
@@ -20,7 +20,7 @@ import { resolveIcon } from '../../util/resolveIcon';
 import { evaluateWhen, type WhenContext } from './whenContext';
 
 /** A category a palette item belongs to, used for empty-query grouping. */
-export type PaletteCategory = 'Projects' | 'Tabs' | 'Actions' | 'Commands' | 'Extensions';
+export type PaletteCategory = 'Projects' | 'Tabs' | 'Actions' | 'Extensions';
 
 export interface PaletteItem {
   key: string;
@@ -48,17 +48,11 @@ export interface PaletteBuildContext {
   activeTab: TerminalSession | undefined;
   scheduledTasks: ScheduledTask[];
   modules: AppModule[];
-  /** Claude Code slash commands discovered for the active project context. */
-  slashCommands: SlashCommand[];
   overviewOpen: boolean;
   /** Coarse, non-sensitive context for evaluating extension command `when`. */
   whenCtx: WhenContext;
   onClose: () => void;
   launch: (profile: LaunchProfileId) => void;
-  /** Open a fresh Claude tab in the active project running `invocation`. */
-  launchCommand: (invocation: string, yolo: boolean) => void;
-  /** Send `invocation` into the focused live Claude session (active-tab mode). */
-  sendCommandToActiveTab: (invocation: string) => void;
   addProject: () => Promise<unknown> | unknown;
   setNav: (nav: string) => void;
   selectProject: (id: string) => void;
@@ -127,64 +121,6 @@ function buildExtensionItems(ctx: PaletteBuildContext): PaletteItem[] {
 function renderIcon(name: string): React.ReactNode {
   const Icon = resolveIcon(name);
   return <Icon size={14} />;
-}
-
-/**
- * Claude Code slash commands (`.claude/commands/**\/*.md`) as palette items.
- * Each command yields a "new Claude tab" entry (always available when a project
- * is selected); when the focused tab is a live Claude session, an additional
- * "send to active tab" entry runs it in place. Keys: `cmd:<scope>:<name>` for
- * the new-tab entry, suffixed `:active` for the in-tab one. Requires a selected
- * project — there's nowhere to launch otherwise.
- */
-function buildSlashCommandItems(ctx: PaletteBuildContext): PaletteItem[] {
-  const { slashCommands, selectedProject, activeTab, launchCommand, sendCommandToActiveTab, onClose } = ctx;
-  if (!selectedProject) return [];
-  const activeIsClaude =
-    !!activeTab && activeTab.status !== 'exited' &&
-    (activeTab.profile === 'claude' || activeTab.profile === 'claude-resume' || activeTab.profile === 'claude-yolo');
-  const scopeLabel: Record<SlashCommand['scope'], string> = {
-    user: 'user command',
-    project: 'project command',
-    plugin: 'plugin command'
-  };
-  const out: PaletteItem[] = [];
-  for (const cmd of slashCommands) {
-    const hintBits = [cmd.description, cmd.argumentHint && `args: ${cmd.argumentHint}`]
-      .filter(Boolean) as string[];
-    const baseHint = hintBits.length ? hintBits.join(' · ') : scopeLabel[cmd.scope];
-    // New-tab entry — the default way to run a command.
-    out.push({
-      key: `cmd:${cmd.id}`,
-      icon: <Slash size={14} />,
-      label: `${cmd.invocation} — new Claude tab`,
-      hint: baseHint,
-      keywords: [cmd.name, cmd.pluginName ?? '', scopeLabel[cmd.scope]].filter(Boolean),
-      category: 'Commands',
-      source: cmd.pluginName ?? scopeLabel[cmd.scope],
-      run: () => {
-        onClose();
-        launchCommand(cmd.invocation, false);
-      }
-    });
-    // Active-tab entry — only when there's a live Claude session to send to.
-    if (activeIsClaude) {
-      out.push({
-        key: `cmd:${cmd.id}:active`,
-        icon: <Slash size={14} />,
-        label: `${cmd.invocation} — run in "${activeTab!.title}"`,
-        hint: baseHint,
-        keywords: [cmd.name, 'active tab', cmd.pluginName ?? ''].filter(Boolean),
-        category: 'Commands',
-        source: cmd.pluginName ?? scopeLabel[cmd.scope],
-        run: () => {
-          onClose();
-          sendCommandToActiveTab(cmd.invocation);
-        }
-      });
-    }
-  }
-  return out;
 }
 
 /**
@@ -579,11 +515,13 @@ export function buildPaletteItems(ctx: PaletteBuildContext): PaletteItem[] {
     }
   }
 
+  // Slash commands are NOT folded into the general list — they have a dedicated
+  // `/` mode in the palette (one clean row each, ↵ new tab / ⇧↵ active tab) so
+  // they don't double up here with verbose " — new Claude tab" labels.
   return [
     ...projectItems,
     ...tabItems,
     ...actions,
-    ...buildSlashCommandItems(ctx),
     ...buildExtensionItems(ctx)
   ];
 }
