@@ -66,7 +66,9 @@ describe.skipIf(!built)('gus built renderer bundle (blob-import contract)', () =
 
     expect(typeof activated.panel).toBe('function');
     expect(typeof activated.commands).toBe('function');
-    expect(typeof activated.navBadge).toBe('function');
+    // No navBadge: removed because it only showed the open-project count, which
+    // has nothing to do with GUS. See renderer-entry.tsx.
+    expect(activated.navBadge).toBeUndefined();
 
     // Render the panel. This runs useState/useEffect/useMemo/useRef + JSX +
     // lucide icons. A second React would throw "Invalid hook call" HERE.
@@ -81,6 +83,5 @@ describe.skipIf(!built)('gus built renderer bundle (blob-import contract)', () =
     // The ported contributions behave.
     const cmds = activated.commands!(host);
     expect(cmds[0]?.id).toBe('say-hi');
-    expect(activated.navBadge!(host)).toBe(0);
   });
 });
