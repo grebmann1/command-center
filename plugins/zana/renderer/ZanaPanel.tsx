@@ -35,7 +35,9 @@ import {
   Users,
   Tag,
   Folder,
-  User
+  User,
+  ChevronRight,
+  ChevronDown
 } from 'lucide-react';
 import type { ModuleHost } from '@cctc/extension-sdk/renderer';
 import type {
@@ -60,6 +62,12 @@ const STORAGE_TAB_KEY = 'activeTab';
 const STORAGE_SOURCE_KEY = 'selectedSourceId';
 /** Persisted auto-refresh on/off choice. */
 const STORAGE_AUTOREFRESH_KEY = 'autoRefresh';
+/**
+ * Persisted per-status column collapse overrides. A status key present here
+ * pins that column's collapsed state (true/false), overriding the default
+ * (terminal columns start collapsed, active columns expanded).
+ */
+const STORAGE_COLLAPSED_KEY = 'collapsedColumns';
 /** Auto-refresh cadence — hardcoded per product decision. */
 const AUTO_REFRESH_MS = 30_000;
 /** How long the assignment undo banner stays actionable before the write commits. */
@@ -89,6 +97,25 @@ const STATUS_ORDER = [
 function statusRank(status: string): number {
   const i = STATUS_ORDER.indexOf(status.trim().toLowerCase());
   return i === -1 ? STATUS_ORDER.length : i;
+}
+
+/**
+ * Statuses whose columns are terminal (done/cancelled/etc). These hold the
+ * least-actionable tickets — usually the bulk of the board — so their columns
+ * start collapsed and, when expanded, render as dense one-line rows rather than
+ * full cards. A user can still pin them open (persisted).
+ */
+const TERMINAL_STATUSES = new Set([
+  'done',
+  'closed',
+  'completed',
+  'cancelled',
+  'canceled',
+  'rejected'
+]);
+
+function isTerminalStatus(status: string): boolean {
+  return TERMINAL_STATUSES.has(status.trim().toLowerCase());
 }
 
 function shortId(id: string): string {
@@ -187,6 +214,10 @@ export default function ZanaPanel({ host }: { host: ModuleHost }) {
   const [activeTab, setActiveTab] = useState<TabId>('tickets');
   const [query, setQuery] = useState('');
   const [sprintFilter, setSprintFilter] = useState<string | null>(null);
+  // Per-status collapse overrides keyed by lowercased status. A key's presence
+  // pins that column's state; absent statuses fall back to the default (terminal
+  // columns collapsed, active columns expanded). Restored from storage on mount.
+  const [collapsedOverrides, setCollapsedOverrides] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<ZanaSelection | null>(null);
   const [loading, setLoading] = useState(true);
   const [probing, setProbing] = useState(false);
@@ -248,10 +279,11 @@ export default function ZanaPanel({ host }: { host: ModuleHost }) {
   useEffect(() => {
     let live = true;
     (async () => {
-      const [tab, savedSourceId, savedAuto, sources] = await Promise.all([
+      const [tab, savedSourceId, savedAuto, savedCollapsed, sources] = await Promise.all([
         host.storage.get<TabId>(STORAGE_TAB_KEY),
         host.storage.get<string>(STORAGE_SOURCE_KEY),
         host.storage.get<boolean>(STORAGE_AUTOREFRESH_KEY),
+        host.storage.get<Record<string, boolean>>(STORAGE_COLLAPSED_KEY),
         probe()
       ]);
       if (!live) return;
@@ -259,6 +291,7 @@ export default function ZanaPanel({ host }: { host: ModuleHost }) {
         setActiveTab(tab);
       // Default ON; only an explicit stored `false` disables it.
       if (savedAuto === false) setAutoRefresh(false);
+      if (savedCollapsed && typeof savedCollapsed === 'object') setCollapsedOverrides(savedCollapsed);
 
       // Global is no longer a selectable source: default to a project. Prefer
       // the persisted one, then the app's active project, then the first
@@ -357,6 +390,28 @@ export default function ZanaPanel({ host }: { host: ModuleHost }) {
     setActiveTab(tab);
     void host.storage.set(STORAGE_TAB_KEY, tab);
   };
+
+  /** Resolve a column's collapsed state: explicit override, else default by status. */
+  const isColumnCollapsed = useCallback(
+    (status: string) => {
+      const key = status.trim().toLowerCase();
+      return collapsedOverrides[key] ?? isTerminalStatus(status);
+    },
+    [collapsedOverrides]
+  );
+
+  /** Toggle (and persist) a column's collapsed state, pinning the override. */
+  const toggleColumnCollapsed = useCallback(
+    (status: string) => {
+      const key = status.trim().toLowerCase();
+      setCollapsedOverrides((prev) => {
+        const next = { ...prev, [key]: !(prev[key] ?? isTerminalStatus(status)) };
+        void host.storage.set(STORAGE_COLLAPSED_KEY, next);
+        return next;
+      });
+    },
+    [host]
+  );
 
   const switchSource = (id: string) => {
     if (id === selectedSourceId) return;
@@ -797,32 +852,69 @@ export default function ZanaPanel({ host }: { host: ModuleHost }) {
                   {columns.length === 0 && (
                     <div className="gus-column-empty">No tickets match.</div>
                   )}
-                  {columns.map(([status, items]) => (
-                    <div key={status} className="gus-column zana-column">
-                      <div className="gus-column-head">
-                        <span className="gus-column-title">{status}</span>
-                        <span className="gus-column-count">{items.length}</span>
+                  {columns.map(([status, items]) => {
+                    const collapsed = isColumnCollapsed(status);
+                    const terminal = isTerminalStatus(status);
+                    return (
+                      <div
+                        key={status}
+                        className={`gus-column zana-column ${collapsed ? 'is-collapsed' : ''} ${
+                          terminal ? 'zana-column--terminal' : ''
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          className="gus-column-head zana-column-head-btn"
+                          onClick={() => toggleColumnCollapsed(status)}
+                          aria-expanded={!collapsed}
+                          title={collapsed ? `Expand ${status}` : `Collapse ${status}`}
+                        >
+                          <span className="zana-column-head-left">
+                            {collapsed ? (
+                              <ChevronRight size={13} aria-hidden />
+                            ) : (
+                              <ChevronDown size={13} aria-hidden />
+                            )}
+                            <span className="gus-column-title">{status}</span>
+                          </span>
+                          <span className="gus-column-count">{items.length}</span>
+                        </button>
+                        {!collapsed &&
+                          (terminal ? (
+                            // Terminal columns expand into a dense one-line list:
+                            // far more tickets fit, and they're the least-actionable.
+                            <div className="gus-column-body zana-column-body--dense">
+                              {items.map((t) => (
+                                <CompactTicketRow
+                                  key={t.id}
+                                  ticket={t}
+                                  onOpen={() => setSelected({ kind: 'ticket', ticket: t })}
+                                />
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="gus-column-body">
+                              {items.map((t) => (
+                                <TicketCard
+                                  key={t.id}
+                                  ticket={t}
+                                  sprintName={resolveSprintName(t.sprintId, sprints)}
+                                  profiles={profiles}
+                                  profileMap={profileMap}
+                                  assignMenuOpen={assignMenuFor === t.id}
+                                  onToggleAssignMenu={() =>
+                                    setAssignMenuFor((cur) => (cur === t.id ? null : t.id))
+                                  }
+                                  onCloseAssignMenu={() => setAssignMenuFor(null)}
+                                  onAssign={(choice) => applyAssign(t, choice)}
+                                  onOpen={() => setSelected({ kind: 'ticket', ticket: t })}
+                                />
+                              ))}
+                            </div>
+                          ))}
                       </div>
-                      <div className="gus-column-body">
-                        {items.map((t) => (
-                          <TicketCard
-                            key={t.id}
-                            ticket={t}
-                            sprintName={resolveSprintName(t.sprintId, sprints)}
-                            profiles={profiles}
-                            profileMap={profileMap}
-                            assignMenuOpen={assignMenuFor === t.id}
-                            onToggleAssignMenu={() =>
-                              setAssignMenuFor((cur) => (cur === t.id ? null : t.id))
-                            }
-                            onCloseAssignMenu={() => setAssignMenuFor(null)}
-                            onAssign={(choice) => applyAssign(t, choice)}
-                            onOpen={() => setSelected({ kind: 'ticket', ticket: t })}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -1057,6 +1149,43 @@ function TicketCard({
           {shortId(ticket.id)}
         </span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A dense, single-line ticket row used inside expanded terminal columns
+ * (done/cancelled/…). These tickets are the least-actionable and usually the
+ * most numerous, so they trade the full card for a compact row: a small
+ * priority dot, the title (clipped to one line), and the short id. Clicking
+ * still opens the full detail modal.
+ */
+function CompactTicketRow({ ticket, onOpen }: { ticket: ZanaTicket; onOpen: () => void }) {
+  return (
+    <div
+      className="zana-compact-row"
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      title={`${ticket.title} — click for details`}
+    >
+      {ticket.priority && (
+        <span
+          className={`zana-compact-prio zana-prio--${ticket.priority.toLowerCase()}`}
+          title={ticket.priority}
+          aria-hidden
+        />
+      )}
+      <span className="zana-compact-title">{ticket.title}</span>
+      <span className="zana-compact-id" title={ticket.id}>
+        {shortId(ticket.id)}
+      </span>
     </div>
   );
 }

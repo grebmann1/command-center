@@ -102,6 +102,7 @@ input {
 
 .titlebar {
   grid-column: 1 / -1;
+  position: relative;
   background: var(--bg-base);
   -webkit-app-region: drag;
   display: flex;
@@ -110,6 +111,61 @@ input {
   font-size: 12px;
   color: var(--text-muted);
   border-bottom: 1px solid var(--border);
+}
+
+.titlebar-title {
+  /* Centered via the flex container; the bell is absolutely positioned so it
+     never shifts the title off-center. */
+}
+
+.titlebar-bell {
+  -webkit-app-region: no-drag;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.titlebar-bell:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.titlebar-bell.active {
+  color: var(--text-primary);
+}
+
+.titlebar-bell.has-unread {
+  color: var(--text-primary);
+}
+
+.titlebar-bell-badge {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--accent-blue);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .sidebar {
@@ -8423,6 +8479,107 @@ body.resizing-col {
   padding: 0 6px;
 }
 
+/* ── Collapsible kanban columns ──────────────────────────────────────────────
+   Terminal columns (done/cancelled/…) start collapsed so the active work leads.
+   A collapsed column stops flex-growing and shrinks to a slim header strip; the
+   whole header is a button that toggles state. */
+.zana-column-head-btn {
+  width: 100%;
+  border: none;
+  background: var(--bg-elevated);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.zana-column-head-btn:hover {
+  background: color-mix(in srgb, var(--bg-elevated) 70%, var(--text-primary));
+}
+.zana-column-head-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.zana-column-head-left svg {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+.zana-column-head-btn .gus-column-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Collapsed: don't grow, don't reserve a full column's width, and hide the body. */
+.zana-column.is-collapsed {
+  flex: 0 0 auto;
+  min-width: 0;
+  align-self: flex-start;
+}
+.zana-column.is-collapsed .gus-column-head-btn {
+  border-bottom: none;
+}
+
+/* A dense, single-line list for expanded terminal columns: many low-priority
+   tickets fit at once without the full-card footprint. */
+.zana-column-body--dense {
+  gap: 1px;
+  padding: 4px;
+}
+.zana-compact-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  min-width: 0;
+}
+.zana-compact-row:hover {
+  background: var(--bg-elevated);
+}
+.zana-compact-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* The priority indicator collapses to a small dot in the dense row. */
+.zana-compact-prio {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+  padding: 0;
+}
+.zana-compact-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zana-compact-id {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+/* Solid dot colors (the chip variants use faint 16% fills, too pale at 7px). */
+.zana-compact-prio.zana-prio--urgent,
+.zana-compact-prio.zana-prio--critical,
+.zana-compact-prio.zana-prio--p0,
+.zana-compact-prio.zana-prio--p1,
+.zana-compact-prio.zana-prio--high {
+  background: var(--danger);
+}
+.zana-compact-prio.zana-prio--medium,
+.zana-compact-prio.zana-prio--p2 {
+  background: var(--accent-gold);
+}
+
 /* First-run welcome — shown when no open project has a `.zana/`. Centered
    explainer so an unfamiliar user understands the empty section. */
 .zana-welcome {
@@ -9750,26 +9907,61 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
 }
 
 /* ── Launcher (the rich "+" panel: instruction + profile/model/mode + resume) ── */
-/* Modal variant: a touch wider than the palette and scrollable, since it stacks
-   the instruction box, several option rows, and the resume list. */
+/* Modal variant: a touch wider than the palette. The panel keeps its top
+   controls (instruction, profile, persona, actions) pinned and lets only the
+   resume list scroll, so the container itself never scrolls. */
 .palette.launch-modal {
   width: min(560px, 92vw);
   max-height: 82vh;
   padding: 18px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* Inline variant lives inside .empty-inner; constrain width so it reads as a
-   centered card rather than a full-bleed form. */
+   centered card rather than a full-bleed form. Unlike the modal, it has no
+   definite height to size an inner scroll region against, so we let the panel
+   grow to its content and scroll the overlay as a whole (see below). */
 .empty-inner .launch-panel {
   width: min(520px, 100%);
   text-align: left;
+}
+
+/* Inline: scroll the whole overlay when the panel (instruction + profile +
+   persona + "still running" + resume list) is taller than the viewport. The
+   internal sessions-list scroll only kicks in for the modal, which has a real
+   max-height; here the list grows naturally and the overlay carries the scroll. */
+.empty-inner .launch-panel .sessions-list {
+  overflow-y: visible;
 }
 
 .launch-panel {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
+}
+
+/* The modal's only child is the panel; let it own the modal's full height so
+   its internal scroll region can size against it. */
+.launch-modal > .launch-panel {
+  flex: 1 1 auto;
+}
+
+/* Only the resume list scrolls. Everything above it (header, instruction,
+   profile/persona rows, actions) stays fixed at the top of the panel. */
+.launch-panel .sessions {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.launch-panel .sessions-list {
+  overflow-y: auto;
+  min-height: 0;
+  /* room for the scrollbar so cards don't sit flush against it */
+  padding-right: 2px;
 }
 
 .launch-header h3 {
@@ -10163,6 +10355,10 @@ body.resizing-col .library-resizer::after {
   gap: 5px;
   width: 100%;
   min-width: 0;
+  /* Hard guarantee: even if a descendant's truncation chain breaks, the card
+     itself clips its own content so nothing visually escapes to the right. */
+  max-width: 100%;
+  overflow: hidden;
   padding: 9px 11px;
   border: 1px solid transparent;
   border-radius: 8px;
