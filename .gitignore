@@ -11,3 +11,6 @@ dist
 
 # Local tool cache (understand-anything knowledge-graph indexer)
 .understand-anything/
+
+# App runtime data (brainstorm library, schedules) — written by the app, not source
+.cc-center/

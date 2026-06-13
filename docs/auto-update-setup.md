@@ -27,9 +27,11 @@ one. So:
 - The **first** signed release is only a baseline — you can't auto-update *into*
   it from an older unsigned build. The update path is exercisable from the
   **second** signed release onward.
-- Self-signed can't be notarized, so a **fresh install** still needs
-  right-click → **Open** once to clear Gatekeeper. Auto-updates after that don't
-  prompt.
+- Self-signed can't be notarized, so a **fresh install** still needs a one-time
+  Gatekeeper bypass. On macOS 15+ (Sequoia/Tahoe) the old right-click → Open is
+  gone — use **System Settings → Privacy & Security → Open Anyway**, or
+  `xattr -dr com.apple.quarantine "/Applications/Claude Code Terminal Center.app"`.
+  Auto-updates after that don't prompt.
 
 ## One-time: generate the cert
 
@@ -81,8 +83,8 @@ Release. Installed copies pick it up on next launch.
 
 Needs **two** signed releases:
 
-1. Tag `vX`, let CI publish, install the `.dmg`, launch it once (right-click →
-   Open).
+1. Tag `vX`, let CI publish, install the `.dmg`, launch it once (clear Gatekeeper
+   via Privacy & Security → Open Anyway, or the `xattr` command above).
 2. Tag `vX+1`, let CI publish.
 3. Relaunch the installed `vX`: it detects the update, toasts
    "Downloading… / ready — installs when you quit", and after quit+relaunch the

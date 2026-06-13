@@ -13,8 +13,8 @@ name: Release
 # electron-updater can auto-update one build to the next — Squirrel.Mac refuses
 # to update an unsigned app. The signing cert is imported from the CSC_LINK +
 # CSC_KEY_PASSWORD repo secrets (see docs/auto-update-setup.md). A fresh install
-# still needs right-click → Open once to clear Gatekeeper; auto-updates after
-# that don't prompt.
+# still needs a one-time Gatekeeper bypass (Privacy & Security → Open Anyway, or
+# `xattr -dr com.apple.quarantine` the .app); auto-updates after that don't prompt.
 
 on:
   push:
@@ -138,8 +138,9 @@ jobs:
           body: |
             ### Claude Code Terminal Center ${{ github.ref_name }}
 
-            macOS build (self-signed, Apple Silicon). On first launch, right-click
-            the app and choose **Open** to get past Gatekeeper. After that,
+            macOS build (self-signed, Apple Silicon). On first launch, clear
+            Gatekeeper via **System Settings → Privacy & Security → Open Anyway**
+            (or run `xattr -dr com.apple.quarantine` on the app). After that,
             updates install automatically on quit.
 
             | Mac | Download |
