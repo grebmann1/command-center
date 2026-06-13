@@ -64,7 +64,7 @@ export function PersonasPanel() {
   };
 
   return (
-    <main className="settings-panel skills-panel">
+    <main className="settings-panel skills-panel personas-panel">
       <div className="settings-inner">
         <div className="scheduler-header">
           <div className="scheduler-header-text">
