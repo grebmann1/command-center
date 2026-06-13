@@ -22,6 +22,7 @@ import {
 import { InboxGuidance } from './InboxGuidance';
 import { unwrapBareFence } from '../util/markdown';
 import { buildStandaloneHtml } from '../util/exportHtml';
+import { highlightForPath } from '../util/highlightCode';
 import type { InboxDoc, InboxEntry, FsReadResult, Project, SavedDoc, SavedRecordInput } from '@shared/types';
 
 interface InboxDetailProps {
@@ -523,6 +524,20 @@ function DocContent({ path, content }: { path: string; content: string }) {
   const lower = path.toLowerCase();
   if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
     return <MarkdownContent text={content} />;
+  }
+  // Syntax-highlight recognized source files (.ts/.tsx/.py/…) the same way the
+  // markdown path highlights fenced code. Unknown/extensionless files fall back
+  // to plain monospace text. The highlighted HTML is escaped by highlight.js.
+  const highlighted = highlightForPath(path, content);
+  if (highlighted) {
+    return (
+      <pre className="inbox-doc-pre hljs">
+        <code
+          className={`hljs language-${highlighted.language}`}
+          dangerouslySetInnerHTML={{ __html: highlighted.html }}
+        />
+      </pre>
+    );
   }
   return <pre className="inbox-doc-pre">{content}</pre>;
 }
