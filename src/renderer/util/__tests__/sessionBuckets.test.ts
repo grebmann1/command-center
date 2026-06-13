@@ -80,6 +80,44 @@ describe('bucketSessions — unknown heuristic by pty status', () => {
   });
 });
 
+describe('bucketSessions — shells get their own bucket', () => {
+  it('a plain shell lands in shell, not running, even on a live pty', () => {
+    const sessions = [
+      session({ id: 'sh', profile: 'shell', status: 'running' }),
+      session({ id: 'ag', profile: 'claude', status: 'running' })
+    ];
+    // The shell would previously masquerade as a "running" agent (unknown +
+    // live pty). Now it's kept apart.
+    expect(idsByBucket(sessions, { ag: 'working' })).toEqual({
+      running: ['ag'],
+      shell: ['sh']
+    });
+  });
+
+  it('routes shells by profile regardless of any agent state on the session', () => {
+    // A shell never emits agent state, but guard against a stray entry: profile
+    // wins over agent state for the shell→bucket decision.
+    const sessions = [session({ id: 'sh', profile: 'shell', status: 'running' })];
+    expect(idsByBucket(sessions, { sh: 'working' })).toEqual({ shell: ['sh'] });
+  });
+
+  it('an exited shell still goes to exited, not shell', () => {
+    const sessions = [session({ id: 'sh', profile: 'shell', status: 'exited', exitCode: 0 })];
+    expect(idsByBucket(sessions, {})).toEqual({ exited: ['sh'] });
+  });
+
+  it('orders the shell bucket below the agent buckets, above exited', () => {
+    const sessions = [
+      session({ id: 'ex', profile: 'shell', status: 'exited', exitCode: 0 }),
+      session({ id: 'sh', profile: 'shell', status: 'running' }),
+      session({ id: 'run', profile: 'claude', status: 'running' })
+    ];
+    const buckets = bucketSessions(sessions, { run: 'working' });
+    expect(buckets.map((b) => b.id)).toEqual(['running', 'shell', 'exited']);
+    expect(buckets.find((b) => b.id === 'shell')?.label).toBe('Shells');
+  });
+});
+
 describe('bucketSessions — exited precedence', () => {
   it('exited pty goes to exited regardless of agent state', () => {
     const sessions = [session({ id: 'a', status: 'exited', exitCode: 0 })];

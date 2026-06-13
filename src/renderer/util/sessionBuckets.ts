@@ -7,9 +7,10 @@ import type { AgentState, TerminalSession } from '../../shared/types.js';
  */
 export type SessionBucketId =
   | 'blocked' // "Needs you" — agent waiting on the user
-  | 'running' // working agents + active non-claude shells
+  | 'running' // working agents
   | 'done' // finished its turn, unseen
   | 'idle' // at the prompt, seen
+  | 'shell' // plain shells (no agent) — kept apart from the agent buckets
   | 'exited'; // pty closed (crashed sorts first within)
 
 export interface SessionBucket {
@@ -18,19 +19,24 @@ export interface SessionBucket {
   sessions: TerminalSession[];
 }
 
-/** Display order — most-urgent first. Also the source of bucket labels. */
+/** Display order — most-urgent first. Also the source of bucket labels.
+ *  Shells sit below the agent buckets (they carry no agent state to rank) but
+ *  above Exited. */
 const BUCKET_ORDER: { id: SessionBucketId; label: string }[] = [
   { id: 'blocked', label: 'Needs you' },
   { id: 'running', label: 'Running' },
   { id: 'done', label: 'Done' },
   { id: 'idle', label: 'Idle' },
+  { id: 'shell', label: 'Shells' },
   { id: 'exited', label: 'Exited' }
 ];
 
 /**
  * Classify a single session into its bucket. Rules are applied in order:
- *  1. exited pty → exited (regardless of agent state).
- *  2. else by live agent state (default 'unknown' when absent):
+ *  1. exited pty → exited (regardless of profile / agent state).
+ *  2. plain shells (the `shell` profile) → shell. Shells carry no agent state,
+ *     so they'd otherwise masquerade as "running" agents — keep them apart.
+ *  3. else by live agent state (default 'unknown' when absent):
  *     blocked → blocked, working → running, done → done, idle → idle,
  *     unknown → running if the pty is running, else idle.
  *
@@ -40,6 +46,7 @@ const BUCKET_ORDER: { id: SessionBucketId; label: string }[] = [
  */
 function classify(session: TerminalSession, agent: AgentState): SessionBucketId {
   if (session.status === 'exited') return 'exited';
+  if (session.profile === 'shell') return 'shell';
   switch (agent) {
     case 'blocked':
       return 'blocked';
@@ -73,6 +80,7 @@ export function bucketSessions(
     running: [],
     done: [],
     idle: [],
+    shell: [],
     exited: []
   };
 
