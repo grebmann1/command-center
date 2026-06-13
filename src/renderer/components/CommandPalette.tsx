@@ -275,6 +275,21 @@ export function CommandPalette({ onClose }: Props) {
     return scored.map((s) => ({ item: s.item, labelMatchIdx: s.labelMatchIdx }));
   }, [items, query, fileMode]);
 
+  // How many items each capped category hides in the empty-query landing view,
+  // so the section header can show a "+N more — type to search" affordance.
+  // Empty only — typing lifts the caps, so there's nothing hidden to announce.
+  const overflow = useMemo<Partial<Record<PaletteCategory, number>>>(() => {
+    if (fileMode || query.trim() !== '') return {};
+    const counts: Partial<Record<PaletteCategory, number>> = {};
+    for (const it of items) counts[it.category] = (counts[it.category] ?? 0) + 1;
+    const out: Partial<Record<PaletteCategory, number>> = {};
+    for (const [cat, total] of Object.entries(counts) as [PaletteCategory, number][]) {
+      const cap = EMPTY_CATEGORY_CAP[cat];
+      if (cap && total > cap) out[cat] = total - cap;
+    }
+    return out;
+  }, [items, query, fileMode]);
+
   // --- file rows (@ mode) ----------------------------------------------------
   const fileRows = useMemo<FileRow[]>(() => {
     if (!fileMode || !files) return [];
@@ -368,7 +383,7 @@ export function CommandPalette({ onClose }: Props) {
         <div className="palette-list" ref={listRef}>
           {fileMode
             ? renderFileRows(files, fileRows, activeIdx, setActiveIdx, chooseFile)
-            : renderCommandRows(rows, showHeaders, activeIdx, setActiveIdx, runItem)}
+            : renderCommandRows(rows, showHeaders, activeIdx, setActiveIdx, runItem, overflow)}
         </div>
       </div>
     </div>
@@ -403,7 +418,8 @@ function renderCommandRows(
   showHeaders: boolean,
   activeIdx: number,
   setActiveIdx: (i: number) => void,
-  runItem: (item: PaletteItem) => void
+  runItem: (item: PaletteItem) => void,
+  overflow: Partial<Record<PaletteCategory, number>>
 ) {
   if (rows.length === 0) return <div className="palette-empty">No matches</div>;
 
@@ -436,7 +452,13 @@ function renderCommandRows(
     if (row.item.category !== lastCategory) {
       lastCategory = row.item.category;
       lastSource = null;
-      out.push(<div key={`hdr:${row.item.category}`} className="palette-section">{row.item.category}</div>);
+      const more = overflow[row.item.category];
+      out.push(
+        <div key={`hdr:${row.item.category}`} className="palette-section">
+          <span>{row.item.category}</span>
+          {more ? <span className="palette-section-more">+{more} more · type to search</span> : null}
+        </div>
+      );
     }
     // Within Extensions, sub-group by the extension's source title.
     if (row.item.category === 'Extensions' && row.item.source !== lastSource) {
