@@ -16,6 +16,7 @@ import type {
   ScheduledTask,
   ScheduleTemplate,
   ScheduleGroup,
+  Persona,
   UpdateProgress,
   UpdateStatus
 } from '@shared/types';
@@ -33,6 +34,7 @@ export type CoreNavId =
   | 'agents'
   | 'inbox'
   | 'scheduler'
+  | 'personas'
   | 'plugins'
   | 'skills'
   | 'mcp'
@@ -664,7 +666,7 @@ interface DataState {
     profile: LaunchProfileId,
     cols: number,
     rows: number,
-    opts?: { extraArgs?: string[]; title?: string; cwd?: string; prompt?: string }
+    opts?: { extraArgs?: string[]; title?: string; cwd?: string; prompt?: string; personaId?: string }
   ) => Promise<TerminalSession | null>;
   /**
    * Terminate a session: kills the pty and removes the tab. Pushes a
@@ -924,6 +926,26 @@ export const useData = create<DataState>((set, get) => ({
       useScheduleTemplates.setState({ templates });
     });
 
+    // Personas: one-shot list + push. Main watches the user dir + per-project
+    // dirs for hand-edited persona files and pushes refreshed lists.
+    try {
+      const personas = await window.cc.personas.list();
+      usePersonas.setState({ personas, loading: false });
+    } catch {
+      usePersonas.setState({ loading: false });
+    }
+    window.cc.personas.onChanged((personas) => {
+      usePersonas.setState({ personas });
+    });
+
+    // Projects: live refresh when the list changes out-of-band — notably when
+    // an agent adds a cloned repo via the `register_project` MCP tool. The
+    // renderer's own add/remove/reorder still drive `loadProjects()` directly;
+    // this push covers mutations the renderer didn't initiate.
+    window.cc.projects.onChanged((projects) => {
+      set({ projects });
+    });
+
     // Library: one-shot list + full-list push (like saved). Reconciled on read:
     // manifest + on-disk, both scopes, newest-first.
     try {
@@ -1178,6 +1200,7 @@ export const useData = create<DataState>((set, get) => ({
       const result = await window.cc.terminals.create({
         projectId,
         profile,
+        personaId: opts?.personaId,
         cols,
         rows,
         extraArgs: opts?.extraArgs,
@@ -1634,7 +1657,14 @@ export const useData = create<DataState>((set, get) => ({
         } else {
           terminals[pid] = terminals[pid].map((t) =>
             t.id === sessionId
-              ? { ...t, status: 'exited' as const, exitCode: exitCode ?? t.exitCode }
+              ? {
+                  ...t,
+                  status: 'exited' as const,
+                  exitCode: exitCode ?? t.exitCode,
+                  // Stamp the run-end once (don't overwrite if a duplicate exit
+                  // fires) so the Agents view can show an exact run length.
+                  finishedAt: t.finishedAt ?? Date.now()
+                }
               : t
           );
           // It's now an exited tombstone, not a restorable hidden session, so
@@ -2022,6 +2052,22 @@ interface ScheduleTemplatesState {
 
 export const useScheduleTemplates = create<ScheduleTemplatesState>(() => ({
   templates: [],
+  loading: true
+}));
+
+interface PersonasState {
+  personas: Persona[];
+  loading: boolean;
+}
+
+/**
+ * Launchable personas — fed from `cc.personas.list` on boot and refreshed by
+ * the main process's `personas:onChanged` push (same one-shot + push pattern as
+ * useScheduleTemplates). Read-only in the renderer; authoring is by editing the
+ * JSON files the "Reveal" action opens.
+ */
+export const usePersonas = create<PersonasState>(() => ({
+  personas: [],
   loading: true
 }));
 

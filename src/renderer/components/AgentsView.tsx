@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, ExternalLink } from 'lucide-react';
+import { Bot, ExternalLink, Plus } from 'lucide-react';
 import type { AgentState, TerminalSession } from '@shared/types';
 import { useData, useUi, useAgentStatus } from '../store';
 import { profileIcon } from '../util/profileIcon';
+import { QuickAgentLauncher } from './QuickAgentLauncher';
 import { AGENTS_TERMINAL_ANCHOR_ID } from './TerminalSurface';
 
 /**
@@ -92,6 +93,7 @@ export function AgentsListPane() {
   const rows = useAgentRows();
   const agentFocusId = useUi((s) => s.agentFocusId);
   const focusAgent = useUi((s) => s.focusAgent);
+  const [launcherOpen, setLauncherOpen] = useState(false);
 
   // One timer for the whole list drives the live "running for X". A tick state
   // forces a re-render each second; durations are computed at render from
@@ -102,15 +104,35 @@ export function AgentsListPane() {
     return () => clearInterval(id);
   }, []);
 
-  const live = rows.filter((r) => r.session.status !== 'exited');
   const finished = rows.filter((r) => r.session.status === 'exited');
+  // Live, foreground agents are the ones you're actively driving — they get the
+  // status grouping up top. Background (headless) runs are detached and don't
+  // need your attention moment-to-moment, so they sink to their own section at
+  // the bottom rather than diluting the Needs-you / Working / Idle buckets.
+  const live = rows.filter((r) => r.session.status !== 'exited' && !r.session.headless);
+  const background = rows.filter((r) => r.session.status !== 'exited' && r.session.headless);
   const now = Date.now();
+
+  // Group live foreground agents by what they need from you. `done` and
+  // `unknown` collapse into the Idle bucket — neither is actively running nor
+  // waiting, so they read as "at rest" alongside idle. Order: most-urgent first.
+  const liveGroups: Array<{ key: string; label: string; rows: AgentRow[] }> = [
+    { key: 'blocked', label: 'Needs you', rows: live.filter((r) => r.state === 'blocked') },
+    { key: 'working', label: 'Working', rows: live.filter((r) => r.state === 'working') },
+    {
+      key: 'idle',
+      label: 'Idle',
+      rows: live.filter((r) => r.state !== 'blocked' && r.state !== 'working')
+    }
+  ].filter((g) => g.rows.length > 0);
 
   const renderRow = (r: AgentRow) => {
     const { session: t } = r;
     const exited = t.status === 'exited';
     const active = t.id === agentFocusId;
-    const dur = formatDuration(now - t.createdAt);
+    // Live agents grow against `now`; exited ones freeze at their run length
+    // (finishedAt - createdAt) so the timer doesn't keep ticking after death.
+    const dur = formatDuration((exited ? t.finishedAt ?? t.createdAt : now) - t.createdAt);
     return (
       <button
         key={t.id}
@@ -128,7 +150,14 @@ export function AgentsListPane() {
           <span className="agents-row-meta">
             <span className="agents-row-project">{r.projectName}</span>
             {!exited && <span className="agents-row-duration">{dur}</span>}
-            {t.headless && <span className="agents-row-badge">Background</span>}
+            {exited && t.finishedAt && (
+              <span className="agents-row-duration" title="Total run time">
+                ran {dur}
+              </span>
+            )}
+            {/* No "Background" pill: these rows live under the Background
+                header, so it'd be redundant. Scheduled stays — a background run
+                can also be a scheduled job, which is worth flagging. */}
             {t.scheduled && <span className="agents-row-badge">Scheduled</span>}
             {exited && (
               <span className={`agents-row-badge ${t.exitCode ? 'bad' : ''}`}>
@@ -137,7 +166,6 @@ export function AgentsListPane() {
             )}
           </span>
         </span>
-        {r.state === 'blocked' && <span className="agents-row-needs">Needs you</span>}
       </button>
     );
   };
@@ -146,27 +174,70 @@ export function AgentsListPane() {
     <section className="list-pane agents-list-pane">
       <header className="list-header">
         <h2>Agents</h2>
-        {live.length > 0 && <span className="agents-count">{live.length}</span>}
+        {live.length + background.length > 0 && (
+          <span className="agents-count">{live.length + background.length}</span>
+        )}
+        <button
+          type="button"
+          className="icon-btn agents-new"
+          onClick={() => setLauncherOpen(true)}
+          aria-label="New quick agent"
+          title="New quick agent"
+        >
+          <Plus size={14} />
+        </button>
       </header>
       <div className="list-body">
         {rows.length === 0 ? (
           <div className="agents-list-empty">
             <Bot size={20} aria-hidden="true" />
             <p>No agents yet</p>
-            <span>Launch a Claude session in a project to see it here.</span>
+            <span>Launch a quick agent here, or start a Claude session in a project.</span>
+            <button type="button" className="btn primary" onClick={() => setLauncherOpen(true)}>
+              <Plus size={14} />
+              New quick agent
+            </button>
           </div>
         ) : (
           <>
-            {live.map(renderRow)}
-            {finished.length > 0 && (
-              <>
-                <div className="agents-group-label">Recently finished</div>
-                {finished.map(renderRow)}
-              </>
+            {liveGroups.map((g) => (
+              <div key={g.key} className="agents-group">
+                <div className={`agents-group-label group-${g.key}`}>
+                  <span>{g.label}</span>
+                  <span className="agents-group-count">{g.rows.length}</span>
+                </div>
+                {g.rows.map(renderRow)}
+              </div>
+            ))}
+            {(background.length > 0 || finished.length > 0) && (
+              // At-rest sections (detached + exited) pin to the bottom via
+              // margin-top:auto so they sit below the live groups even when no
+              // foreground agent is running and the list is otherwise empty.
+              <div className="agents-rest">
+                {background.length > 0 && (
+                  <div className="agents-group">
+                    <div className="agents-group-label group-background">
+                      <span>Background</span>
+                      <span className="agents-group-count">{background.length}</span>
+                    </div>
+                    {background.map(renderRow)}
+                  </div>
+                )}
+                {finished.length > 0 && (
+                  <div className="agents-group">
+                    <div className="agents-group-label group-finished">
+                      <span>Recently finished</span>
+                      <span className="agents-group-count">{finished.length}</span>
+                    </div>
+                    {finished.map(renderRow)}
+                  </div>
+                )}
+              </div>
             )}
           </>
         )}
       </div>
+      {launcherOpen && <QuickAgentLauncher onClose={() => setLauncherOpen(false)} />}
     </section>
   );
 }

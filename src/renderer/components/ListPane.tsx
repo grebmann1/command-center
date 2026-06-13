@@ -22,6 +22,7 @@ import { ScheduleGroupsModal } from './ScheduleGroupsModal';
 import type { OpenTarget, LaunchProfileId, Project, AgentState } from '@shared/types';
 import { useMergedModules } from '../modules';
 import { projectDefaultProfile } from '../util/launchProfile';
+import { shortenProjectPath } from '../util/path';
 import { InboxSidebar } from './InboxSidebar';
 import { AgentsListPane } from './AgentsView';
 import { AddRemoteProjectDialog } from './AddRemoteProjectDialog';
@@ -1181,10 +1182,37 @@ function SchedulerPane() {
   const groups = useScheduleGroups((s) => s.groups);
   const tasks = useScheduler((s) => s.tasks);
   const collapsedSections = useUi((s) => s.collapsedSections);
-  const sortedProjects = sortProjectsForDisplay(projects);
   const [filter, setFilter] = useState('');
   const [managingGroups, setManagingGroups] = useState(false);
+  const [homedir, setHomedir] = useState('');
+  useEffect(() => {
+    window.cc.app.homedir().then(setHomedir).catch(() => {});
+  }, []);
   const q = filter.trim().toLowerCase();
+
+  // Per-project schedule counts, so the rail can badge projects that actually
+  // have schedules and de-emphasize the ones that don't — the path tails alone
+  // (all `/Users/<me>/Documents/…`) don't tell you where the work is.
+  const countByProject = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of tasks) {
+      if (t.source && t.source !== 'global') {
+        const pid = (t.source as { projectId: string }).projectId;
+        m.set(pid, (m.get(pid) ?? 0) + 1);
+      }
+    }
+    return m;
+  }, [tasks]);
+
+  // Projects with schedules float to the top (count desc), then the rest in the
+  // usual display order. The active project stays put wherever it sorts.
+  const sortedProjects = useMemo(() => {
+    const base = sortProjectsForDisplay(projects);
+    return [...base].sort(
+      (a, b) => (countByProject.get(b.id) ?? 0) - (countByProject.get(a.id) ?? 0)
+    );
+  }, [projects, countByProject]);
+
   const visibleProjects = q
     ? sortedProjects.filter(
         (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q)
@@ -1298,10 +1326,13 @@ function SchedulerPane() {
         ) : (
           visibleProjects.map((p) => {
             const active = schedulerTab === 'project' && selectedProjectId === p.id;
+            const count = countByProject.get(p.id) ?? 0;
             return (
               <div
                 key={p.id}
-                className={`project-item ${active ? 'active' : ''}`}
+                className={`project-item ${active ? 'active' : ''} ${
+                  count === 0 ? 'project-item--empty' : ''
+                }`}
                 onClick={() => {
                   selectProject(p.id);
                   setSchedulerTab('project');
@@ -1309,13 +1340,14 @@ function SchedulerPane() {
                 title={p.path}
               >
                 <span
-                  className="project-dot"
-                  style={p.color ? { background: p.color } : undefined}
+                  className={`project-dot ${count === 0 ? 'project-dot--hollow' : ''}`}
+                  style={p.color && count > 0 ? { background: p.color } : undefined}
                 />
                 <div className="project-meta">
                   <div className="project-name">{p.name}</div>
-                  <div className="project-path">{p.path}</div>
+                  <div className="project-path">{shortenProjectPath(p.path, homedir)}</div>
                 </div>
+                {count > 0 && <span className="list-count-badge">{count}</span>}
               </div>
             );
           })

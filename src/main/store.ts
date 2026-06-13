@@ -291,6 +291,28 @@ export const store = {
     writeProjects(projects);
     return project;
   },
+  /**
+   * The single built-in scratch project that backs the Agents-module Quick
+   * Agent. Rooted at `~/cc-workspace` (created on first call), reused on every
+   * subsequent call via `addProject`'s path-dedup. Tagged `quickAgent` so the
+   * UI can treat it specially. Idempotent.
+   */
+  ensureQuickAgentProject(): Project {
+    const anchor = join(app.getPath('home'), 'cc-workspace');
+    // addProject's statSync throws if the dir is missing, so create it first.
+    mkdirSync(anchor, { recursive: true });
+    const project = this.addProject(anchor);
+    if (!project.quickAgent) {
+      const projects = this.listProjects();
+      const idx = projects.findIndex((p) => p.id === project.id);
+      if (idx !== -1) {
+        projects[idx] = { ...projects[idx], quickAgent: true };
+        writeProjects(projects);
+        return projects[idx];
+      }
+    }
+    return project;
+  },
   removeProject(id: string) {
     const projects = this.listProjects();
     const removed = projects.find((p) => p.id === id);

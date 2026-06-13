@@ -59,6 +59,7 @@ import { SchedulerManager } from './scheduler.js';
 import { TrayController } from './tray.js';
 import { createUpdater, type Updater } from './updater.js';
 import { TemplateStore } from './template-store.js';
+import { QuickPromptStore } from './quick-prompt-store.js';
 import { PersonaStore } from './persona-store.js';
 import { MainModuleHost } from './modules/registry.js';
 import { loadExtensions } from './extensions/loader.js';
@@ -270,6 +271,7 @@ let tray: TrayController | null = null;
 // so the IPC handlers can reach it.
 let updater: Updater | null = null;
 const templates = new TemplateStore(() => store.listProjects());
+const quickPrompts = new QuickPromptStore();
 const personas = new PersonaStore(() => store.listProjects());
 const moduleHost = new MainModuleHost({ log: logMainError });
 /** Latest discovered runtime extensions; refreshed on boot + enable/disable. */
@@ -533,6 +535,26 @@ function registerIpc() {
         return { ok: true, value: project };
       } catch (err) {
         return { ok: false, code: 'ADD_REMOTE_FAILED', message: String(err) };
+      }
+    }
+  );
+  ipcMain.handle(
+    IPC.projects.ensureQuickAgent,
+    async (): Promise<Result<Project>> => {
+      try {
+        const project = store.ensureQuickAgentProject();
+        // Match projects.add: make sure the scratch project has an .mcp.json and
+        // the various stores know about it, so a Quick Agent gets inbox push etc.
+        ensureMcpConfigForProject(project.id).catch((err) =>
+          logMainError(`ensureMcpConfigForProject(${project.id})`, err)
+        );
+        templates.rebindProjects();
+        personas.rebindProjects();
+        libraryStore.rebindProjects?.();
+        scheduler.rebindWatchers();
+        return { ok: true, value: project };
+      } catch (err) {
+        return { ok: false, code: 'ENSURE_QUICK_AGENT_FAILED', message: String(err) };
       }
     }
   );
@@ -1098,6 +1120,16 @@ function registerIpc() {
     safeSend(IPC.personas.onChanged, personas.list());
   });
 
+  safeHandle(IPC.quickPrompts.list, () => quickPrompts.list(), () => []);
+  safeHandle(
+    IPC.quickPrompts.revealDir,
+    () => quickPrompts.revealUserDir(),
+    () => ({ ok: false, path: '', message: 'Failed to reveal quick-prompts directory' })
+  );
+  quickPrompts.on('changed', () => {
+    safeSend(IPC.quickPrompts.onChanged, quickPrompts.list());
+  });
+
   safeHandle(IPC.scheduler.groupsList, () => scheduleGroups.list(), () => []);
   ipcMain.handle(
     IPC.scheduler.groupsCreate,
@@ -1401,6 +1433,7 @@ app.whenReady().then(() => {
     logMainError('powerMonitor.resume', err);
   }
   templates.start();
+  quickPrompts.start();
   personas.start();
   libraryStore.start?.();
   skillBundles.start();
@@ -1507,6 +1540,24 @@ app.whenReady().then(() => {
       const s = ptys.getSession(sessionId);
       if (!s?.scheduled) return null;
       return s.inboxLevel ?? 'quiet';
+    },
+    // register_project tool: add a cloned/created dir to the project list on the
+    // agent's behalf. Mirrors the IPC `projects.add` side-effects (mcp config +
+    // store rebinds) and pushes `projects:onChanged` so the sidebar updates live.
+    registerProject: (absPath: string) => {
+      const existed = store.listProjects().some((p) => p.path === absPath);
+      const project = store.addProject(absPath); // throws on a bad path → tool reports isError
+      if (!existed) {
+        ensureMcpConfigForProject(project.id).catch((err) =>
+          logMainError(`ensureMcpConfigForProject(${project.id})`, err)
+        );
+        templates.rebindProjects();
+        personas.rebindProjects();
+        libraryStore.rebindProjects?.();
+        scheduler.rebindWatchers();
+      }
+      safeSend(IPC.projects.onChanged, store.listProjects());
+      return { project, alreadyExisted: existed };
     }
   })
     .then(async (handle) => {
@@ -1586,6 +1637,7 @@ app.on('before-quit', (event) => {
   tray?.stop();
   tray = null;
   templates.stop();
+  quickPrompts.stop();
   personas.stop();
   libraryStore.stop?.();
   skillBundles.stop();

@@ -28,6 +28,13 @@ export interface Project {
   defaultPersonas?: string[];
   /** Reserved for future templates work; no logic yet. */
   template?: string;
+  /**
+   * True for the single built-in scratch project that backs the Agents-module
+   * Quick Agent. Rooted at `~/cc-workspace`, created on first launch. Lets the
+   * UI treat it specially (e.g. surface it in the Agents launcher, optionally
+   * hide it from the Projects sidebar later).
+   */
+  quickAgent?: boolean;
   /** Reserved for future lineage / upgrade-hint work; no logic yet. */
   spawnedFromVersion?: string;
   /**
@@ -240,6 +247,13 @@ export interface TerminalSession {
   status: 'starting' | 'running' | 'exited';
   exitCode?: number;
   createdAt: number;
+  /**
+   * Wall-clock ms (epoch) when the pty exited. Set in the renderer's
+   * `markExited` for tombstoned (non-scheduled) sessions so the Agents view can
+   * show an exact run length (`finishedAt - createdAt`) instead of a
+   * live-growing timer. Absent while running and for reaped scheduled jobs.
+   */
+  finishedAt?: number;
   extraArgs?: string[];
   pinned?: boolean;
   /**
@@ -711,6 +725,30 @@ export interface ScheduleTemplate {
 }
 
 /**
+ * A pre-made starter prompt for the Agents-module Quick Agent launcher. Clicking
+ * a chip seeds the prompt into the launcher's textarea (still editable before
+ * launch). Deliberately separate from {@link ScheduleTemplate} so the two can
+ * evolve independently — quick prompts have no schedule, just a one-shot prompt.
+ *
+ * Discovered builtin ⊕ `~/.cc-center/quick-prompts/<id>.json` (user, shadows a
+ * builtin by id), mirroring the template/persona stores.
+ */
+export interface QuickPrompt {
+  /** Stable id; `builtin:` prefix marks a shipped prompt a user can shadow. */
+  id: string;
+  /** Short chip label shown in the launcher. */
+  label: string;
+  /** The prompt text seeded into the textarea. */
+  prompt: string;
+  /** Suggested launch profile; the launcher defaults to `claude` when absent. */
+  profile?: LaunchProfileId;
+  /** Lucide icon name; renderer falls back to a generic icon if unknown. */
+  icon?: string;
+  /** Set by the loader for UI display; never read from disk. */
+  source?: 'builtin' | 'user';
+}
+
+/**
  * A named, reusable Claude Code personality (Reviewer, Architect, Bug-hunter…)
  * that composes native `claude` CLI flags. A persona is **not** a new launch
  * mechanism — it slots in as one more layer in the precedence chain `pty.ts`
@@ -1063,6 +1101,17 @@ export interface CcApi {
       remotePath?: string;
       name?: string;
     }): Promise<Result<Project>>;
+    /**
+     * Ensure the built-in Quick Agent scratch project exists (rooted at
+     * `~/cc-workspace`, created on first call) and return it. Idempotent.
+     */
+    ensureQuickAgent(): Promise<Result<Project>>;
+    /**
+     * Fired with the full project list after any project mutation in the main
+     * process — including adds made on an agent's behalf via the
+     * `register_project` MCP tool — so the sidebar stays live without polling.
+     */
+    onChanged(cb: (projects: Project[]) => void): () => void;
   };
   ssh: {
     listHosts(): Promise<SshHostEntry[]>;
@@ -1275,6 +1324,16 @@ export interface CcApi {
   personas: {
     list(): Promise<Persona[]>;
     onChanged(cb: (personas: Persona[]) => void): () => void;
+    revealDir(): Promise<{ ok: boolean; path: string; message?: string }>;
+  };
+  /**
+   * Pre-made starter prompts for the Agents-module Quick Agent launcher.
+   * Read-only over the merged store (builtin ⊕ user dir); authoring is by
+   * hand-editing the JSON files the `revealDir` action opens.
+   */
+  quickPrompts: {
+    list(): Promise<QuickPrompt[]>;
+    onChanged(cb: (prompts: QuickPrompt[]) => void): () => void;
     revealDir(): Promise<{ ok: boolean; path: string; message?: string }>;
   };
   /**

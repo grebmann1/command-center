@@ -62,13 +62,15 @@ describe('inbox MCP server (end-to-end)', () => {
       sessionId: string,
       summary: string,
       status?: 'success' | 'partial' | 'failure'
-    ) => void
+    ) => void,
+    registerProject?: (absPath: string) => { project: Project; alreadyExisted: boolean }
   ) {
     const map = new Map(projects.map((p) => [p.id, p]));
     handle = await startMcpServer({
       inboxStore: store,
       projects: { get: (id) => map.get(id) ?? null },
       onReport,
+      registerProject,
       log: () => {} // keep test output quiet
     });
     return handle;
@@ -269,5 +271,98 @@ describe('inbox MCP server (end-to-end)', () => {
     expect(tools.tools.find((t) => t.name === 'schedule_report')).toBeFalsy();
     // inbox_push is still available on this route.
     expect(tools.tools.find((t) => t.name === 'inbox_push')).toBeTruthy();
+  });
+
+  it('5. register_project: resolves a relative path against the URL project root', async () => {
+    const store = createMemoryInboxStore();
+    const calls: string[] = [];
+    const added = makeProject('new-1', 'cloned-repo');
+    const h = await boot(
+      store,
+      [{ ...makeProject('proj-1', 'P1'), path: '/work/p1' }],
+      undefined,
+      (absPath) => {
+        calls.push(absPath);
+        return { project: added, alreadyExisted: false };
+      }
+    );
+
+    const client = await connectClient(h.url, 'proj-1/sess-A');
+    clients.push(client);
+
+    // Schema exposes only { path } — no projectId/sessionId.
+    const tools = await client.listTools();
+    const tool = tools.tools.find((t) => t.name === 'register_project');
+    expect(tool, 'register_project tool is registered').toBeTruthy();
+    const props = (tool!.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
+    expect(Object.keys(props)).toEqual(['path']);
+
+    const res = await client.callTool({
+      name: 'register_project',
+      arguments: { path: 'cloned-repo' }
+    });
+    expect((res as { isError?: boolean }).isError).toBeFalsy();
+    // Relative path resolved against the originating project's root (/work/p1).
+    expect(calls).toEqual(['/work/p1/cloned-repo']);
+    const text = JSON.stringify((res as { content?: unknown }).content ?? '');
+    expect(text).toMatch(/Registered project/);
+    expect(text).toMatch(/cloned-repo/);
+  });
+
+  it('5b. register_project: passes an absolute path through unchanged', async () => {
+    const store = createMemoryInboxStore();
+    const calls: string[] = [];
+    const h = await boot(
+      store,
+      [{ ...makeProject('proj-1', 'P1'), path: '/work/p1' }],
+      undefined,
+      (absPath) => {
+        calls.push(absPath);
+        return { project: makeProject('new-2', 'abs'), alreadyExisted: true };
+      }
+    );
+
+    const client = await connectClient(h.url, 'proj-1/sess-A');
+    clients.push(client);
+    const res = await client.callTool({
+      name: 'register_project',
+      arguments: { path: '/elsewhere/repo' }
+    });
+    expect((res as { isError?: boolean }).isError).toBeFalsy();
+    expect(calls).toEqual(['/elsewhere/repo']);
+    // alreadyExisted → honest wording.
+    const text = JSON.stringify((res as { content?: unknown }).content ?? '');
+    expect(text).toMatch(/Already registered/);
+  });
+
+  it('5c. register_project: reports an error (does not crash) when the add throws', async () => {
+    const store = createMemoryInboxStore();
+    const h = await boot(
+      store,
+      [{ ...makeProject('proj-1', 'P1'), path: '/work/p1' }],
+      undefined,
+      () => {
+        throw new Error('not a directory');
+      }
+    );
+
+    const client = await connectClient(h.url, 'proj-1/sess-A');
+    clients.push(client);
+    const res = await client.callTool({
+      name: 'register_project',
+      arguments: { path: 'nope' }
+    });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    const text = JSON.stringify((res as { content?: unknown }).content ?? '');
+    expect(text).toMatch(/register_project failed: not a directory/);
+  });
+
+  it('5d. register_project is NOT registered when no registerProject dep is provided', async () => {
+    const store = createMemoryInboxStore();
+    const h = await boot(store, [makeProject('proj-1', 'P1')]);
+    const client = await connectClient(h.url, 'proj-1/sess-A');
+    clients.push(client);
+    const tools = await client.listTools();
+    expect(tools.tools.find((t) => t.name === 'register_project')).toBeFalsy();
   });
 });

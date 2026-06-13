@@ -10,6 +10,8 @@ import type {
   McpServerEntry,
   Persona,
   PluginEntry,
+  Project,
+  QuickPrompt,
   SavedRecord,
   TerminalSession,
   UpdateProgress,
@@ -29,7 +31,13 @@ const api: CcApi = {
     touch: (id) => ipcRenderer.invoke(IPC.projects.touch, id),
     reorder: (orderedIds) => ipcRenderer.invoke(IPC.projects.reorder, orderedIds),
     pickDirectory: () => ipcRenderer.invoke(IPC.projects.pickDirectory),
-    addRemote: (input) => ipcRenderer.invoke(IPC.projects.addRemote, input)
+    addRemote: (input) => ipcRenderer.invoke(IPC.projects.addRemote, input),
+    ensureQuickAgent: () => ipcRenderer.invoke(IPC.projects.ensureQuickAgent),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, projects: Project[]) => cb(projects);
+      ipcRenderer.on(IPC.projects.onChanged, handler);
+      return () => ipcRenderer.off(IPC.projects.onChanged, handler);
+    }
   },
   ssh: {
     listHosts: () => ipcRenderer.invoke(IPC.ssh.listHosts),
@@ -130,6 +138,15 @@ const api: CcApi = {
       const handler = (_e: unknown, personas: Persona[]) => cb(personas);
       ipcRenderer.on(IPC.personas.onChanged, handler);
       return () => ipcRenderer.off(IPC.personas.onChanged, handler);
+    }
+  },
+  quickPrompts: {
+    list: () => ipcRenderer.invoke(IPC.quickPrompts.list),
+    revealDir: () => ipcRenderer.invoke(IPC.quickPrompts.revealDir),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, prompts: QuickPrompt[]) => cb(prompts);
+      ipcRenderer.on(IPC.quickPrompts.onChanged, handler);
+      return () => ipcRenderer.off(IPC.quickPrompts.onChanged, handler);
     }
   },
   library: {

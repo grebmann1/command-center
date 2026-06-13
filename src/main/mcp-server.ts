@@ -28,6 +28,7 @@ import type { IInboxStore } from './inbox-store.js';
 import type { Project, InboxNotifyLevel } from '../shared/types.js';
 import { registerInboxPushTool } from './inbox-mcp-tool.js';
 import { registerScheduleReportTool } from './schedule-report-mcp-tool.js';
+import { registerRegisterProjectTool } from './register-project-mcp-tool.js';
 
 export interface ProjectLookup {
   /** Return the current project meta or null if unknown. Called per-request. */
@@ -74,6 +75,13 @@ export interface McpServerOptions {
    * pushes from `silent` schedules entirely.
    */
   resolveScheduledLevel?: (sessionId: string) => InboxNotifyLevel | null;
+  /**
+   * Add a directory to the user's project list on the agent's behalf (the
+   * `register_project` tool). Returns the resulting project and whether it
+   * already existed; throws on a bad path. Absent disables the tool. The main
+   * process also handles the side-effects (mcp config, live sidebar refresh).
+   */
+  registerProject?: (absPath: string) => { project: Project; alreadyExisted: boolean };
 }
 
 export interface McpServerHandle {
@@ -94,10 +102,12 @@ export interface McpServerHandle {
 function buildProjectMcpServer(opts: {
   projectId: string;
   projectLabel?: string;
+  projectRoot?: string;
   sessionId?: string;
   inboxStore: IInboxStore;
   onReport?: McpServerOptions['onReport'];
   resolveScheduledLevel?: McpServerOptions['resolveScheduledLevel'];
+  registerProject?: McpServerOptions['registerProject'];
 }): McpServer {
   const mcp = new McpServer({ name: 'cc-inbox', version: '0.1.0' });
   // Resolve scheduled-ness + loudness once at build time so inbox_push entries
@@ -122,6 +132,15 @@ function buildProjectMcpServer(opts: {
       onReport: opts.onReport
         ? (sessionId, summary, status) => opts.onReport!(opts.projectId, sessionId, summary, status)
         : undefined
+    });
+  }
+  // register_project: lets the agent add a cloned/created dir to the project
+  // list. Available on both route shapes — projectRoot (when known) only
+  // resolves a relative path; an absolute path works regardless.
+  if (opts.registerProject) {
+    registerRegisterProjectTool(mcp, {
+      projectRoot: opts.projectRoot,
+      registerProject: opts.registerProject
     });
   }
   return mcp;
@@ -291,10 +310,12 @@ async function handleRequest(
   const mcp = buildProjectMcpServer({
     projectId,
     projectLabel,
+    projectRoot: project?.path,
     sessionId,
     inboxStore: opts.inboxStore,
     onReport: opts.onReport,
-    resolveScheduledLevel: opts.resolveScheduledLevel
+    resolveScheduledLevel: opts.resolveScheduledLevel,
+    registerProject: opts.registerProject
   });
 
   // Ensure transport + mcp tear down once the response finishes, even on

@@ -7,7 +7,9 @@ export const IPC = {
     touch: 'projects:touch',
     reorder: 'projects:reorder',
     pickDirectory: 'projects:pickDirectory',
-    addRemote: 'projects:addRemote'
+    addRemote: 'projects:addRemote',
+    ensureQuickAgent: 'projects:ensureQuickAgent',
+    onChanged: 'projects:onChanged'
   },
   ssh: {
     listHosts: 'ssh:listHosts',
@@ -181,5 +183,10 @@ export const IPC = {
     list: 'personas:list',
     onChanged: 'personas:onChanged',
     revealDir: 'personas:revealDir'
+  },
+  quickPrompts: {
+    list: 'quickPrompts:list',
+    onChanged: 'quickPrompts:onChanged',
+    revealDir: 'quickPrompts:revealDir'
   }
 } as const;
