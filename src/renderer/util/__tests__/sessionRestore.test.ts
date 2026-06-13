@@ -33,14 +33,37 @@ function project(over: Partial<Project>): Project {
 }
 
 describe('snapshotTabs', () => {
-  it('captures profile/title/extraArgs/cwd/pinned for visible tabs', () => {
+  it('captures profile/title/extraArgs/cwd/pinned/claudeSessionId for visible tabs', () => {
     const snap = snapshotTabs([
-      session({ id: 'a', profile: 'claude', title: 'c', cwd: '/work/p1', pinned: true }),
+      session({
+        id: 'a',
+        profile: 'claude',
+        title: 'c',
+        cwd: '/work/p1',
+        pinned: true,
+        claudeSessionId: 'sess-a'
+      }),
       session({ id: 'b', profile: 'shell', title: 'sh', extraArgs: ['--foo'] })
     ]);
     expect(snap).toEqual([
-      { profile: 'claude', title: 'c', extraArgs: undefined, cwd: '/work/p1', pinned: true },
-      { profile: 'shell', title: 'sh', extraArgs: ['--foo'], cwd: '/work/p1', pinned: undefined }
+      {
+        profile: 'claude',
+        title: 'c',
+        extraArgs: undefined,
+        cwd: '/work/p1',
+        pinned: true,
+        titleLocked: undefined,
+        claudeSessionId: 'sess-a'
+      },
+      {
+        profile: 'shell',
+        title: 'sh',
+        extraArgs: ['--foo'],
+        cwd: '/work/p1',
+        pinned: undefined,
+        titleLocked: undefined,
+        claudeSessionId: undefined
+      }
     ]);
   });
 
@@ -75,11 +98,21 @@ describe('shouldResumeConversation', () => {
 });
 
 describe('withResumeArgs', () => {
-  it('appends --continue for claude with no args', () => {
-    expect(withResumeArgs('claude', undefined)).toEqual(['--continue']);
+  it('resumes the tab’s OWN session id when known', () => {
+    expect(withResumeArgs('claude', undefined, 'sess-a')).toEqual(['--resume', 'sess-a']);
   });
 
-  it('preserves existing args and appends --continue', () => {
+  it('preserves existing args and appends --resume <id>', () => {
+    expect(withResumeArgs('claude-yolo', ['--model', 'opus'], 'sess-b')).toEqual([
+      '--model',
+      'opus',
+      '--resume',
+      'sess-b'
+    ]);
+  });
+
+  it('falls back to --continue for a legacy snapshot with no captured id', () => {
+    expect(withResumeArgs('claude', undefined)).toEqual(['--continue']);
     expect(withResumeArgs('claude-yolo', ['--model', 'opus'])).toEqual([
       '--model',
       'opus',
@@ -88,17 +121,17 @@ describe('withResumeArgs', () => {
   });
 
   it('leaves shell args untouched', () => {
-    expect(withResumeArgs('shell', ['--login'])).toEqual(['--login']);
+    expect(withResumeArgs('shell', ['--login'], 'sess-x')).toEqual(['--login']);
     expect(withResumeArgs('shell', undefined)).toBeUndefined();
   });
 
-  it('does not double-add --continue', () => {
-    expect(withResumeArgs('claude', ['--continue'])).toEqual(['--continue']);
+  it('does not double-add a resume flag', () => {
+    expect(withResumeArgs('claude', ['--continue'], 'sess-a')).toEqual(['--continue']);
     expect(withResumeArgs('claude', ['-c'])).toEqual(['-c']);
   });
 
-  it('does not fight an explicit --resume <id> pin', () => {
-    expect(withResumeArgs('claude', ['--resume', 'sess-123'])).toEqual([
+  it('does not fight an explicit --resume <id> pin (even with a captured id)', () => {
+    expect(withResumeArgs('claude', ['--resume', 'sess-123'], 'sess-other')).toEqual([
       '--resume',
       'sess-123'
     ]);
@@ -118,12 +151,27 @@ describe('planRestore', () => {
     ]
   };
 
-  it('plans a spawn per remembered tab, folding in --continue for claude', () => {
+  it('plans a spawn per remembered tab, folding --continue into claude tabs with no id', () => {
     const plan = planRestore(snapshot, [project({ id: 'p1' })], {});
     expect(plan).toHaveLength(2);
     expect(plan[0]).toMatchObject({ projectId: 'p1', profile: 'claude', extraArgs: ['--continue'] });
     expect(plan[1]).toMatchObject({ projectId: 'p1', profile: 'shell' });
     expect(plan[1].extraArgs).toBeUndefined();
+  });
+
+  it('resumes each claude tab’s OWN conversation when ids were captured', () => {
+    const snap: SessionSnapshotMap = {
+      p1: [
+        { profile: 'claude', title: 'a', cwd: '/work/p1', claudeSessionId: 'sess-a' },
+        { profile: 'claude', title: 'b', cwd: '/work/p1', claudeSessionId: 'sess-b' }
+      ]
+    };
+    const plan = planRestore(snap, [project({ id: 'p1' })], {});
+    expect(plan).toHaveLength(2);
+    // The whole point of the fix: two tabs in one cwd resume DISTINCT sessions,
+    // not the same most-recent one.
+    expect(plan[0].extraArgs).toEqual(['--resume', 'sess-a']);
+    expect(plan[1].extraArgs).toEqual(['--resume', 'sess-b']);
   });
 
   it('skips projects that no longer exist', () => {

@@ -1,7 +1,7 @@
 import * as pty from 'node-pty';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import type { LaunchProfileId, TerminalSession, AppConfig, ProjectSettings, ProjectRemote, InboxNotifyLevel } from '../shared/types.js';
+import type { LaunchProfileId, TerminalSession, AppConfig, ProjectSettings, ProjectRemote, InboxNotifyLevel, Persona } from '../shared/types.js';
 import { ensureMcpConfigForProjectSync } from './mcp-config.js';
 
 interface Live {
@@ -123,10 +123,11 @@ export class PtyManager extends EventEmitter {
    * or null if the write failed. Null makes the caller skip MCP injection
    * entirely (terminal still opens) rather than launch claude with a
    * `--mcp-config` that points at nothing.
+   * @param extraServerNames Optional persona mcpServers to merge into the config.
    */
-  private safeEnsureMcpConfig(projectId: string): string | null {
+  private safeEnsureMcpConfig(projectId: string, extraServerNames?: string[]): string | null {
     try {
-      return ensureMcpConfigForProjectSync(projectId);
+      return ensureMcpConfigForProjectSync(projectId, extraServerNames);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(`[pty] ensureMcpConfigForProjectSync(${projectId}) failed:`, err);
@@ -145,6 +146,14 @@ export class PtyManager extends EventEmitter {
     extraArgs?: string[];
     title?: string;
     remote?: ProjectRemote;
+    /**
+     * Optional persona to launch as. When set, the persona's flag layer is
+     * inserted between AppConfig globals and per-project settings, and
+     * `persona.baseProfile` (if present) overrides `profile` as the base command.
+     * The resolved persona sits at: base → AppConfig globals → MCP → PERSONA →
+     * ProjectSettings → per-tab extraArgs (lowest → highest precedence).
+     */
+    persona?: Persona;
     /**
      * Inject a Stop hook so the session auto-closes when Claude finishes its
      * response. Used by scheduler fires that opt into `autoCloseOnFinish`.
@@ -176,7 +185,11 @@ export class PtyManager extends EventEmitter {
     if (opts.remote) {
       return this.createRemote({ ...opts, remote: opts.remote });
     }
-    const { command, args } = resolveLaunch(opts.profile, opts.config);
+    // When a persona is present, its baseProfile (if any) overrides the
+    // opts.profile as the base command. This lets a persona declare "I always
+    // run as claude-yolo" without the caller needing to know.
+    const effectiveProfile = opts.persona?.baseProfile ?? opts.profile;
+    const { command, args } = resolveLaunch(effectiveProfile, opts.config);
     // Mint the session id up front so we can bake it into the per-session
     // MCP + hook URLs the agent/CLI connect back on. This lets `inbox_push`
     // stamp the originating terminal onto each entry and lets a Stop hook
@@ -193,10 +206,12 @@ export class PtyManager extends EventEmitter {
     // earlier async write to have landed. The async writers race app boot;
     // pointing `--mcp-config` at a not-yet-written file would silently drop
     // the inbox server. If even the sync write fails, fall back to no MCP
-    // injection so the terminal still opens.
+    // injection so the terminal still opens. When a persona requests extra MCP
+    // servers, merge them into the config (resolved against the registry;
+    // unknown names are silently ignored).
     const mcpConfigPath =
-      isClaudeProfile(opts.profile) && this.mcpBaseUrl
-        ? this.safeEnsureMcpConfig(opts.projectId)
+      isClaudeProfile(effectiveProfile) && this.mcpBaseUrl
+        ? this.safeEnsureMcpConfig(opts.projectId, opts.persona?.mcpServers)
         : null;
     const claudeMcpArgs = mcpConfigPath
       ? [
@@ -213,9 +228,18 @@ export class PtyManager extends EventEmitter {
             : INBOX_USAGE_GUIDANCE
         ]
       : [];
+    // Persona flags: inserted AFTER claudeMcpArgs so the persona's
+    // append-system-prompt layers on TOP of the inbox guidance (personas can
+    // build on the baseline inbox behavior), and BEFORE projectSettings so
+    // per-project overrides still win. Only emitted for claude-family profiles;
+    // a persona attached to a shell tab is a no-op (its flags are ignored).
+    const personaArgs =
+      isClaudeProfile(effectiveProfile) && opts.persona
+        ? personaArgs_build(opts.persona, effectiveProfile)
+        : [];
     const psArgs =
-      isClaudeProfile(opts.profile) && opts.projectSettings
-        ? projectSettingsArgs(opts.projectSettings, opts.profile)
+      isClaudeProfile(effectiveProfile) && opts.projectSettings
+        ? projectSettingsArgs(opts.projectSettings, effectiveProfile)
         : [];
     // Stop hook: inject a `--settings` hook (additive — merges with, never
     // replaces, the user's own settings files) that pings our local callback
@@ -226,7 +250,7 @@ export class PtyManager extends EventEmitter {
     // forever). `autoClose` only decides whether the callback *kills* the pty
     // (handled in index.ts via the task's autoCloseOnFinish flag). Claude
     // profiles only, and only when we know the callback URL.
-    const claudeWithCallback = isClaudeProfile(opts.profile) && !!this.mcpBaseUrl;
+    const claudeWithCallback = isClaudeProfile(effectiveProfile) && !!this.mcpBaseUrl;
     const autoClose = !!opts.autoCloseOnFinish && claudeWithCallback;
     const wantsStopHook = claudeWithCallback && (autoClose || !!opts.scheduled);
     // Notification hook: light a "blocked — needs you" status when the agent
@@ -252,13 +276,48 @@ export class PtyManager extends EventEmitter {
         ? ['mcp__cc-inbox__inbox_push', 'mcp__cc-inbox__schedule_report']
         : ['mcp__cc-inbox__inbox_push']
       : [];
+    // Per-tab Claude session id. Forcing `--session-id <uuid>` at first launch
+    // gives each claude tab a *stable, distinct* transcript id, so restore can
+    // resume that exact conversation (`--resume <id>`) rather than the blunt
+    // `--continue`, which only reopens the single most-recent conversation in
+    // the cwd — collapsing every tab onto one. We mint it ONLY when we own the
+    // id: skip when the caller already pins a session (resume-picker / restore
+    // tabs carry `--resume`/`--continue`/`--session-id` in extraArgs, and the
+    // `claude-resume` profile carries `--resume` in its base args), since adding
+    // a second `--session-id` would conflict.
+    const cleanedExtra = cleanExtraArgs(opts.extraArgs);
+    const callerPinsSession =
+      effectiveProfile === 'claude-resume' ||
+      cleanedExtra.some(
+        (a) =>
+          a === '--resume' ||
+          a === '-r' ||
+          a === '--continue' ||
+          a === '-c' ||
+          a === '--session-id' ||
+          a.startsWith('--resume=') ||
+          a.startsWith('--continue=') ||
+          a.startsWith('--session-id=')
+      );
+    // When WE mint the id, remember it so restore can `--resume` this exact
+    // conversation. When the CALLER pins one (restore re-launches carry
+    // `--resume <uuid>`), surface that same uuid as the session's
+    // claudeSessionId so the resume chain survives repeated relaunches — else
+    // the second restore would lose the id and fall back to blunt `--continue`.
+    const minted =
+      isClaudeProfile(effectiveProfile) && !callerPinsSession ? randomUUID() : undefined;
+    const claudeSessionId = minted ?? extractPinnedSessionId(cleanedExtra);
+    const sessionIdArgs = minted ? ['--session-id', minted] : [];
     // Invariant: an empty / whitespace-only opening prompt must NEVER reach
     // argv as a positional. `claude ''` is a stray empty first-turn that the
     // CLI may misinterpret; callers (LaunchPanel, GUS, scheduler) mostly guard
     // this, but we enforce it once at the choke point so no current or future
     // caller can leak a dangling positional. See cleanExtraArgs.
+    // Precedence order (lowest → highest):
+    //   base profile args → AppConfig globals (already in `args`)
+    //   → claudeMcpArgs → PERSONA → projectSettings → hookArgs → extraArgs
     const fullArgs = mergeAllowedTools(
-      [...args, ...claudeMcpArgs, ...psArgs, ...hookArgs, ...cleanExtraArgs(opts.extraArgs)],
+      [...args, ...sessionIdArgs, ...claudeMcpArgs, ...personaArgs, ...psArgs, ...hookArgs, ...cleanedExtra],
       inboxAllow
     );
     const env: Record<string, string> = {
@@ -297,9 +356,11 @@ export class PtyManager extends EventEmitter {
       status: 'running',
       createdAt: Date.now(),
       extraArgs: opts.extraArgs,
+      claudeSessionId,
       headless: opts.headless || undefined,
       scheduled: opts.scheduled || undefined,
-      inboxLevel: opts.scheduled ? opts.inboxLevel : undefined
+      inboxLevel: opts.scheduled ? opts.inboxLevel : undefined,
+      personaId: opts.persona?.id
     };
 
     this.live.set(session.id, { session, proc });
@@ -310,6 +371,29 @@ export class PtyManager extends EventEmitter {
     proc.onData((data) => {
       this.emit('data', session.id, data);
     });
+    // Persona initialPrompt: when a persona declares an opening prompt AND this
+    // is an interactive claude-family spawn (not scheduled — the scheduler
+    // delivers prompts as positional argv for non-interactive runs), write the
+    // prompt to the pty after the first data event (the agent's ready signal).
+    // This mirrors how the scheduler fires non-interactive prompts, but as a pty
+    // write so interactive sessions can actually run it.
+    if (opts.persona?.initialPrompt && isClaudeProfile(effectiveProfile) && !opts.scheduled) {
+      let promptWritten = false;
+      const writePrompt = () => {
+        if (promptWritten) return;
+        promptWritten = true;
+        // Write on next tick so the agent is fully ready. The scheduler-style
+        // positional argv would have landed before the agent starts; for
+        // interactive we wait for first data (the welcome banner) then inject.
+        setTimeout(() => {
+          const live = this.live.get(session.id);
+          if (live && opts.persona?.initialPrompt) {
+            live.proc.write(`${opts.persona.initialPrompt}\r`);
+          }
+        }, 100);
+      };
+      proc.onData(writePrompt);
+    }
     proc.onExit(({ exitCode }) => {
       // A launcher-initiated close (auto-close Stop hook) reports as a clean
       // exit so the scheduler logs the run as success, not a kill-signal error.
@@ -348,6 +432,7 @@ export class PtyManager extends EventEmitter {
     extraArgs?: string[];
     title?: string;
     remote: ProjectRemote;
+    persona?: Persona;
     headless?: boolean;
     scheduled?: boolean;
     inboxLevel?: InboxNotifyLevel;
@@ -385,7 +470,8 @@ export class PtyManager extends EventEmitter {
       extraArgs: opts.extraArgs,
       headless: opts.headless || undefined,
       scheduled: opts.scheduled || undefined,
-      inboxLevel: opts.scheduled ? opts.inboxLevel : undefined
+      inboxLevel: opts.scheduled ? opts.inboxLevel : undefined,
+      personaId: opts.persona?.id
     };
 
     this.live.set(session.id, { session, proc });
@@ -561,6 +647,44 @@ function projectSettingsArgs(s: ProjectSettings, profile: LaunchProfileId): stri
 }
 
 /**
+ * Build CLI flags derived from a Persona. Mirrors {@link projectSettingsArgs}
+ * in shape and flag style — same order, same yolo guard, same "model and
+ * permissionMode last" convention. Inserted AFTER claudeMcpArgs (so persona
+ * append-system-prompt layers on top of inbox guidance) and BEFORE
+ * projectSettings (so per-project overrides still win).
+ *
+ * Precedence order:
+ *   base profile args → AppConfig globals → claudeMcpArgs → PERSONA →
+ *   projectSettings → hookArgs → per-tab extraArgs
+ */
+export function personaArgs_build(p: Persona, baseProfile: LaunchProfileId): string[] {
+  const args: string[] = [];
+  if (p.appendSystemPrompt) {
+    args.push('--append-system-prompt', p.appendSystemPrompt);
+  }
+  for (const dir of p.addDirs ?? []) {
+    args.push('--add-dir', dir);
+  }
+  if ((p.allowedTools ?? []).length > 0) {
+    args.push('--allowedTools', p.allowedTools!.join(','));
+  }
+  if ((p.deniedTools ?? []).length > 0) {
+    args.push('--disallowedTools', p.deniedTools!.join(','));
+  }
+  // model / permissionMode appended last so they override any global value
+  // (claude CLI: last occurrence wins for these flags). permissionMode is
+  // skipped when the effective base profile is claude-yolo — it forces
+  // --dangerously-skip-permissions, which takes precedence.
+  if (p.model) {
+    args.push('--model', p.model);
+  }
+  if (p.permissionMode && baseProfile !== 'claude-yolo') {
+    args.push('--permission-mode', p.permissionMode);
+  }
+  return args;
+}
+
+/**
  * Normalize per-tab `extraArgs` before they're spliced into argv. Drops
  * empty / whitespace-only entries so a blank opening prompt never lands as a
  * stray positional (`claude ''`). Non-empty args (including intentional flags
@@ -571,6 +695,28 @@ function projectSettingsArgs(s: ProjectSettings, profile: LaunchProfileId): stri
  */
 export function cleanExtraArgs(extraArgs: string[] | undefined): string[] {
   return (extraArgs ?? []).filter((a) => a.trim() !== '');
+}
+
+/**
+ * Recover a UUID session id explicitly pinned in argv — `--resume <uuid>`,
+ * `--session-id <uuid>`, or their `=`-joined forms. Used so a restore
+ * re-launch (which carries `--resume <id>`) re-surfaces that same id as the
+ * session's `claudeSessionId`, keeping the resume chain stable across repeated
+ * relaunches. `--resume`/`-r` with no value (the resume *picker*) yields no id.
+ * Returns undefined when none is present. Pure.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function extractPinnedSessionId(argv: string[]): string | undefined {
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if ((a === '--resume' || a === '-r' || a === '--session-id') && i + 1 < argv.length) {
+      const v = argv[i + 1];
+      if (UUID_RE.test(v)) return v;
+    }
+    const eq = a.match(/^(?:--resume|--session-id)=(.+)$/);
+    if (eq && UUID_RE.test(eq[1])) return eq[1];
+  }
+  return undefined;
 }
 
 /**
@@ -618,7 +764,7 @@ function shellQuoteArgv(argv: string[]): string {
 /**
  * Build the single command string we hand to the remote sshd. For shell
  * profiles we exec the login shell; for claude profiles we run the
- * claude CLI with the same global / per-project flag stack the local
+ * claude CLI with the same global / per-project / persona flag stack the local
  * path uses, minus MCP injection (the cc-inbox server isn't reachable
  * from the remote in v1).
  */
@@ -628,6 +774,7 @@ function buildRemoteCmd(opts: {
   projectSettings?: ProjectSettings;
   extraArgs?: string[];
   remote: ProjectRemote;
+  persona?: Persona;
 }): string {
   const cdPrefix = opts.remote.remotePath
     ? `cd ${shellQuote(opts.remote.remotePath)} && `
@@ -644,9 +791,15 @@ function buildRemoteCmd(opts: {
 
   // Claude family: build argv locally, ship as a quoted command. We rely
   // on `claude` being on the remote PATH (default for sfwork workspaces).
-  const { args: baseArgs } = resolveLaunch(opts.profile, opts.config);
-  const psArgs = opts.projectSettings ? projectSettingsArgs(opts.projectSettings, opts.profile) : [];
-  const argv = ['claude', ...baseArgs, ...psArgs, ...cleanExtraArgs(opts.extraArgs)];
+  // Mirror the local precedence stack: base → globals → PERSONA → projectSettings.
+  const effectiveProfile = opts.persona?.baseProfile ?? opts.profile;
+  const { args: baseArgs } = resolveLaunch(effectiveProfile, opts.config);
+  const personaArgs =
+    opts.persona && isClaudeProfile(effectiveProfile)
+      ? personaArgs_build(opts.persona, effectiveProfile)
+      : [];
+  const psArgs = opts.projectSettings ? projectSettingsArgs(opts.projectSettings, effectiveProfile) : [];
+  const argv = ['claude', ...baseArgs, ...personaArgs, ...psArgs, ...cleanExtraArgs(opts.extraArgs)];
   return `${cdPrefix}exec ${shellQuoteArgv(argv)}`;
 }
 

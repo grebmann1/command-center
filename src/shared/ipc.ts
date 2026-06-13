@@ -176,5 +176,10 @@ export const IPC = {
     groupsDelete: 'scheduler:groups:delete',
     groupsReorder: 'scheduler:groups:reorder',
     groupsOnChanged: 'scheduler:groups:onChanged'
+  },
+  personas: {
+    list: 'personas:list',
+    onChanged: 'personas:onChanged',
+    revealDir: 'personas:revealDir'
   }
 } as const;

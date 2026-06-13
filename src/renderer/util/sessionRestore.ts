@@ -28,6 +28,11 @@ export interface SessionSnapshot {
   /** Preserve a manual rename across relaunch so the restored tab keeps its
    *  user-chosen name and the OSC auto-rename stays suppressed. */
   titleLocked?: boolean;
+  /** This tab's own Claude transcript id (minted at first launch via
+   *  `--session-id`). When present, restore resumes THIS conversation
+   *  (`--resume <id>`) instead of the cwd's most-recent one — so multiple
+   *  claude tabs in one project each reopen their own conversation. */
+  claudeSessionId?: string;
 }
 
 /** Per-project map of remembered tabs, in tab order. */
@@ -54,7 +59,8 @@ export function snapshotTabs(tabs: TerminalSession[]): SessionSnapshot[] {
       extraArgs: t.extraArgs,
       cwd: t.cwd,
       pinned: t.pinned,
-      titleLocked: t.titleLocked
+      titleLocked: t.titleLocked,
+      claudeSessionId: t.claudeSessionId
     }));
 }
 
@@ -67,14 +73,25 @@ export function shouldResumeConversation(profile: LaunchProfileId): boolean {
 }
 
 /**
- * Append `--continue` to a claude tab's args so it resumes its prior
- * conversation. Idempotent: never adds a second `--continue`, and leaves a tab
- * that already carries `--resume <id>` (resume-picker tabs) untouched so we
- * don't fight an explicit session pin. Returns a new array; pure.
+ * Build a claude tab's resume args so it reopens its PRIOR conversation.
+ *
+ * Preferred path: when we captured the tab's own transcript id at first launch
+ * (`claudeSessionId`), resume THAT exact conversation with `--resume <id>`.
+ * This is what stops N tabs in one cwd from all collapsing onto the single
+ * most-recent conversation — each tab owns a distinct id.
+ *
+ * Fallback: a legacy snapshot (taken before we minted ids) has no id, so we
+ * append the blunt `--continue` — still better than a cold tab, just can't
+ * distinguish between sibling tabs.
+ *
+ * Idempotent: never adds a second resume/continue flag, and leaves a tab that
+ * already carries an explicit `--resume <id>` (resume-picker tabs) untouched so
+ * we don't fight an explicit session pin. Returns a new array; pure.
  */
 export function withResumeArgs(
   profile: LaunchProfileId,
-  extraArgs: string[] | undefined
+  extraArgs: string[] | undefined,
+  claudeSessionId?: string
 ): string[] | undefined {
   if (!shouldResumeConversation(profile)) return extraArgs;
   const args = extraArgs ?? [];
@@ -90,6 +107,7 @@ export function withResumeArgs(
       a.startsWith('--resume=')
   );
   if (alreadyResumes) return extraArgs;
+  if (claudeSessionId) return [...args, '--resume', claudeSessionId];
   return [...args, '--continue'];
 }
 
@@ -102,7 +120,8 @@ export interface RestorePlanItem {
   pinned?: boolean;
   /** Preserved manual-rename lock; re-applied so the restored tab keeps its name. */
   titleLocked?: boolean;
-  /** extraArgs with `--continue` already folded in for claude profiles. */
+  /** extraArgs with the resume flag (`--resume <id>`, or legacy `--continue`)
+   *  already folded in for claude profiles. */
   extraArgs?: string[];
 }
 
@@ -140,7 +159,7 @@ export function planRestore(
         cwd: tab.cwd,
         pinned: tab.pinned,
         titleLocked: tab.titleLocked,
-        extraArgs: withResumeArgs(tab.profile, tab.extraArgs)
+        extraArgs: withResumeArgs(tab.profile, tab.extraArgs, tab.claudeSessionId)
       });
     }
   }

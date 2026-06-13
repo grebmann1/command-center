@@ -30,6 +30,7 @@ import {
 /** Built-in nav destinations. App modules (plugins/*) add their own ids. */
 export type CoreNavId =
   | 'projects'
+  | 'agents'
   | 'inbox'
   | 'scheduler'
   | 'plugins'
@@ -158,6 +159,22 @@ interface UiState {
   /** Leave focus mode and return the column to the full project list. */
   exitProjectFocus: () => void;
   selectTab: (projectId: string, tabId: string | undefined) => void;
+  /**
+   * The session id whose live terminal the Agents view (nav === 'agents')
+   * shows in the main column. Independent of the per-project `selectedTabId`
+   * (which Workspace resets to a visible tab) so it can point at a *headless*
+   * background/scheduled session and "peek" it without un-backgrounding. Null
+   * when nothing is focused / the focused session has gone away.
+   */
+  agentFocusId: string | null;
+  /**
+   * Focus an agent in the Agents view. Sets `agentFocusId` and aligns
+   * `selectedProjectId` so the col-3 header/git read the right project — but
+   * deliberately does NOT call `selectTab` or `restoreTerminal`: peeking must
+   * not pull a background session back into the Projects tab strip. (Contrast
+   * AgentTray.focus, which intentionally restores.)
+   */
+  focusAgent: (session: TerminalSession) => void;
   setPaletteOpen: (open: boolean) => void;
   setQuickOpenOpen: (open: boolean) => void;
   setShortcutsOpen: (open: boolean) => void;
@@ -278,6 +295,7 @@ export const useUi = create<UiState>((set, get) => ({
   selectedProjectId: null,
   focusedProjectId: null,
   selectedTabId: {},
+  agentFocusId: null,
   paletteOpen: false,
   quickOpenOpen: false,
   shortcutsOpen: false,
@@ -400,6 +418,16 @@ export const useUi = create<UiState>((set, get) => ({
       const unread = { ...s.unread };
       if (tabId) delete unread[tabId];
       return { selectedTabId: { ...s.selectedTabId, [projectId]: tabId }, unread };
+    });
+  },
+  focusAgent: (session) => {
+    // Clear the unread marker for the peeked session (we're showing it live),
+    // and align the project so the col-3 header/git resolve. No selectTab /
+    // restoreTerminal — peeking leaves a headless session headless.
+    set((s) => {
+      const unread = { ...s.unread };
+      delete unread[session.id];
+      return { agentFocusId: session.id, selectedProjectId: session.projectId, unread };
     });
   },
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
@@ -813,8 +841,9 @@ export const useData = create<DataState>((set, get) => ({
       // Silently restore the tabs that were open last launch. Runs once per
       // app launch (guarded), after live ptys have hydrated above so we never
       // double-spawn on top of a session that outlived a renderer reload.
-      // planRestore() folds `--continue` into claude tabs so they resume their
-      // prior conversation, and skips deleted/remote/already-live projects.
+      // planRestore() folds each claude tab's own `--resume <session-id>` in so
+      // it resumes ITS prior conversation (legacy snapshots without an id fall
+      // back to `--continue`), and skips deleted/remote/already-live projects.
       await get().restoreSessions(hydrationFailed);
     } catch (err) {
       pushErrorToast(errorMessage(err, 'Failed to initialize app state'));
@@ -2079,6 +2108,32 @@ export function useRunningSchedulerCount(): number {
     }
   }
   return n;
+}
+
+/**
+ * Sidebar-badge counts for the Agents nav item. `active` is every agent that
+ * is working or blocked right now (across all projects, headless included —
+ * same set the bottom tray surfaces); `blocked` is how many of those need the
+ * user. The Agents nav shows `active` as the badge and reds it when `blocked`.
+ * Reads the same two stores the Agents list does (terminals + agent status).
+ */
+export function useAgentNavCounts(): { active: number; blocked: number } {
+  const terminals = useData((s) => s.terminals);
+  const byId = useAgentStatus((s) => s.byId);
+  let active = 0;
+  let blocked = 0;
+  for (const list of Object.values(terminals)) {
+    for (const session of list) {
+      const state = byId[session.id];
+      if (state === 'blocked') {
+        active += 1;
+        blocked += 1;
+      } else if (state === 'working') {
+        active += 1;
+      }
+    }
+  }
+  return { active, blocked };
 }
 
 /**

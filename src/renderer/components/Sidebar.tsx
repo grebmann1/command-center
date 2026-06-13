@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  Bot,
   Clock,
   FolderGit2,
   Inbox,
@@ -15,6 +16,7 @@ import {
   useUnreadInboxCount,
   useEnabledSchedulerCount,
   useRunningSchedulerCount,
+  useAgentNavCounts,
   type NavId
 } from '../store';
 import { resolveIcon } from '../util/resolveIcon';
@@ -53,6 +55,7 @@ function evalModuleBadge(m: { id: string; navBadge?: (host: ReturnType<typeof ge
 
 const coreNavItems: NavEntry[] = [
   { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'agents', label: 'Agents', icon: Bot },
   { id: 'projects', label: 'Projects', icon: FolderGit2 },
   { id: 'scheduler', label: 'Scheduler', icon: Clock },
   { id: 'plugins', label: 'Plugins', icon: Puzzle },
@@ -70,6 +73,7 @@ export function Sidebar() {
   const unreadInbox = useUnreadInboxCount();
   const enabledSchedules = useEnabledSchedulerCount();
   const runningSchedules = useRunningSchedulerCount();
+  const agentCounts = useAgentNavCounts();
 
   // App modules (built-in plugins/* + runtime-loaded extensions) contribute
   // their own nav entries, grouped under an "Extensions" heading to set them
@@ -95,6 +99,15 @@ export function Sidebar() {
     const running = isScheduler && runningSchedules > 0;
     const showScheduleBadge = running;
     const scheduleTitle = `${runningSchedules} running · ${enabledSchedules} scheduled`;
+    // Agents badge: live count of working/blocked agents, red when any is
+    // blocked (needs you), gold-ish (running) otherwise. Mirrors the scheduler
+    // running-dot treatment so a working agent reads at a glance on the rail.
+    const isAgents = item.id === 'agents';
+    const agentsActive = isAgents && agentCounts.active > 0;
+    const agentsBlocked = isAgents && agentCounts.blocked > 0;
+    const agentsTitle = agentsBlocked
+      ? `${agentCounts.active} active · ${agentCounts.blocked} need you`
+      : `${agentCounts.active} active`;
     // Extension-contributed badge (AppModule.navBadge), pre-evaluated when the
     // module nav entries were built. Distinct from the core inbox/scheduler
     // badges above, which are gated on their own ids — a module id never
@@ -118,13 +131,15 @@ export function Sidebar() {
           collapsed
             ? showScheduleBadge
               ? `${item.label} — ${scheduleTitle}`
-              : item.label
+              : agentsActive
+                ? `${item.label} — ${agentsTitle}`
+                : item.label
             : undefined
         }
       >
         <span className="nav-item-icon">
           <Icon size={16} />
-          {running && <span className="nav-running-dot" aria-hidden="true" />}
+          {(running || agentsActive) && <span className="nav-running-dot" aria-hidden="true" />}
         </span>
         <span className="nav-item-label">{item.label}</span>
         {showBadge && (
@@ -143,6 +158,15 @@ export function Sidebar() {
             title={scheduleTitle}
           >
             {runningSchedules > 99 ? '99+' : runningSchedules}
+          </span>
+        )}
+        {agentsActive && (
+          <span
+            className={`nav-badge ${agentsBlocked ? 'nav-badge--blocked' : 'nav-badge--running'}`}
+            aria-label={agentsTitle}
+            title={agentsTitle}
+          >
+            {agentCounts.active > 99 ? '99+' : agentCounts.active}
           </span>
         )}
         {showModuleBadge && (

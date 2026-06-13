@@ -8,6 +8,7 @@ import type {
   InboxEntry,
   LibraryDoc,
   McpServerEntry,
+  Persona,
   PluginEntry,
   SavedRecord,
   TerminalSession,
@@ -120,6 +121,15 @@ const api: CcApi = {
       const handler = (_e: unknown, records: SavedRecord[]) => cb(records);
       ipcRenderer.on(IPC.saved.onChanged, handler);
       return () => ipcRenderer.off(IPC.saved.onChanged, handler);
+    }
+  },
+  personas: {
+    list: () => ipcRenderer.invoke(IPC.personas.list),
+    revealDir: () => ipcRenderer.invoke(IPC.personas.revealDir),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, personas: Persona[]) => cb(personas);
+      ipcRenderer.on(IPC.personas.onChanged, handler);
+      return () => ipcRenderer.off(IPC.personas.onChanged, handler);
     }
   },
   library: {

@@ -22,6 +22,7 @@ import { ScheduleGroupsModal } from './ScheduleGroupsModal';
 import type { OpenTarget, LaunchProfileId, Project, AgentState } from '@shared/types';
 import { useMergedModules } from '../modules';
 import { InboxSidebar } from './InboxSidebar';
+import { AgentsListPane } from './AgentsView';
 import { AddRemoteProjectDialog } from './AddRemoteProjectDialog';
 import { profileIcon } from '../util/profileIcon';
 import { bucketSessions } from '../util/sessionBuckets';
@@ -367,6 +368,7 @@ export function ListPane() {
   if (nav === 'settings') return <SettingsPane />;
   if (nav === 'scheduler') return <SchedulerPane />;
   if (nav === 'inbox') return <InboxPane />;
+  if (nav === 'agents') return <AgentsListPane />;
   if (nav === 'skills' || nav === 'mcp' || nav === 'plugins') {
     return <CataloguePane nav={nav as 'skills' | 'mcp' | 'plugins'} />;
   }

@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ListPane } from './components/ListPane';
 import { Workspace } from './components/Workspace';
+import { TerminalSurface } from './components/TerminalSurface';
+import { AgentsView } from './components/AgentsView';
 import { OverviewPanel } from './components/OverviewPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { SchedulerPanel } from './components/SchedulerPanel';
@@ -231,6 +233,14 @@ export function App() {
       <div className={`main-slot ${nav === 'projects' && !overviewOpen ? 'show' : 'hide'}`}>
         <Workspace />
       </div>
+      {nav === 'agents' && <AgentsView />}
+      {/* The single source of truth for live terminals. Mounted once, for every
+          nav, so its xterm instances (and scrollback) are never disposed; it
+          portals its grid into whichever view owns column 3 (Workspace under
+          'projects', AgentsView under 'agents'), and parks in its own hidden
+          host node otherwise. Must stay OUTSIDE the conditionally-rendered
+          views above so it isn't unmounted on nav change. */}
+      <TerminalSurface />
       {nav === 'projects' && overviewOpen && <OverviewPanel />}
       {nav === 'inbox' && <InboxView />}
       {nav === 'scheduler' && <SchedulerPanel />}

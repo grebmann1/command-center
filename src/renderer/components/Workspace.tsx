@@ -3,7 +3,7 @@ import { TerminalSquare, FolderTree, GitBranch, Columns2, Rows2, LayoutGrid, Squ
 import type { SplitLayout, WorkspaceMode } from '../store';
 import { useData, useUi, visibleTerminals, backgroundTerminals } from '../store';
 import { TabBar } from './TabBar';
-import { TerminalSurface } from './TerminalSurface';
+import { PROJECTS_TERMINAL_ANCHOR_ID } from './TerminalSurface';
 import { LaunchPanel } from './LaunchPanel';
 import { FindBar } from './FindBar';
 import { PreviewPane } from './PreviewPane';
@@ -272,10 +272,13 @@ export function Workspace() {
       </div>
       <div className="workspace-body">
         <div
+          id={PROJECTS_TERMINAL_ANCHOR_ID}
           className="terminal-host"
           style={{ display: isTerminals ? undefined : 'none' }}
         >
-          <TerminalSurface />
+          {/* The single app-level TerminalSurface portals its grid in here when
+              nav === 'projects'. FindBar / overlays sit above it via z-index,
+              so portal DOM order (appended last) doesn't affect stacking. */}
           {findOpen && activeTab && <FindBar sessionId={activeTab.id} />}
           {!project ? (
             <div className="empty-workspace overlay">

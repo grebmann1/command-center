@@ -19,6 +19,13 @@ export interface Project {
    * the default for one-click "+" terminal creation.
    */
   defaultAgents?: string[];
+  /**
+   * Ordered list of persona ids this project surfaces in the "+" picker. The
+   * first entry, if present, is the one-click default (parallels how
+   * `defaultAgents[0]` selects the default profile). Resolved against the
+   * persona store at spawn time; an id that no longer resolves is ignored.
+   */
+  defaultPersonas?: string[];
   /** Reserved for future templates work; no logic yet. */
   template?: string;
   /** Reserved for future lineage / upgrade-hint work; no logic yet. */
@@ -236,6 +243,17 @@ export interface TerminalSession {
   extraArgs?: string[];
   pinned?: boolean;
   /**
+   * The Claude transcript session id this tab owns, for claude-family tabs we
+   * launched fresh. We force it at spawn with `--session-id <uuid>` so each tab
+   * has a *stable, distinct* conversation id — independent of the pty `id`
+   * above. Restore resumes this exact id (`--resume <claudeSessionId>`) so N
+   * tabs in one cwd reopen their OWN N conversations instead of all collapsing
+   * onto the single most-recent one (the old `--continue` behavior). Absent for
+   * shell tabs and for claude tabs that carry an explicit `--resume`/`--continue`
+   * in extraArgs (resume-picker tabs), where Claude owns the id, not us.
+   */
+  claudeSessionId?: string;
+  /**
    * Set once the user manually renames the tab. Suppresses the OSC-title
    * auto-rename (Claude's generated task summary) so an explicit name is never
    * overwritten. Renderer-only — titles are renderer-authoritative after the
@@ -265,6 +283,13 @@ export interface TerminalSession {
    * user-opened tabs. Not surfaced in the UI.
    */
   inboxLevel?: InboxNotifyLevel;
+  /**
+   * Id of the {@link Persona} this session was launched as, if any. Drives the
+   * tab chip's icon/label (falls back to the profile icon when absent). The
+   * resolved flags are already baked into argv at spawn — this is kept only for
+   * display and so a restored session can re-show the persona badge.
+   */
+  personaId?: string;
 }
 
 export interface AppConfig {
@@ -343,6 +368,14 @@ export interface ProjectSettings {
 export interface CreateTerminalRequest {
   projectId: string;
   profile: LaunchProfileId;
+  /**
+   * Optional persona to launch as. When set, the main process resolves it
+   * against the persona store and inserts the persona's flag layer between the
+   * AppConfig globals and the per-project settings (see `personaArgs` in
+   * `pty.ts`). `profile` is still used as the base command unless the persona
+   * declares its own `baseProfile`.
+   */
+  personaId?: string;
   cols: number;
   rows: number;
   extraArgs?: string[];
@@ -550,6 +583,12 @@ export interface ScheduledTask {
   /** Project to spawn the terminal in (FK into projects.json). */
   projectId: string;
   profile: LaunchProfileId;
+  /**
+   * Optional persona to launch this scheduled run as. Resolved against the
+   * persona store at fire time; its `baseProfile` (if any) overrides `profile`.
+   * Absent = launch the bare `profile`, as before.
+   */
+  personaId?: string;
   extraArgs?: string[];
   /** Optional initial prompt — typed into the pty on first data event. */
   prompt?: string;
@@ -601,6 +640,7 @@ export interface ScheduleCreateInput {
   enabled?: boolean;
   projectId: string;
   profile: LaunchProfileId;
+  personaId?: string;
   extraArgs?: string[];
   prompt?: string;
   every: string;
@@ -670,12 +710,72 @@ export interface ScheduleTemplate {
   source?: 'builtin' | 'user' | { projectId: string; projectName?: string };
 }
 
+/**
+ * A named, reusable Claude Code personality (Reviewer, Architect, Bug-hunter…)
+ * that composes native `claude` CLI flags. A persona is **not** a new launch
+ * mechanism — it slots in as one more layer in the precedence chain `pty.ts`
+ * already runs (base profile → AppConfig globals → PERSONA → ProjectSettings →
+ * per-tab extraArgs). Every field maps to a flag the `claude` CLI already
+ * accepts; there is no bespoke runtime.
+ *
+ * Discovered from three places, precedence-merged by `id` (later wins), exactly
+ * like {@link ScheduleTemplate}:
+ *  - built-in catalogue shipped with the app (`builtin:` id prefix)
+ *  - `~/.cc-center/personas/<id>.json` (user-dropped, hand-editable)
+ *  - `<project.path>/.cc-center/personas/<id>.json` (project-shipped)
+ *
+ * Field names mirror CU's agent YAML where sensible so a CU agent is roughly
+ * mechanically portable to a CCTC persona.
+ */
+export interface Persona {
+  /** Stable id; `builtin:` prefix marks a shipped persona a user can shadow. */
+  id: string;
+  name: string;
+  /** Lucide icon name; renderer falls back to a generic icon if unknown. */
+  icon?: string;
+  description?: string;
+  /**
+   * Which of the four base profiles this persona builds on. The persona's flag
+   * layer is added on top of this profile's base command/args. Default `claude`.
+   * `claude-yolo` ignores `permissionMode` (it forces skip-permissions).
+   */
+  baseProfile?: LaunchProfileId;
+  /** Model override → `--model`. */
+  model?: 'opus' | 'sonnet' | 'haiku' | 'default';
+  /** Permission mode → `--permission-mode` (ignored for `claude-yolo`). */
+  permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+  /** Appended to the system prompt → `--append-system-prompt`. */
+  appendSystemPrompt?: string;
+  /** Allowed tools → `--allowedTools` (merged + deduped with other layers). */
+  allowedTools?: string[];
+  /** Denied tools → `--disallowedTools` (CU calls this `disallowedTools`). */
+  deniedTools?: string[];
+  /** Additional context directories → `--add-dir`. */
+  addDirs?: string[];
+  /**
+   * Names of extra MCP servers to wire into this session's `.mcp.json`, resolved
+   * against the launcher's MCP registry (in addition to the always-present
+   * cc-inbox server). Unknown names are ignored.
+   */
+  mcpServers?: string[];
+  /**
+   * Opening prompt written to the pty after spawn (claude-family only; never
+   * for `shell`, where it would run as a command). For non-interactive
+   * scheduled runs it's delivered as the positional argv prompt instead.
+   */
+  initialPrompt?: string;
+  /** Set by the loader for UI display; never read from disk. */
+  source?: 'builtin' | 'user' | { projectId: string; projectName?: string };
+}
+
 export interface ScheduleUpdateInput {
   name?: string;
   description?: string;
   enabled?: boolean;
   projectId?: string;
   profile?: LaunchProfileId;
+  /** Persona id, or null to clear (launch the bare profile). Omit to leave unchanged. */
+  personaId?: string | null;
   extraArgs?: string[];
   prompt?: string;
   every?: string;
@@ -1165,6 +1265,17 @@ export interface CcApi {
       reorder(orderedIds: string[]): Promise<ScheduleGroup[]>;
       onChanged(cb: (groups: ScheduleGroup[]) => void): () => void;
     };
+  };
+  /**
+   * Launchable personas — named, reusable `claude` flag bundles. Read-only over
+   * the merged persona store (builtin ⊕ user dir ⊕ project dir); authoring is by
+   * hand-editing the JSON files the `reveal` action opens. Mirrors the
+   * scheduler-template surface.
+   */
+  personas: {
+    list(): Promise<Persona[]>;
+    onChanged(cb: (personas: Persona[]) => void): () => void;
+    revealDir(): Promise<{ ok: boolean; path: string; message?: string }>;
   };
   /**
    * Generic bridge for app modules (plugins/*). `call` invokes a module's

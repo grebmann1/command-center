@@ -202,11 +202,18 @@ input {
   display: none;
 }
 
-/* Float badges over the icon since there's no label to sit beside. */
+/* No label to sit beside on the rail, so the badge becomes a compact corner
+   pip hugging the icon's top-right. A ring in the rail's base color lifts it
+   off the icon so stacked rows never read as a floating column of blue pills. */
 .sidebar.collapsed .nav-badge {
   position: absolute;
-  top: 2px;
-  right: 8px;
+  top: 1px;
+  right: 11px;
+  min-width: 15px;
+  padding: 0 4px;
+  font-size: 9px;
+  line-height: 15px;
+  box-shadow: 0 0 0 2px var(--bg-base);
 }
 
 /* Icon wrapper anchors the small running-dot indicator. */
@@ -346,8 +353,8 @@ input {
 
 .sidebar.collapsed .agent-tray-rail-btn .nav-badge {
   position: absolute;
-  top: 2px;
-  right: 8px;
+  top: 1px;
+  right: 11px;
 }
 
 /* The expanded rail already shows the count badge, so the dot is redundant
@@ -418,6 +425,10 @@ input {
      height (so the inbox list couldn't scroll). Pin it to the grid track. */
   min-height: 0;
   position: relative;
+  /* Lift the pane above the workspace grid item so the resize handle, which
+     overhangs the shared border, isn't painted underneath the terminal /
+     explorer surface (which would make it un-grabbable). */
+  z-index: 1;
 }
 
 .list-pane.drop-over::after {
@@ -432,15 +443,27 @@ input {
 .list-pane-resizer {
   position: absolute;
   top: 0;
-  right: -3px;
-  width: 6px;
+  /* Straddle the shared border with a comfortable hit target. The visible
+     highlight is drawn by the inner ::after so the wider grab zone stays
+     invisible until hovered. */
+  right: -5px;
+  width: 11px;
   height: 100%;
   cursor: col-resize;
   z-index: 10;
 }
 
-.list-pane-resizer:hover,
-body.resizing-col .list-pane-resizer {
+.list-pane-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 4px;
+  width: 3px;
+  height: 100%;
+}
+
+.list-pane-resizer:hover::after,
+body.resizing-col .list-pane-resizer::after {
   background: var(--accent-blue);
   opacity: 0.5;
 }
@@ -2144,6 +2167,15 @@ body.resizing-col {
   min-height: 0;
 }
 
+/* The app-level TerminalSurface lives inside this host but portals its grid
+   into whichever view owns column 3. The host is the fallback home when no
+   view anchor is active (nav not projects/agents); keep it out of the grid
+   flow AND hidden so parked terminals stay alive but invisible and never
+   claim a grid cell. */
+.terminal-surface-host {
+  display: none;
+}
+
 .terminal-surface {
   position: absolute;
   inset: 0;
@@ -3088,6 +3120,10 @@ body.resizing-col {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Honor the fixed grid-column width: without this the grid item's default
+     min-width:auto lets long, nowrap content (doc titles) expand the track and
+     spill into the preview, forcing a horizontal scrollbar. */
+  min-width: 0;
   border-right: 1px solid var(--border);
   background: var(--bg-panel);
 }
@@ -3118,7 +3154,11 @@ body.resizing-col {
 
 .explorer-tree-body {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
+  /* Setting overflow-y alone makes overflow-x compute to `auto`, which lets a
+     slightly-too-wide row scroll sideways (and clip the left edge). Pin it. */
+  overflow-x: hidden;
   padding: 6px 4px;
 }
 
@@ -9701,6 +9741,9 @@ body.resizing-col .library-resizer::after {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  /* Let the list shrink to the scroll container instead of being sized by its
+     widest (nowrap) row, so titles/summaries truncate rather than overflow. */
+  min-width: 0;
 }
 
 .library-list-item {
@@ -9709,6 +9752,7 @@ body.resizing-col .library-resizer::after {
   flex-direction: column;
   gap: 5px;
   width: 100%;
+  min-width: 0;
   padding: 9px 11px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -9745,6 +9789,7 @@ body.resizing-col .library-resizer::after {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .library-list-item-header svg {
@@ -9754,6 +9799,7 @@ body.resizing-col .library-resizer::after {
 
 .library-list-item-title {
   flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 500;
   overflow: hidden;
@@ -9782,6 +9828,7 @@ body.resizing-col .library-resizer::after {
 
 /* Scope badge */
 .library-scope-badge {
+  flex-shrink: 0;
   padding: 2px 6px;
   border-radius: 3px;
   font-size: 10px;
