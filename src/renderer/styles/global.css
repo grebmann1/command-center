@@ -386,22 +386,18 @@ input {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-dim);
-  padding: 12px 10px 6px;
+  padding: 6px 10px 6px;
 }
 
-/* On the collapsed rail there's no room for the heading text — swap it for a
- * thin divider that keeps the extensions visually separated from core nav. */
+/* The heading text is dropped on the collapsed rail — the preceding
+ * .nav-divider already separates the section, so no substitute is needed. */
 .sidebar.collapsed .nav-section-label {
-  height: 0;
-  padding: 0;
-  margin: 8px 8px;
-  overflow: hidden;
-  border-top: 1px solid var(--border);
+  display: none;
 }
 
-/* Standalone separator (no heading text) — sets Settings apart from the nav
- * destinations above it. Same rule the collapsed extensions divider draws, so
- * the two separators read consistently. */
+/* Section separator — a hairline rule between nav groups (before the
+ * Extensions heading, and before Settings). The single source of every
+ * section break, so they all read identically. */
 .nav-divider {
   height: 0;
   margin: 8px 8px;

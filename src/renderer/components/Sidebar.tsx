@@ -202,19 +202,21 @@ export function Sidebar() {
         {coreNavItems.map(renderNavItem)}
 
         {/* App modules (plugins/*) sit under their own heading so it's clear
-         * they're extensions rather than part of the core tool. The label is
-         * hidden on the collapsed rail; a divider stands in for it there. */}
+         * they're extensions rather than part of the core tool. Each section
+         * break is a hairline rule; a label sits below the rule when the group
+         * has a name. The label is hidden on the collapsed rail (the rule
+         * stands in for it there). */}
         {moduleNavItems.length > 0 && (
           <div className="nav-section">
+            <div className="nav-divider" role="separator" />
             <div className="nav-section-label">Extensions</div>
             {moduleNavItems.map(renderNavItem)}
           </div>
         )}
 
         {/* Settings is system-level, not a content destination like the nav
-         * above it — set it apart with a divider. A text heading would be
-         * redundant over a single "Settings" row, so just a rule (matching the
-         * divider the collapsed rail draws for the Extensions section). */}
+         * above it — same hairline rule as the Extensions break, just no label
+         * (a heading over a single "Settings" row would be redundant). */}
         <div className="nav-divider" role="separator" />
         {renderNavItem(settingsNavItem)}
       </div>
