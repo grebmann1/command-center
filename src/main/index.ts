@@ -59,6 +59,7 @@ import { SchedulerManager } from './scheduler.js';
 import { TrayController } from './tray.js';
 import { createUpdater, type Updater } from './updater.js';
 import { TemplateStore } from './template-store.js';
+import { PersonaStore } from './persona-store.js';
 import { MainModuleHost } from './modules/registry.js';
 import { loadExtensions } from './extensions/loader.js';
 import { ExtensionProcessHost } from './extensions/process-host.js';
@@ -269,6 +270,7 @@ let tray: TrayController | null = null;
 // so the IPC handlers can reach it.
 let updater: Updater | null = null;
 const templates = new TemplateStore(() => store.listProjects());
+const personas = new PersonaStore(() => store.listProjects());
 const moduleHost = new MainModuleHost({ log: logMainError });
 /** Latest discovered runtime extensions; refreshed on boot + enable/disable. */
 let extensionEntries: ExtensionEntry[] = [];
@@ -512,6 +514,7 @@ function registerIpc() {
         logMainError(`ensureMcpConfigForProject(${project.id})`, err)
       );
       templates.rebindProjects();
+      personas.rebindProjects();
       libraryStore.rebindProjects?.();
       scheduler.rebindWatchers();
       return { ok: true, value: project };
@@ -543,6 +546,7 @@ function registerIpc() {
       scheduler.onProjectRemoved(id);
       scheduler.rebindWatchers();
       templates.rebindProjects();
+      personas.rebindProjects();
       libraryStore.rebindProjects?.();
       // If the removed project was the one whose .claude/skills we were watching,
       // tear the watcher down — its path is now gone or owned by no-one.
@@ -596,16 +600,26 @@ function registerIpc() {
           : req.cwd && isWithin(req.cwd, project.path)
           ? req.cwd
           : project.path;
+      // Resolve the persona (if any) up front: it may declare a `baseProfile`
+      // that overrides req.profile, which in turn decides whether an opening
+      // prompt is a positional argv element (claude-family) or skipped (shell).
+      const persona = req.personaId
+        ? personas.list().find((p) => p.id === req.personaId)
+        : undefined;
+      const effectiveProfile = persona?.baseProfile ?? req.profile;
       // For claude-family profiles, an opening prompt is appended as the
       // positional `[prompt]` argv element (same convention the scheduler uses)
       // so the interactive session runs it on first turn. Ignored for `shell`.
       const isClaude =
-        req.profile === 'claude' || req.profile === 'claude-resume' || req.profile === 'claude-yolo';
+        effectiveProfile === 'claude' ||
+        effectiveProfile === 'claude-resume' ||
+        effectiveProfile === 'claude-yolo';
       const extraArgs =
         req.prompt && isClaude ? [...(req.extraArgs ?? []), req.prompt] : req.extraArgs;
       const session = ptys.create({
         projectId: req.projectId,
         profile: req.profile,
+        persona,
         cwd,
         cols: req.cols,
         rows: req.rows,
@@ -1074,6 +1088,16 @@ function registerIpc() {
     safeSend(IPC.scheduler.onTemplatesChanged, templates.list());
   });
 
+  safeHandle(IPC.personas.list, () => personas.list(), () => []);
+  safeHandle(
+    IPC.personas.revealDir,
+    () => personas.revealDir(),
+    () => ({ ok: false, path: '', message: 'Failed to reveal personas directory' })
+  );
+  personas.on('changed', () => {
+    safeSend(IPC.personas.onChanged, personas.list());
+  });
+
   safeHandle(IPC.scheduler.groupsList, () => scheduleGroups.list(), () => []);
   ipcMain.handle(
     IPC.scheduler.groupsCreate,
@@ -1334,7 +1358,13 @@ app.whenReady().then(() => {
   });
   buildAppMenu();
   registerIpc();
-  scheduler.setDeps({ ptys, store, inbox: inboxStore, logger: logMainError });
+  scheduler.setDeps({
+    ptys,
+    store,
+    inbox: inboxStore,
+    logger: logMainError,
+    resolvePersona: (id) => personas.list().find((p) => p.id === id)
+  });
   scheduler.loadAll(store.listProjects());
   // Watch schedule dirs so a skill- or hand-authored schedule file goes live
   // without restart. Self-writes (run-history churn) are suppressed internally.
@@ -1371,6 +1401,7 @@ app.whenReady().then(() => {
     logMainError('powerMonitor.resume', err);
   }
   templates.start();
+  personas.start();
   libraryStore.start?.();
   skillBundles.start();
   scheduleGroups.start();
@@ -1555,6 +1586,7 @@ app.on('before-quit', (event) => {
   tray?.stop();
   tray = null;
   templates.stop();
+  personas.stop();
   libraryStore.stop?.();
   skillBundles.stop();
   scheduleGroups.stop();

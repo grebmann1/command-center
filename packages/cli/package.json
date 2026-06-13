@@ -1,0 +1,22 @@
+{
+  "name": "@cctc/cli",
+  "version": "0.1.0",
+  "description": "Thin CLI for reading/authoring Claude Code Terminal Center stores",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "cc": "./dist/bin/cc.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  }
+}

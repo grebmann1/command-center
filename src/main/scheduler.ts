@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { watch, existsSync, mkdirSync, type FSWatcher } from 'node:fs';
 import type {
+  Persona,
   Project,
   ScheduleCreateInput,
   ScheduledTask,
@@ -49,6 +50,13 @@ type Deps = {
   store: typeof Store;
   inbox?: IInboxStore;
   logger?: Logger;
+  /**
+   * Resolve a persona id to its merged {@link Persona} at fire time, or
+   * undefined if unknown. Injected (rather than importing the store directly)
+   * so the scheduler stays decoupled — same pattern as `store`/`inbox`. Absent
+   * resolver = personas unavailable; a task's `personaId` is then ignored.
+   */
+  resolvePersona?: (id: string) => Persona | undefined;
 };
 
 /**
@@ -455,15 +463,25 @@ export class SchedulerManager extends EventEmitter {
 
     const runId = randomUUID();
     const profile = live.task.profile;
+    // Resolve the persona (if the task names one and a resolver is wired). Its
+    // `baseProfile` overrides the task's profile for prompt-as-positional-argv
+    // detection below — a persona built on `shell` must not get a stray prompt.
+    const persona = live.task.personaId
+      ? this.deps.resolvePersona?.(live.task.personaId)
+      : undefined;
+    const effectiveProfile = persona?.baseProfile ?? profile;
 
     // Build extraArgs. For claude-family profiles, the prompt is appended as
     // a positional argv element — Claude's CLI signature is `claude [options]
     // [prompt]`, so the spawned interactive session picks it up automatically.
     // For shell profiles we ignore the prompt (it would be parsed as a shell
-    // command, which is not what users want).
+    // command, which is not what users want). Note the prompt is delivered as
+    // a positional here (non-interactive scheduled run), NOT via the persona's
+    // pty-write path — the persona's own `initialPrompt`, if any, is suppressed
+    // for scheduled fires by pty.create (claude-family interactive only).
     const userExtraArgs = live.task.extraArgs ?? [];
     const promptArgs =
-      live.task.prompt && isClaudeProfileId(profile) ? [live.task.prompt] : [];
+      live.task.prompt && isClaudeProfileId(effectiveProfile) ? [live.task.prompt] : [];
     const extraArgs = [...userExtraArgs, ...promptArgs];
 
     let session;
@@ -471,6 +489,7 @@ export class SchedulerManager extends EventEmitter {
       session = this.deps.ptys.create({
         projectId: project.id,
         profile,
+        persona,
         cwd: project.path,
         cols: 80,
         rows: 24,
