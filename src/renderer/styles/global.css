@@ -1051,6 +1051,18 @@ body.resizing-col {
 .focus-new-menu-item:hover {
   background: var(--bg-hover);
 }
+/* Section divider inside the "+" menu — separates the Personas group from the
+   base profiles above it. */
+.focus-new-menu-label {
+  padding: 6px 8px 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
 
 /* Grouped status sections — reuse SectionHeader + .list-count-badge. The badge
    is passed as the section action, so the existing .settings-scope-label--action
@@ -10061,6 +10073,76 @@ button.zana-assign-trigger.is-unassigned .zana-assign-caret {
   background: var(--bg-elevated);
   color: var(--text-primary);
   box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+/* Persona picker — a wrapping row of chips. Each chip is a select button plus a
+   star toggle that pins the project's one-click default. */
+.launch-personas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.launch-persona,
+.launch-persona-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+/* The standalone "None" button is a bare .launch-persona; persona chips wrap it
+   in .launch-persona-wrap so the star can sit beside the select button without
+   nesting buttons. Both share the pill chrome. */
+.launch-persona,
+.launch-persona-wrap {
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  padding: 0; /* inner buttons own the padding */
+}
+
+button.launch-persona {
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.launch-persona-wrap > .launch-persona {
+  border: none;
+  background: transparent;
+  padding: 5px 4px 5px 10px;
+  cursor: pointer;
+}
+
+.launch-persona:hover {
+  color: var(--text-primary);
+}
+
+.launch-persona[aria-pressed='true'],
+.launch-persona-wrap.active {
+  color: var(--text-primary);
+  border-color: var(--accent-blue);
+  background: var(--bg-elevated);
+}
+
+.launch-persona-star {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 8px 5px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 0 999px 999px 0;
+}
+
+.launch-persona-star:hover {
+  color: var(--text-primary);
+}
+
+.launch-persona-star.is-default {
+  color: var(--accent-gold, #e0a800);
 }
 
 /* Shell launcher — a secondary action sitting left of Send. It skips the prompt

@@ -3,10 +3,12 @@
 Spawn named, reusable Claude Code personalities (Reviewer, Architect, Bug-hunter…)
 into terminal tabs, per project — riding the two rails that already exist.
 
-> **Status (2026-06-13):** Phases 1–2 are built and tested (26 persona tests
-> pass). The PersonasPanel renders (a grid-layout bug that hid it was fixed in
-> `f3a7de4`). Phase 3 is partial, Phase 4 unstarted, and a few plan items were
-> silently dropped. See the **Status legend** and per-item checkboxes below.
+> **Status (2026-06-13):** Phases 1–3 are built and tested. The PersonasPanel
+> renders (grid-layout bug fixed in `f3a7de4`). The three usability gaps —
+> quick-"+" default, per-project default toggle, and CommandPalette entries —
+> are now wired (see below). Phase 4 remains optional/unstarted, and a couple of
+> original spec items stay dropped (`scope.projectTags`, `subagents`, empty MCP
+> registry). See the **Status legend** and per-item checkboxes.
 
 **Status legend:** ✅ done · 🟡 partial · ❌ not started · ⏸️ deferred (optional)
 
@@ -93,39 +95,44 @@ Goal: launch a persona from a hand-written JSON via scheduler / default chip.
 - ✅ Tests: `persona-store.test.ts` (merge/precedence) + `pty-persona-args.test.ts`
   (layer order + `--allowedTools` dedup). **26 tests pass.**
 
-## Phase 2 — Spawn UX — ✅ MOSTLY COMPLETE
+## Phase 2 — Spawn UX — ✅ COMPLETE
 Goal: the spawn moment. "+" offers personas; one-click default.
 
 - ✅ `src/shared/types.ts`: `Project.defaultPersonas?: string[]`.
 - ✅ `src/renderer/store.ts`: `createTerminal` opts gain `personaId`; `usePersonas`
   store slice fed by `cc.personas.list` + `onChanged`.
-- 🟡 **The "+" picker lists personas — but only in the `LaunchPanel` modal.**
-  - ✅ `LaunchPanel.tsx` lists builtins **and** personas (project-filtered) with a
-    selectable persona, and launches with `personaId`.
-  - ❌ **The quick "+" one-click default is NOT wired.** Plan §86–97: a plain
-    click on "+" should spawn the project's `defaultPersonas[0]`; modifier/
-    right-click opens the picker. The focus-view new-tab menu
-    (`FOCUS_NEW_PROFILES` in `ListPane.tsx`) still offers only claude/yolo/shell
-    — no personas. `Project.defaultPersonas` is read by nothing.
+- ✅ **Personas are reachable from every "+" entry point:**
+  - ✅ `LaunchPanel.tsx` lists builtins **and** personas (project-filtered),
+    selectable, launched with `personaId`.
+  - ✅ **Quick "+" one-click default is wired.** Shared resolver
+    `projectDefaultLaunch(project, personas)` in `util/launchProfile.ts` (unit
+    tested) is consumed by the TabBar "+" right-click fast path, the focus-view
+    new-tab menu (`ListPane.tsx`, which now also lists personas), the ⌘T
+    keyboard shortcut (`shortcuts.ts`), and the ⌘T menu event (`App.tsx`). A
+    pinned `defaultPersonas[0]` launches on its `baseProfile`; a stale id falls
+    through to the profile default.
 - ✅ `src/renderer/util/profileIcon.tsx`: `personaIcon(persona)` with lucide
   fallback.
 - ✅ `src/renderer/components/TabBar.tsx`: tab chip shows the persona icon/label
   when `session.personaId` is set (falls back to profile icon; falls back again
   if the persona was deleted since launch).
 
-## Phase 3 — Management panel + project-shipped personas — 🟡 PARTIAL
-- 🟡 `src/renderer/components/PersonasPanel.tsx` (cloned `SkillsPanel`):
+## Phase 3 — Management panel + project-shipped personas — ✅ MOSTLY COMPLETE
+- ✅ `src/renderer/components/PersonasPanel.tsx` (cloned `SkillsPanel`):
   - ✅ Lists / groups by source (All / Builtin / User / Project), search,
     "Reveal personas dir", source badge per row.
   - ✅ Renders in the full content area (grid-column span fixed in `f3a7de4`).
-  - ❌ **Per-project "default persona" toggles** — not built. (`defaultPersonas`
-    exists in the type but no UI sets it.)
-  - ❌ **"New from template"** button — not built; the panel is read-only
-    (authoring is hand-editing JSON via "Reveal").
+  - ✅ **Per-project "default persona" toggle** — a star on each persona chip in
+    the project-contextual `LaunchPanel` pins `defaultPersonas` (live via the
+    widened `updateProject` path: renderer store → IPC → `main/store.ts`).
+    Clicking the pinned star again clears the default.
+  - ❌ **"New from template"** button — still not built; authoring remains
+    hand-editing JSON via "Reveal". (Low priority — left as a follow-up.)
 - ✅ `Sidebar.tsx`: Personas nav entry (icon `Drama`).
-- ❌ **`CommandPalette` wiring** — plan calls for it; there are **zero** persona
-  references under `src/renderer/components/palette/`. No "launch as persona" or
-  "open Personas" palette entries.
+- ✅ **`CommandPalette` wiring** — `buildItems.tsx` emits an "Open Personas"
+  action plus a "New &lt;persona&gt; tab in &lt;project&gt;" launch row per
+  project persona (keyworded `persona` for fuzzy match); `CommandPalette.tsx`
+  provides the `launchPersona` callback + project-filtered `personas`.
 - ✅ Project-shipped discovery (`<repo>/.cc-center/personas/`) works (Phase 1
   store) and the "project" source badge is shown.
 
@@ -148,15 +155,14 @@ Goal: the spawn moment. "+" offers personas; one-click default.
   empty, so no server name resolves yet.
 
 ## Remaining work — suggested order
-1. **Quick "+" default** (Phase 2 gap): read `Project.defaultPersonas[0]` for the
-   one-click launch; add personas to the focus-view new-tab menu. *This is what
-   makes personas usable without opening the modal every time.*
-2. **CommandPalette entries** (Phase 3): "Open Personas" + "Launch <persona>".
-3. **Per-project default toggle** in PersonasPanel (Phase 3): the UI to set
-   `defaultPersonas`, which (1) then consumes.
+1. ✅ ~~Quick "+" default~~ — done (shared `projectDefaultLaunch`, all "+" paths).
+2. ✅ ~~CommandPalette entries~~ — done ("Open Personas" + per-persona launch).
+3. ✅ ~~Per-project default toggle~~ — done (star on the LaunchPanel persona chip).
 4. **Populate `MCP_SERVER_REGISTRY`** with at least one real server (e.g. gus) so
    `mcpServers` is more than a no-op.
-5. ⏸️ Phase 4 (subagents, Zana promote) — defer until a concrete need.
+5. **"New from template"** in PersonasPanel — author a persona from the UI
+   instead of hand-editing JSON.
+6. ⏸️ Phase 4 (subagents, Zana promote) — defer until a concrete need.
 
 ## Risk / scope guards
 - **Sit-beside keeps blast radius small**: the 4 builtins and every existing

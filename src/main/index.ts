@@ -578,7 +578,10 @@ function registerIpc() {
   );
   safeHandle(
     IPC.projects.update,
-    (id: string, patch: { name?: string; color?: string }) => store.updateProject(id, patch),
+    (
+      id: string,
+      patch: { name?: string; color?: string; defaultAgents?: string[]; defaultPersonas?: string[] }
+    ) => store.updateProject(id, patch),
     () => null
   );
   safeHandle(

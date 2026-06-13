@@ -1091,7 +1091,10 @@ export interface CcApi {
     list(): Promise<Project[]>;
     add(path: string): Promise<Result<Project>>;
     remove(id: string): Promise<void>;
-    update(id: string, patch: { name?: string; color?: string }): Promise<Project | null>;
+    update(
+      id: string,
+      patch: { name?: string; color?: string; defaultAgents?: string[]; defaultPersonas?: string[] }
+    ): Promise<Project | null>;
     touch(id: string): Promise<Project | null>;
     reorder(orderedIds: string[]): Promise<Project[]>;
     pickDirectory(): Promise<string | null>;

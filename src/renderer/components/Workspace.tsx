@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { TerminalSquare, FolderTree, GitBranch, Columns2, Rows2, LayoutGrid, Square, Globe, Library } from 'lucide-react';
 import type { SplitLayout, WorkspaceMode } from '../store';
-import { useData, useUi, visibleTerminals, backgroundTerminals } from '../store';
+import { useData, useUi, usePersonas, visibleTerminals, backgroundTerminals } from '../store';
 import { TabBar } from './TabBar';
 import { PROJECTS_TERMINAL_ANCHOR_ID } from './TerminalSurface';
 import { LaunchPanel } from './LaunchPanel';
@@ -24,7 +24,7 @@ const LibraryView = lazy(() =>
   import('./LibraryView').then((m) => ({ default: m.LibraryView }))
 );
 import type { LaunchProfileId } from '@shared/types';
-import { knownProfile } from '../util/launchProfile';
+import { projectDefaultLaunch } from '../util/launchProfile';
 
 export function Workspace() {
   const projects = useData((s) => s.projects);
@@ -105,10 +105,12 @@ export function Workspace() {
       title: `claude --resume · ${sessionId.slice(0, 7)}`
     });
 
-  // First entry in defaultAgents wins for one-click "+" semantics. We trust
-  // the value as a LaunchProfileId only if it matches the known set; an
-  // unknown string falls back to the picker (undefined).
-  const projectDefaultProfile = knownProfile(project?.defaultAgents?.[0]);
+  // The project's one-click "+" default: a pinned default persona (launched on
+  // its baseProfile) wins, else the defaultAgents profile, else claude. Shared
+  // resolver so TabBar / ⌘T / palette all agree. Undefined when there's no
+  // project (TabBar then falls back to bare claude).
+  const personas = usePersonas((s) => s.personas);
+  const defaultLaunch = project ? projectDefaultLaunch(project, personas) : undefined;
 
   // Split layouts (vertical/horizontal/grid) are wired up in the store and
   // TerminalSurface but the toolbar picker is hidden for now — feels off in
@@ -244,7 +246,7 @@ export function Workspace() {
               void restartTerminal(id, project.id);
             }}
             onPin={(id, pinned) => project && setPinned(project.id, id, pinned)}
-            defaultProfile={projectDefaultProfile}
+            defaultLaunch={defaultLaunch}
             splitTabIds={SPLIT_UI_ENABLED ? splitTabIds : undefined}
             splitActive={SPLIT_UI_ENABLED && splitActive}
             onOpenInSplit={SPLIT_UI_ENABLED ? (id) => project && openInSplit(project.id, id) : undefined}

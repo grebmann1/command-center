@@ -53,7 +53,7 @@ interface Props {
    * only "Delete" terminates.
    */
   onDetach?: (id: string) => void;
-  onNew: (profile: LaunchProfileId) => void;
+  onNew: (profile: LaunchProfileId, opts?: { personaId?: string }) => void;
   /** Open the rich launcher (instruction + profile/model/mode + resume). The
    *  "+" button routes here; the old inline profile dropdown is gone. */
   onOpenLauncher?: () => void;
@@ -63,11 +63,12 @@ interface Props {
   onRestart?: (id: string) => void;
   onPin?: (id: string, pinned: boolean) => void;
   /**
-   * If set, a plain click on the "+" button spawns this profile directly
-   * (one-click semantics). Cmd/Ctrl/Alt-click or right-click still opens
-   * the picker menu so users can override per-spawn.
+   * The project's one-click "+" default: a bare profile, or a pinned default
+   * persona (its flags layer onto `profile`). The right-click fast path spawns
+   * this directly; the plain click opens the launcher. When absent, the "+"
+   * falls back to a bare 'claude'.
    */
-  defaultProfile?: LaunchProfileId;
+  defaultLaunch?: { profile: LaunchProfileId; personaId?: string };
   /** Tab ids currently mounted in non-primary split panes. */
   splitTabIds?: ReadonlyArray<string | undefined>;
   /** Whether a split layout is active (any layout != single). */
@@ -83,7 +84,7 @@ interface TabContextMenu {
   y: number;
 }
 
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNew, onOpenLauncher, onReorder, onRename, onDuplicate, onRestart, onPin, defaultProfile, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
+export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNew, onOpenLauncher, onReorder, onRename, onDuplicate, onRestart, onPin, defaultLaunch, splitTabIds, splitActive, onOpenInSplit, onRemoveFromSplit, onCloseSplit }: Props) {
   const splitSet = new Set((splitTabIds ?? []).filter((x): x is string => !!x));
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -318,16 +319,16 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onDetach, onNew, 
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          // Right-click is a fast path: spawn the project's default profile
-          // directly (or claude) without opening the launcher.
-          onNew(defaultProfile ?? 'claude');
+          // Right-click is a fast path: spawn the project's default directly
+          // (the pinned default persona, or its profile) without the launcher.
+          onNew(defaultLaunch?.profile ?? 'claude', { personaId: defaultLaunch?.personaId });
         }}
         onClick={(e) => {
           e.stopPropagation();
           // The "+" opens the rich launcher (instruction + profile/model/mode +
           // resume). The old inline profile dropdown is gone.
           if (onOpenLauncher) onOpenLauncher();
-          else onNew(defaultProfile ?? 'claude');
+          else onNew(defaultLaunch?.profile ?? 'claude', { personaId: defaultLaunch?.personaId });
         }}
       >
         <Plus size={14} />

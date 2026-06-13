@@ -658,7 +658,10 @@ interface DataState {
     remotePath?: string;
     name?: string;
   }) => Promise<Project | null>;
-  updateProject: (id: string, patch: { name?: string; color?: string }) => Promise<void>;
+  updateProject: (
+    id: string,
+    patch: { name?: string; color?: string; defaultAgents?: string[]; defaultPersonas?: string[] }
+  ) => Promise<void>;
   reorderProjects: (orderedIds: string[]) => Promise<void>;
   removeProject: (id: string) => Promise<void>;
   createTerminal: (

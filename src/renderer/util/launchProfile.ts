@@ -1,7 +1,8 @@
-// Resolving a project's one-click default launch profile from `defaultAgents`.
-// Extracted so ListPane, Workspace, and the command palette share one source of
-// truth instead of each keeping a near-identical local copy.
-import type { LaunchProfileId, Project } from '@shared/types';
+// Resolving a project's one-click default launch from `defaultPersonas` /
+// `defaultAgents`. Extracted so ListPane, Workspace, TabBar, and the command
+// palette share one source of truth instead of each keeping a near-identical
+// local copy.
+import type { LaunchProfileId, Persona, Project } from '@shared/types';
 
 /** The launch profiles the UI knows how to spawn directly. A `defaultAgents`
  *  entry that isn't one of these is a persona/agent id, not a profile. */
@@ -16,4 +17,35 @@ export function knownProfile(value: string | undefined): LaunchProfileId | undef
  *  it's a known profile id; otherwise fall back to plain 'claude'. */
 export function projectDefaultProfile(project: Project): LaunchProfileId {
   return knownProfile(project.defaultAgents?.[0]) ?? 'claude';
+}
+
+/** What a one-click "+" spawns for a project: either a persona (its flags layer
+ *  onto the persona's baseProfile) or a bare profile. `personaId` is set only
+ *  when the project pins a default persona that still resolves in the merged
+ *  catalogue — a stale id (persona file deleted) silently falls through to the
+ *  profile default, so the "+" never dead-ends. */
+export interface ProjectDefaultLaunch {
+  profile: LaunchProfileId;
+  personaId?: string;
+}
+
+/**
+ * Resolve a project's one-click "+" launch. A pinned `defaultPersonas[0]` that
+ * resolves to a real persona wins — we spawn that persona on its own
+ * `baseProfile` (default 'claude'). Otherwise fall back to the profile default
+ * (`defaultAgents[0]` or 'claude'). Pure; shared by every "+" entry point so a
+ * plain click, ⌘T, and the palette all agree.
+ */
+export function projectDefaultLaunch(
+  project: Project,
+  personas: Persona[]
+): ProjectDefaultLaunch {
+  const pinnedId = project.defaultPersonas?.[0];
+  if (pinnedId) {
+    const persona = personas.find((p) => p.id === pinnedId);
+    if (persona) {
+      return { profile: persona.baseProfile ?? 'claude', personaId: persona.id };
+    }
+  }
+  return { profile: projectDefaultProfile(project) };
 }

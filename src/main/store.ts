@@ -338,7 +338,10 @@ export const store = {
       }
     }
   },
-  updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'color'>>): Project | null {
+  updateProject(
+    id: string,
+    patch: Partial<Pick<Project, 'name' | 'color' | 'defaultAgents' | 'defaultPersonas'>>
+  ): Project | null {
     const projects = this.listProjects();
     const idx = projects.findIndex((p) => p.id === id);
     if (idx === -1) return null;

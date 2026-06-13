@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, FileText, Folder, Globe, Slash, CornerDownLeft } from 'lucide-react';
-import { useData, useScheduler, useUi, visibleTerminals } from '../store';
-import type { LaunchProfileId, WalkedFile, SlashCommand, SshHostEntry, Project } from '@shared/types';
+import { useData, useScheduler, usePersonas, useUi, visibleTerminals } from '../store';
+import type { LaunchProfileId, WalkedFile, SlashCommand, SshHostEntry, Project, Persona } from '@shared/types';
 import { fuzzyScore } from '../util/fuzzy';
 import { projectDefaultProfile } from '../util/launchProfile';
 import { useMergedModules } from '../modules';
@@ -102,14 +102,41 @@ export function CommandPalette({ onClose }: Props) {
   const workspaceModeMap = useUi((s) => s.workspaceMode);
   const recentFilesMap = useUi((s) => s.recentFiles);
   const pushToast = useUi((s) => s.pushToast);
+  const allPersonas = usePersonas((s) => s.personas);
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
   const selectedProjectTabs = selectedProject ? visibleTerminals(terminals[selectedProject.id]) : [];
+  // Personas offered for the selected project: builtin + global + its own.
+  const personas = selectedProject
+    ? allPersonas.filter(
+        (p) =>
+          typeof p.source !== 'object' ||
+          p.source === null ||
+          p.source.projectId === selectedProject.id
+      )
+    : [];
   const activeTabId = selectedProject ? selectedTabId[selectedProject.id] : undefined;
   const activeTab = selectedProjectTabs.find((t) => t.id === activeTabId);
 
   const launch = async (profile: LaunchProfileId) => {
     if (!selectedProject) return;
     const session = await createTerminal(selectedProject.id, profile, 80, 24);
+    if (session) {
+      selectTab(selectedProject.id, session.id);
+      setWorkspaceMode(selectedProject.id, 'terminals');
+    }
+  };
+
+  // Launch a persona: spawn on its baseProfile (default claude) with its
+  // personaId, so main applies the persona's flag layer (same as the "+").
+  const launchPersona = async (persona: Persona) => {
+    if (!selectedProject) return;
+    const session = await createTerminal(
+      selectedProject.id,
+      persona.baseProfile ?? 'claude',
+      80,
+      24,
+      { personaId: persona.id }
+    );
     if (session) {
       selectTab(selectedProject.id, session.id);
       setWorkspaceMode(selectedProject.id, 'terminals');
@@ -300,12 +327,12 @@ export function CommandPalette({ onClose }: Props) {
 
   const items = useMemo<PaletteItem[]>(() => buildPaletteItems({
     projects, terminals, selectedProject, selectedProjectTabs, activeTab,
-    scheduledTasks, modules, overviewOpen, whenCtx, onClose, launch, addProject,
-    setNav, selectProject, selectTab, setWorkspaceMode, setSettingsTab,
-    setOverviewOpen, setPinned, restartTerminal, closeTerminal, reopenLastClosed,
-    restoreLastDetached, pushToast
+    scheduledTasks, personas, modules, overviewOpen, whenCtx, onClose, launch,
+    launchPersona, addProject, setNav, selectProject, selectTab, setWorkspaceMode,
+    setSettingsTab, setOverviewOpen, setPinned, restartTerminal, closeTerminal,
+    reopenLastClosed, restoreLastDetached, pushToast
   }), [projects, terminals, selectedProject, selectedProjectTabs, activeTab,
-    scheduledTasks, modules, overviewOpen, whenCtx, onClose, addProject, setNav,
+    scheduledTasks, personas, modules, overviewOpen, whenCtx, onClose, addProject, setNav,
     selectProject, selectTab, setWorkspaceMode, setSettingsTab, setOverviewOpen,
     setPinned, restartTerminal, closeTerminal, reopenLastClosed, restoreLastDetached, pushToast]);
 

@@ -7,12 +7,12 @@
 import {
   Folder, TerminalSquare, Plus, Code2, FolderOpen, FileSearch, Sparkles, Play,
   Zap, Keyboard, History, Search, Inbox, RotateCcw, Trash2, Copy, Pin, PinOff,
-  Globe, BookOpen, Clock, LayoutGrid, RotateCw, Undo2, Puzzle
+  Globe, BookOpen, Clock, LayoutGrid, RotateCw, Undo2, Puzzle, Drama
 } from 'lucide-react';
 import { CursorIcon } from '../icons/CursorIcon';
 import { visibleTerminals, useUi } from '../../store';
 import type {
-  LaunchProfileId, OpenTarget, Project, TerminalSession, ScheduledTask
+  LaunchProfileId, OpenTarget, Persona, Project, TerminalSession, ScheduledTask
 } from '@shared/types';
 import type { AppModule } from '@shared/module-api';
 import { getHost } from '../../modules/ModulePanelHost';
@@ -47,12 +47,16 @@ export interface PaletteBuildContext {
   selectedProjectTabs: TerminalSession[];
   activeTab: TerminalSession | undefined;
   scheduledTasks: ScheduledTask[];
+  /** Personas surfaced for the selected project (builtin + global + own). */
+  personas: Persona[];
   modules: AppModule[];
   overviewOpen: boolean;
   /** Coarse, non-sensitive context for evaluating extension command `when`. */
   whenCtx: WhenContext;
   onClose: () => void;
   launch: (profile: LaunchProfileId) => void;
+  /** Launch a persona (its flags layer onto the persona's baseProfile). */
+  launchPersona: (persona: Persona) => void;
   addProject: () => Promise<unknown> | unknown;
   setNav: (nav: string) => void;
   selectProject: (id: string) => void;
@@ -132,10 +136,10 @@ function renderIcon(name: string): React.ReactNode {
 export function buildPaletteItems(ctx: PaletteBuildContext): PaletteItem[] {
   const {
     projects, terminals, selectedProject, selectedProjectTabs, activeTab,
-    scheduledTasks, overviewOpen, onClose, launch, addProject, setNav,
-    selectProject, selectTab, setWorkspaceMode, setSettingsTab, setOverviewOpen,
-    setPinned, restartTerminal, closeTerminal, reopenLastClosed,
-    restoreLastDetached, pushToast
+    scheduledTasks, personas, overviewOpen, onClose, launch, launchPersona,
+    addProject, setNav, selectProject, selectTab, setWorkspaceMode,
+    setSettingsTab, setOverviewOpen, setPinned, restartTerminal, closeTerminal,
+    reopenLastClosed, restoreLastDetached, pushToast
   } = ctx;
 
   const projectItems: PaletteItem[] = projects.map((p) => ({
@@ -221,6 +225,17 @@ export function buildPaletteItems(ctx: PaletteBuildContext): PaletteItem[] {
       source: 'core',
       run: () => {
         setNav('skills');
+        onClose();
+      }
+    },
+    {
+      key: 'action:personas',
+      icon: <Drama size={14} />,
+      label: 'Open Personas',
+      category: 'Actions',
+      source: 'core',
+      run: () => {
+        setNav('personas');
         onClose();
       }
     },
@@ -403,6 +418,20 @@ export function buildPaletteItems(ctx: PaletteBuildContext): PaletteItem[] {
         run: () => { onClose(); open('terminal'); }
       }
     );
+    // One launch row per persona surfaced for this project. Spawns the persona
+    // on its baseProfile with its flag layer applied (same path as the "+").
+    for (const persona of personas) {
+      actions.push({
+        key: `action:new-persona:${persona.id}`,
+        icon: <Drama size={14} />,
+        label: `New ${persona.name} tab in ${selectedProject.name}`,
+        hint: persona.description ?? 'persona',
+        keywords: ['persona', persona.id],
+        category: 'Actions',
+        source: 'core',
+        run: () => { onClose(); launchPersona(persona); }
+      });
+    }
     if (activeTab) {
       actions.push({
         key: 'action:pin-active',

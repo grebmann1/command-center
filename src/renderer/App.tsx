@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { Bell } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ListPane } from './components/ListPane';
 import { Workspace } from './components/Workspace';
@@ -26,12 +27,11 @@ import {
   scheduleGitRefresh,
   useData,
   useUi,
+  usePersonas,
   useUnreadInboxCount,
   visibleTerminals
 } from './store';
-import type { LaunchProfileId } from '@shared/types';
-
-const KNOWN_LAUNCH_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
+import { projectDefaultLaunch } from './util/launchProfile';
 import { installShortcuts } from './shortcuts';
 
 export function App() {
@@ -162,12 +162,15 @@ export function App() {
         case 'app:newClaudeTab':
           if (projectId) {
             const project = data.projects.find((p) => p.id === projectId);
-            const first = project?.defaultAgents?.[0];
-            const profile: LaunchProfileId =
-              first && (KNOWN_LAUNCH_PROFILES as string[]).includes(first)
-                ? (first as LaunchProfileId)
-                : 'claude';
-            data.createTerminal(projectId, profile, 80, 24).then((s) => {
+            // One-click default: the project's pinned persona (on its
+            // baseProfile) or the profile default. Shared resolver so the menu,
+            // the "+" button, and ⌘T all agree.
+            const launch = project
+              ? projectDefaultLaunch(project, usePersonas.getState().personas)
+              : { profile: 'claude' as const };
+            data.createTerminal(projectId, launch.profile, 80, 24, {
+              personaId: launch.personaId
+            }).then((s) => {
               if (s) ui.selectTab(projectId, s.id);
             });
           }
@@ -232,7 +235,23 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <div className="titlebar">Claude Code Terminal Center</div>
+      <div className="titlebar">
+        <span className="titlebar-title">Claude Code Terminal Center</span>
+        <button
+          type="button"
+          className={`titlebar-bell ${unreadInbox > 0 ? 'has-unread' : ''} ${nav === 'inbox' ? 'active' : ''}`}
+          onClick={() => useUi.getState().setNav(nav === 'inbox' ? 'projects' : 'inbox')}
+          aria-label={unreadInbox > 0 ? `Inbox — ${unreadInbox} unread` : 'Inbox'}
+          title={unreadInbox > 0 ? `Inbox — ${unreadInbox} unread` : 'Inbox'}
+        >
+          <Bell size={15} />
+          {unreadInbox > 0 && (
+            <span className="titlebar-bell-badge" aria-hidden="true">
+              {unreadInbox > 99 ? '99+' : unreadInbox}
+            </span>
+          )}
+        </button>
+      </div>
       <Sidebar />
       <ListPane />
       <div className={`main-slot ${nav === 'projects' && !overviewOpen ? 'show' : 'hide'}`}>

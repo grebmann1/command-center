@@ -1,16 +1,13 @@
-import { useData, useUi, sortProjectsForDisplay } from './store';
+import { useData, useUi, usePersonas, sortProjectsForDisplay } from './store';
 import { getTerminal } from './util/findRegistry';
-import type { LaunchProfileId } from '@shared/types';
+import { projectDefaultLaunch, type ProjectDefaultLaunch } from './util/launchProfile';
 
-const KNOWN_PROFILES: LaunchProfileId[] = ['shell', 'claude', 'claude-resume', 'claude-yolo'];
-
-function defaultProfileForProject(projectId: string): LaunchProfileId {
+/** The project's one-click "+" default: a pinned persona (on its baseProfile)
+ *  or the profile default. Shared with TabBar / the menu so ⌘T agrees. */
+function defaultLaunchForProject(projectId: string): ProjectDefaultLaunch {
   const project = useData.getState().projects.find((p) => p.id === projectId);
-  const first = project?.defaultAgents?.[0];
-  if (first && (KNOWN_PROFILES as string[]).includes(first)) {
-    return first as LaunchProfileId;
-  }
-  return 'claude';
+  if (!project) return { profile: 'claude' };
+  return projectDefaultLaunch(project, usePersonas.getState().personas);
 }
 
 function isMac() {
@@ -168,13 +165,16 @@ export function installShortcuts(): () => void {
       getTerminal(activeTabId)?.clear();
       return;
     }
-    // cmd+t — new tab using project's preferred default profile (falls back
-    // to 'claude' when no per-project default is set).
+    // cmd+t — new tab using the project's one-click default: a pinned default
+    // persona (on its baseProfile) or the default profile (falls back to
+    // 'claude' when neither is set).
     if (e.key === 't' && !e.shiftKey) {
       if (!projectId) return;
       e.preventDefault();
-      const profile = defaultProfileForProject(projectId);
-      data.createTerminal(projectId, profile, 80, 24).then((s) => {
+      const launch = defaultLaunchForProject(projectId);
+      data.createTerminal(projectId, launch.profile, 80, 24, {
+        personaId: launch.personaId
+      }).then((s) => {
         if (s) ui.selectTab(projectId, s.id);
       }).catch(() => {});
       return;

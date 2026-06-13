@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal as TerminalIcon } from 'lucide-react';
 import type { ClaudeSessionSummary, LaunchProfileId, Project, TerminalSession } from '@shared/types';
 import { ClaudeSessionsList } from './ClaudeSessionsList';
+import { Star } from 'lucide-react';
 import { profileIcon, personaIcon } from '../util/profileIcon';
-import { usePersonas } from '../store';
+import { usePersonas, useData } from '../store';
 
 /**
  * The "+" launcher. The user types an instruction, picks a profile
@@ -93,6 +94,17 @@ export function LaunchPanel({
       p.source.projectId === project.id
   );
   const selectedPersona = personaId ? personas.find((p) => p.id === personaId) ?? null : null;
+
+  // The project's pinned default persona (the one a one-click "+" / ⌘T spawns).
+  // Read live from the store so the star reflects updates immediately. Clicking
+  // a persona's star pins it; clicking the pinned one again clears the default.
+  const updateProject = useData((s) => s.updateProject);
+  const defaultPersonaId = useData(
+    (s) => s.projects.find((p) => p.id === project.id)?.defaultPersonas?.[0]
+  );
+  const toggleDefaultPersona = (id: string) => {
+    void updateProject(project.id, { defaultPersonas: defaultPersonaId === id ? [] : [id] });
+  };
 
   const descriptor = PROFILES.find((p) => p.id === profileId) ?? PROFILES[0];
 
@@ -233,21 +245,41 @@ export function LaunchPanel({
             >
               None
             </button>
-            {personas.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className={personaId === p.id ? 'launch-persona active' : 'launch-persona'}
-                onClick={() => setPersonaId((cur) => (cur === p.id ? null : p.id))}
-                aria-pressed={personaId === p.id}
-                title={p.description ?? p.name}
-              >
-                <span className="tab-profile-icon" aria-hidden="true">
-                  {personaIcon(p)}
+            {personas.map((p) => {
+              const isDefault = defaultPersonaId === p.id;
+              return (
+                <span
+                  key={p.id}
+                  className={`launch-persona-wrap ${personaId === p.id ? 'active' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="launch-persona"
+                    onClick={() => setPersonaId((cur) => (cur === p.id ? null : p.id))}
+                    aria-pressed={personaId === p.id}
+                    title={p.description ?? p.name}
+                  >
+                    <span className="tab-profile-icon" aria-hidden="true">
+                      {personaIcon(p)}
+                    </span>
+                    {p.name}
+                  </button>
+                  <button
+                    type="button"
+                    className={`launch-persona-star ${isDefault ? 'is-default' : ''}`}
+                    onClick={() => toggleDefaultPersona(p.id)}
+                    aria-pressed={isDefault}
+                    title={
+                      isDefault
+                        ? 'Default for this project — one-click "+" / ⌘T launches it. Click to clear.'
+                        : 'Set as this project’s default (one-click "+" / ⌘T)'
+                    }
+                  >
+                    <Star size={11} fill={isDefault ? 'currentColor' : 'none'} />
+                  </button>
                 </span>
-                {p.name}
-              </button>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

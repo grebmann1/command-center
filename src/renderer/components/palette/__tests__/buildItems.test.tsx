@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { buildPaletteItems, type PaletteBuildContext } from '../buildItems.js';
 import type { WhenContext } from '../whenContext.js';
 import type { AppModule } from '@shared/module-api';
-import type { Project, TerminalSession, ScheduledTask } from '@shared/types';
+import type { Project, TerminalSession, ScheduledTask, Persona } from '@shared/types';
 
 // The builder calls getHost(moduleId) for any module that contributes commands;
 // stub the module-host bridge so we don't pull in the live store/IPC wiring.
@@ -50,11 +50,13 @@ function baseCtx(over: Partial<PaletteBuildContext> = {}): PaletteBuildContext {
     selectedProjectTabs: [tab],
     activeTab: tab,
     scheduledTasks: [] as ScheduledTask[],
+    personas: [] as Persona[],
     modules: [],
     overviewOpen: false,
     whenCtx,
     onClose: noop,
     launch: noop,
+    launchPersona: noop,
     addProject: asyncNoop,
     setNav: noop,
     selectProject: noop,
@@ -84,6 +86,7 @@ describe('buildPaletteItems', () => {
       'action:inbox',
       'action:scheduler',
       'action:skills',
+      'action:personas',
       'action:overview',
       'action:preview-browser',
       'action:project-settings',
@@ -104,6 +107,30 @@ describe('buildPaletteItems', () => {
     ]);
   });
 
+  it('emits a launch row per persona, keyed + keyworded for fuzzy match', () => {
+    const personas: Persona[] = [
+      { id: 'reviewer', name: 'Code Reviewer', description: 'terse reviewer' },
+      { id: 'architect', name: 'Architect' }
+    ];
+    const items = buildPaletteItems(baseCtx({ personas }));
+    const reviewer = items.find((i) => i.key === 'action:new-persona:reviewer');
+    expect(reviewer).toBeTruthy();
+    expect(reviewer!.label).toBe('New Code Reviewer tab in proj-p1');
+    expect(reviewer!.keywords).toContain('persona');
+    expect(items.some((i) => i.key === 'action:new-persona:architect')).toBe(true);
+  });
+
+  it('omits persona launch rows when no project is selected', () => {
+    const personas: Persona[] = [{ id: 'reviewer', name: 'Code Reviewer' }];
+    const keys = buildPaletteItems(baseCtx({
+      personas,
+      selectedProject: null,
+      selectedProjectTabs: [],
+      activeTab: undefined
+    })).map((i) => i.key);
+    expect(keys.some((k) => k.startsWith('action:new-persona:'))).toBe(false);
+  });
+
   it('omits project-scoped actions when no project is selected', () => {
     const keys = buildPaletteItems(baseCtx({
       selectedProject: null,
@@ -119,6 +146,7 @@ describe('buildPaletteItems', () => {
       'action:inbox',
       'action:scheduler',
       'action:skills',
+      'action:personas',
       'action:overview'
     ]);
   });

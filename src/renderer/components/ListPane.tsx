@@ -11,6 +11,7 @@ import {
   clearInbox,
   useScheduler,
   useScheduleGroups,
+  usePersonas,
   sortProjectsForDisplay,
   listedTerminals,
   applyListPaneWidth,
@@ -19,14 +20,14 @@ import {
 } from '../store';
 import { groupIcon, GROUP_FALLBACK_COLOR } from './scheduleGroupMeta';
 import { ScheduleGroupsModal } from './ScheduleGroupsModal';
-import type { OpenTarget, LaunchProfileId, Project, AgentState } from '@shared/types';
+import type { OpenTarget, LaunchProfileId, Project, AgentState, Persona } from '@shared/types';
 import { useMergedModules } from '../modules';
 import { projectDefaultProfile } from '../util/launchProfile';
 import { shortenProjectPath } from '../util/path';
 import { InboxSidebar } from './InboxSidebar';
 import { AgentsListPane } from './AgentsView';
 import { AddRemoteProjectDialog } from './AddRemoteProjectDialog';
-import { profileIcon } from '../util/profileIcon';
+import { profileIcon, personaIcon } from '../util/profileIcon';
 import { bucketSessions } from '../util/sessionBuckets';
 
 const PROJECT_COLORS = [
@@ -151,6 +152,11 @@ function ProjectFocusView({ project }: { project: Project }) {
   // the buckets in a useMemo keyed on them.
   const sessions = useData((s) => s.terminals[project.id]);
   const agentById = useAgentStatus((s) => s.byId);
+  // Personas offered in the "+" menu: builtin + global + this project's own.
+  const allPersonas = usePersonas((s) => s.personas);
+  const personas = allPersonas.filter(
+    (p) => typeof p.source !== 'object' || p.source === null || p.source.projectId === project.id
+  );
 
   const buckets = useMemo(
     // Pass the FULL list (visible + hidden). Hidden tabs (closed but still
@@ -166,14 +172,19 @@ function ProjectFocusView({ project }: { project: Project }) {
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const newMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const handleNew = (profile: LaunchProfileId) => {
+  const handleNew = (profile: LaunchProfileId, persona?: Persona) => {
     setNewMenuOpen(false);
-    void createTerminal(project.id, profile, 80, 24).then((session) => {
-      if (session) {
-        selectProject(project.id);
-        selectTab(project.id, session.id);
+    // A persona's baseProfile (if any) wins over the menu's profile, mirroring
+    // the launcher; the main process layers the persona's flags on top.
+    const launchProfile = persona?.baseProfile ?? profile;
+    void createTerminal(project.id, launchProfile, 80, 24, { personaId: persona?.id }).then(
+      (session) => {
+        if (session) {
+          selectProject(project.id);
+          selectTab(project.id, session.id);
+        }
       }
-    });
+    );
   };
 
   // Close the "+" launch menu on any outside click or Escape.
@@ -244,6 +255,28 @@ function ProjectFocusView({ project }: { project: Project }) {
                   <span>{label}</span>
                 </button>
               ))}
+              {personas.length > 0 && (
+                <>
+                  <div className="focus-new-menu-label" role="presentation">
+                    Personas
+                  </div>
+                  {personas.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      role="menuitem"
+                      className="focus-new-menu-item"
+                      title={p.description ?? p.name}
+                      onClick={() => handleNew(p.baseProfile ?? 'claude', p)}
+                    >
+                      <span className="tab-profile-icon" aria-hidden="true">
+                        {personaIcon(p)}
+                      </span>
+                      <span>{p.name}</span>
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           )}
         </div>
