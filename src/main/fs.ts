@@ -1,6 +1,20 @@
-import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync, writeFileSync, type Dirent } from 'node:fs';
-import { join, relative, extname } from 'node:path';
-import type { FsEntry, FsReadResult, FsWriteResult, FsReadDataUrlResult, SearchHit, SearchResult, SearchOptions } from '../shared/types.js';
+import {
+  readdirSync,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
+  readFileSync,
+  writeFileSync,
+  realpathSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  type Dirent
+} from 'node:fs';
+import { join, relative, extname, resolve, dirname, sep } from 'node:path';
+import type { FsEntry, FsReadResult, FsWriteResult, FsMutateResult, FsReadDataUrlResult, SearchHit, SearchResult, SearchOptions } from '../shared/types.js';
 
 const DENY = new Set([
   'node_modules',
@@ -110,6 +124,126 @@ export function writeFile(absPath: string, content: string): FsWriteResult {
     return { ok: false, message: err instanceof Error ? err.message : String(err) };
   }
   return { ok: true, bytes: buf.byteLength };
+}
+
+// --- File CRUD (create / rename / delete) -------------------------------
+//
+// Every mutating op below is confined to `root` (the project directory). The
+// renderer always passes the active project's path as the root, so a buggy or
+// adversarial path argument can never escape the project boundary and clobber
+// files elsewhere on disk. Confinement resolves symlinks on the *real* root so
+// a symlinked project still works, but `..` traversal and symlinks that point
+// outside are rejected.
+
+/**
+ * Resolve `target` and assert it sits inside `root`. Returns the normalized
+ * absolute path on success, or an error message describing why it was refused.
+ * `target` need not exist yet (for create ops); we resolve its nearest existing
+ * ancestor's real path to defeat symlink escapes on the parent chain.
+ *
+ * Note: this is a check-then-act guard, so a TOCTOU window exists if a symlink
+ * is swapped into the parent chain between confine() and the syscall. We accept
+ * that residual risk: this is a local single-user app and the only caller passes
+ * the trusted active-project path as `root`.
+ */
+function confine(root: string, target: string): { ok: true; path: string } | { ok: false; message: string } {
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+
+  const resolved = resolve(target);
+
+  // Walk up to the nearest ancestor that exists, realpath it, then re-append
+  // the not-yet-created tail. This catches a symlinked parent dir pointing out
+  // of the project even when the leaf doesn't exist yet.
+  let existing = resolved;
+  const tail: string[] = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) break; // hit filesystem root
+    tail.unshift(existing.slice(parent.length + 1));
+    existing = parent;
+  }
+  let realTarget: string;
+  try {
+    realTarget = tail.length > 0 ? join(realpathSync(existing), ...tail) : realpathSync(existing);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+
+  const prefix = realRoot.endsWith(sep) ? realRoot : realRoot + sep;
+  if (realTarget !== realRoot && !realTarget.startsWith(prefix)) {
+    return { ok: false, message: 'Path is outside the project' };
+  }
+  return { ok: true, path: realTarget };
+}
+
+/** Create an empty file. Refuses to overwrite an existing path. */
+export function createFile(root: string, absPath: string): FsMutateResult {
+  const c = confine(root, absPath);
+  if (!c.ok) return c;
+  if (existsSync(c.path)) return { ok: false, message: 'A file or folder with that name already exists' };
+  try {
+    mkdirSync(dirname(c.path), { recursive: true });
+    writeFileSync(c.path, '', { flag: 'wx' });
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true, path: c.path };
+}
+
+/** Create a directory (and any missing parents). */
+export function createDir(root: string, absPath: string): FsMutateResult {
+  const c = confine(root, absPath);
+  if (!c.ok) return c;
+  if (existsSync(c.path)) return { ok: false, message: 'A file or folder with that name already exists' };
+  try {
+    mkdirSync(c.path, { recursive: true });
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true, path: c.path };
+}
+
+/** Rename or move a path. Both source and destination must stay inside root. */
+export function renamePath(root: string, fromPath: string, toPath: string): FsMutateResult {
+  const from = confine(root, fromPath);
+  if (!from.ok) return from;
+  const to = confine(root, toPath);
+  if (!to.ok) return to;
+  if (!existsSync(from.path)) return { ok: false, message: 'Source no longer exists' };
+  if (existsSync(to.path)) return { ok: false, message: 'A file or folder with that name already exists' };
+  try {
+    mkdirSync(dirname(to.path), { recursive: true });
+    renameSync(from.path, to.path);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true, path: to.path };
+}
+
+/** Permanently delete a file or directory (recursive for dirs). */
+export function deletePath(root: string, absPath: string): FsMutateResult {
+  const c = confine(root, absPath);
+  if (!c.ok) return c;
+  // Guard against nuking the project root itself.
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+  if (c.path === realRoot) return { ok: false, message: 'Refusing to delete the project root' };
+  if (!existsSync(c.path)) return { ok: false, message: 'Path no longer exists' };
+  try {
+    rmSync(c.path, { recursive: true, force: true });
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true, path: c.path };
 }
 
 const MAX_WALK_FILES = 8000;

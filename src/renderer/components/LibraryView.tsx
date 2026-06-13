@@ -259,7 +259,7 @@ export function LibraryView({ project }: Props) {
     <div
       ref={rootRef}
       className="explorer-view library-view"
-      style={{ gridTemplateColumns: `${listWidth}px 1fr` }}
+      style={{ gridTemplateColumns: `${listWidth}px minmax(0, 1fr)` }}
     >
       {/* Left pane: doc list */}
       <div className="explorer-tree">

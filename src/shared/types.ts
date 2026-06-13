@@ -425,6 +425,13 @@ export interface FsWriteResult {
   message?: string;
 }
 
+/** Result of a create / rename / delete operation. `path` is the resolved target. */
+export interface FsMutateResult {
+  ok: boolean;
+  path?: string;
+  message?: string;
+}
+
 export interface FsReadDataUrlResult {
   ok: boolean;
   dataUrl?: string;
@@ -1169,6 +1176,14 @@ export interface CcApi {
     walkFiles(path: string): Promise<WalkedFile[]>;
     searchFiles(path: string, query: string, opts?: SearchOptions): Promise<SearchResult>;
     readDataUrl(path: string): Promise<FsReadDataUrlResult>;
+    /** Create an empty file at `path`, confined to `root` (project dir). */
+    createFile(root: string, path: string): Promise<FsMutateResult>;
+    /** Create a directory at `path`, confined to `root`. */
+    createDir(root: string, path: string): Promise<FsMutateResult>;
+    /** Rename / move `from` to `to`, both confined to `root`. */
+    rename(root: string, from: string, to: string): Promise<FsMutateResult>;
+    /** Permanently delete `path` (recursive for dirs), confined to `root`. */
+    delete(root: string, path: string): Promise<FsMutateResult>;
   };
   openers: {
     openIn(target: OpenTarget, path: string): Promise<OpenResult>;

@@ -59,13 +59,19 @@ const coreNavItems: NavEntry[] = [
   { id: 'agents', label: 'Agents', icon: Bot },
   { id: 'projects', label: 'Projects', icon: FolderGit2 },
   { id: 'scheduler', label: 'Scheduler', icon: Clock },
-  { id: 'personas', label: 'Personas', icon: Drama },
+  { id: 'personas', label: 'Personas', icon: Drama }
+];
+
+const settingsNavItem: NavEntry = { id: 'settings', label: 'Settings', icon: Settings };
+
+// Configuration destinations — sit below Settings as flat rail items (not
+// nested). They're tool config rather than content, so they read as a group
+// under the system-level Settings entry.
+const configNavItems: NavEntry[] = [
   { id: 'plugins', label: 'Plugins', icon: Puzzle },
   { id: 'skills', label: 'Skills', icon: BookOpen },
   { id: 'mcp', label: 'MCP', icon: Plug }
 ];
-
-const settingsNavItem: NavEntry = { id: 'settings', label: 'Settings', icon: Settings };
 
 export function Sidebar() {
   const nav = useUi((s) => s.nav);
@@ -217,10 +223,11 @@ export function Sidebar() {
         )}
 
         {/* Settings is system-level, not a content destination like the nav
-         * above it — same hairline rule as the Extensions break, just no label
-         * (a heading over a single "Settings" row would be redundant). */}
+         * above it — same hairline rule as the Extensions break. Plugins /
+         * Skills / MCP sit directly below it as flat config destinations. */}
         <div className="nav-divider" role="separator" />
         {renderNavItem(settingsNavItem)}
+        {configNavItems.map(renderNavItem)}
       </div>
 
       {/* Running / needs-you agents, pinned to the bottom of the rail. Renders

@@ -92,7 +92,11 @@ const api: CcApi = {
     walkFiles: (path) => ipcRenderer.invoke(IPC.fs.walkFiles, path),
     searchFiles: (path, query, opts) =>
       ipcRenderer.invoke(IPC.fs.searchFiles, path, query, opts),
-    readDataUrl: (path) => ipcRenderer.invoke(IPC.fs.readDataUrl, path)
+    readDataUrl: (path) => ipcRenderer.invoke(IPC.fs.readDataUrl, path),
+    createFile: (root, path) => ipcRenderer.invoke(IPC.fs.createFile, root, path),
+    createDir: (root, path) => ipcRenderer.invoke(IPC.fs.createDir, root, path),
+    rename: (root, from, to) => ipcRenderer.invoke(IPC.fs.rename, root, from, to),
+    delete: (root, path) => ipcRenderer.invoke(IPC.fs.delete, root, path)
   },
   openers: {
     openIn: (target, path) => ipcRenderer.invoke(IPC.openers.openIn, target, path)

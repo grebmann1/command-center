@@ -48,7 +48,11 @@ export const IPC = {
     writeFile: 'fs:writeFile',
     walkFiles: 'fs:walkFiles',
     searchFiles: 'fs:searchFiles',
-    readDataUrl: 'fs:readDataUrl'
+    readDataUrl: 'fs:readDataUrl',
+    createFile: 'fs:createFile',
+    createDir: 'fs:createDir',
+    rename: 'fs:rename',
+    delete: 'fs:delete'
   },
   openers: {
     openIn: 'openers:openIn'

@@ -10,7 +10,7 @@ import {
   powerMonitor
 } from 'electron';
 import { join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { IPC } from '../shared/ipc.js';
@@ -18,7 +18,7 @@ import { store } from './store.js';
 import { PtyManager } from './pty.js';
 import { AgentStatusTracker } from './agent-status.js';
 import { listClaudeSessions } from './claude.js';
-import { listDir, readFile as fsReadFile, writeFile as fsWriteFile, walkFiles, searchFiles, readDataUrl } from './fs.js';
+import { listDir, readFile as fsReadFile, writeFile as fsWriteFile, walkFiles, searchFiles, readDataUrl, createFile as fsCreateFile, createDir as fsCreateDir, renamePath as fsRename, deletePath as fsDelete } from './fs.js';
 import { openIn } from './openers.js';
 import { getGitStatus, showHead, discardChanges } from './git.js';
 import { createInboxStore, type IInboxStore, type InboxEntry } from './inbox-store.js';
@@ -89,6 +89,7 @@ import type {
   Project,
   OpenTarget,
   SearchOptions,
+  FsMutateResult,
   AppConfig,
   ProjectSettings,
   ClaudeProjectSettings,
@@ -713,6 +714,64 @@ function registerIpc() {
     IPC.fs.writeFile,
     (p: string, content: string) => fsWriteFile(p, content),
     () => ({ ok: false, message: 'Write failed' })
+  );
+  // The FS-mutation ops (create/rename/delete) confine their target to `root`,
+  // but `root` itself arrives from the renderer — so an unchecked `root` would
+  // let a buggy/compromised renderer mutate anywhere by naming a `root` of its
+  // choosing. Enforce that `root` is a REGISTERED project path (the same trust
+  // gate `terminals.create` applies to cwd). Returns the trusted root, or null
+  // to reject. Compared by realpath so a symlinked project still matches.
+  const trustedProjectRoot = (root: string): string | null => {
+    let realRoot: string;
+    try {
+      realRoot = realpathSync(root);
+    } catch {
+      return null;
+    }
+    for (const p of store.listProjects()) {
+      try {
+        if (realpathSync(p.path) === realRoot) return realRoot;
+      } catch {
+        /* project dir gone / unreadable — skip */
+      }
+    }
+    return null;
+  };
+  const rejectRoot = (): FsMutateResult => ({
+    ok: false,
+    message: 'Path is not inside a known project'
+  });
+  safeHandle(
+    IPC.fs.createFile,
+    (root: string, p: string) => {
+      const r = trustedProjectRoot(root);
+      return r ? fsCreateFile(r, p) : rejectRoot();
+    },
+    () => ({ ok: false, message: 'Create failed' })
+  );
+  safeHandle(
+    IPC.fs.createDir,
+    (root: string, p: string) => {
+      const r = trustedProjectRoot(root);
+      return r ? fsCreateDir(r, p) : rejectRoot();
+    },
+    () => ({ ok: false, message: 'Create failed' })
+  );
+  safeHandle(
+    IPC.fs.rename,
+    (root: string, from: string, to: string) => {
+      const r = trustedProjectRoot(root);
+      return r ? fsRename(r, from, to) : rejectRoot();
+    },
+    () => ({ ok: false, message: 'Rename failed' })
+  );
+  safeHandle(
+    IPC.fs.delete,
+    (root: string, p: string) => {
+      const r = trustedProjectRoot(root);
+      return r ? fsDelete(r, p) : rejectRoot();
+    },
+    () => ({ ok: false, message: 'Delete failed' })
   );
   safeHandle(IPC.fs.walkFiles, (p: string) => walkFiles(p), () => []);
   safeHandle(

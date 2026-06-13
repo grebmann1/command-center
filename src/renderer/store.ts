@@ -426,7 +426,10 @@ export const useUi = create<UiState>((set, get) => ({
     // Clear the unread marker for the peeked session (we're showing it live),
     // and align the project so the col-3 header/git resolve. No selectTab /
     // restoreTerminal — peeking leaves a headless session headless.
+    // Clicking the already-focused agent again toggles the peek off, falling
+    // back to the empty state.
     set((s) => {
+      if (s.agentFocusId === session.id) return { agentFocusId: null };
       const unread = { ...s.unread };
       delete unread[session.id];
       return { agentFocusId: session.id, selectedProjectId: session.projectId, unread };

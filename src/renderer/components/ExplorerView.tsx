@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { ChevronRight, ChevronDown, Folder, FileText, RefreshCw, GitCompare, GitBranch, ListTree, Save, Undo2, Eye, Pencil } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, FileText, RefreshCw, GitCompare, GitBranch, ListTree, Save, Undo2, Eye, Pencil, FilePlus, FolderPlus } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Editor, { loader } from '@monaco-editor/react';
@@ -404,6 +404,100 @@ export function ExplorerView({ project }: Props) {
     useData.getState().loadGitStatus(project.id);
   };
 
+  // Reload a directory's children and make sure it's expanded so the result of
+  // a create/rename/delete shows up immediately. `dir` is an absolute path.
+  const refreshDir = useCallback(
+    async (dir: string) => {
+      await loadDir(dir, true);
+      setExpanded((s) => {
+        if (s.get(dir) === true) return s;
+        const next = new Map(s);
+        next.set(dir, true);
+        return next;
+      });
+    },
+    [loadDir]
+  );
+
+  const parentOf = (path: string) => path.slice(0, path.lastIndexOf('/')) || project.path;
+
+  // Create a file or folder under `dir`. Prompts for a (possibly nested) name;
+  // a trailing "/" or the `dir` kind decides file-vs-folder.
+  const createEntry = async (dir: string, kind: 'file' | 'dir') => {
+    const label = kind === 'dir' ? 'New folder name' : 'New file name';
+    const name = window.prompt(label + (kind === 'file' ? ' (relative path ok)' : ''))?.trim();
+    if (!name) return;
+    if (name.includes('..')) {
+      pushToast('Name cannot contain ".."', 'error');
+      return;
+    }
+    const target = dir + '/' + name.replace(/^\/+/, '');
+    const r =
+      kind === 'dir'
+        ? await window.cc.fs.createDir(project.path, target)
+        : await window.cc.fs.createFile(project.path, target);
+    if (!r.ok) {
+      pushToast(r.message ?? 'Create failed', 'error');
+      return;
+    }
+    // Reveal the parent (and any intermediate dirs the name introduced).
+    await refreshDir(parentOf(r.path ?? target));
+    // Open the new file in the editor, but don't silently drop an unsaved buffer.
+    if (kind === 'file' && r.path) {
+      const dirty = editedContent !== null && editedContent !== (fileResult?.content ?? '');
+      if (!dirty || window.confirm('Discard unsaved changes?')) {
+        setExplorerFile(project.id, r.path);
+      }
+    }
+    useData.getState().loadGitStatus(project.id);
+  };
+
+  const renameEntry = async (path: string) => {
+    const rel = path.startsWith(project.path + '/') ? path.slice(project.path.length + 1) : path;
+    const next = window.prompt('Rename / move (relative to project root)', rel)?.trim();
+    if (!next || next === rel) return;
+    if (next.includes('..')) {
+      pushToast('Path cannot contain ".."', 'error');
+      return;
+    }
+    const target = project.path + '/' + next.replace(/^\/+/, '');
+    const r = await window.cc.fs.rename(project.path, path, target);
+    if (!r.ok) {
+      pushToast(r.message ?? 'Rename failed', 'error');
+      return;
+    }
+    await refreshDir(parentOf(path));
+    if (r.path && parentOf(r.path) !== parentOf(path)) await refreshDir(parentOf(r.path));
+    // Follow the open file if it moved — either it *was* the renamed entry, or
+    // it lives inside a renamed folder (rewrite its path prefix).
+    if (r.path && explorerFile) {
+      if (explorerFile === path) {
+        setExplorerFile(project.id, r.path);
+      } else if (explorerFile.startsWith(path + '/')) {
+        setExplorerFile(project.id, r.path + explorerFile.slice(path.length));
+      }
+    }
+    useData.getState().loadGitStatus(project.id);
+  };
+
+  // Hard delete (not git-discard) — works on any file or folder, tracked or not.
+  const deleteEntry = async (path: string, kind: 'file' | 'dir') => {
+    const rel = path.startsWith(project.path + '/') ? path.slice(project.path.length + 1) : path;
+    const what = kind === 'dir' ? 'folder (and everything inside it)' : 'file';
+    if (!window.confirm(`Delete ${what} ${rel}? This cannot be undone.`)) return;
+    const r = await window.cc.fs.delete(project.path, path);
+    if (!r.ok) {
+      pushToast(r.message ?? 'Delete failed', 'error');
+      return;
+    }
+    pushToast(`Deleted ${rel}`);
+    if (explorerFile === path || (kind === 'dir' && explorerFile?.startsWith(path + '/'))) {
+      setExplorerFile(project.id, undefined);
+    }
+    await refreshDir(parentOf(path));
+    useData.getState().loadGitStatus(project.id);
+  };
+
   const isDirty = editedContent !== null && editedContent !== (fileResult?.content ?? '');
 
   const saveFile = useCallback(async () => {
@@ -526,6 +620,22 @@ export function ExplorerView({ project }: Props) {
             {treeMode !== 'changes' && changedFiles.length > 0 && (
               <span className="opener-btn-badge">{changedFiles.length}</span>
             )}
+          </button>
+          <button
+            type="button"
+            className="opener-btn"
+            title="New file in project root"
+            onClick={() => createEntry(project.path, 'file')}
+          >
+            <FilePlus size={13} />
+          </button>
+          <button
+            type="button"
+            className="opener-btn"
+            title="New folder in project root"
+            onClick={() => createEntry(project.path, 'dir')}
+          >
+            <FolderPlus size={13} />
           </button>
           <button type="button" className="opener-btn" title="Refresh" onClick={refresh}>
             <RefreshCw size={13} />
@@ -736,6 +846,12 @@ export function ExplorerView({ project }: Props) {
           </button>
           {menu.entry.kind === 'dir' && (
             <>
+              <button onClick={() => { createEntry(menu.entry.path, 'file'); setMenu(null); }}>
+                New file…
+              </button>
+              <button onClick={() => { createEntry(menu.entry.path, 'dir'); setMenu(null); }}>
+                New folder…
+              </button>
               <button onClick={() => { openShellHere(menu.entry.path); setMenu(null); }}>
                 Open shell here
               </button>
@@ -747,6 +863,9 @@ export function ExplorerView({ project }: Props) {
           <button onClick={() => { copyPath(menu.entry.path); setMenu(null); }}>
             Copy path
           </button>
+          <button onClick={() => { renameEntry(menu.entry.path); setMenu(null); }}>
+            Rename / move…
+          </button>
           {menu.entry.kind === 'file' && gitFiles?.[menu.entry.path] && (
             <button
               className="danger"
@@ -757,6 +876,12 @@ export function ExplorerView({ project }: Props) {
                 : 'Discard changes'}
             </button>
           )}
+          <button
+            className="danger"
+            onClick={() => { deleteEntry(menu.entry.path, menu.entry.kind); setMenu(null); }}
+          >
+            {menu.entry.kind === 'dir' ? 'Delete folder' : 'Delete file'}
+          </button>
         </div>
       )}
     </div>
