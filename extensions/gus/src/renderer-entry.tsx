@@ -19,7 +19,7 @@ import { setHostReact } from './host-react.js';
 import GusPanel from '../../../plugins/gus/renderer/GusPanel.js';
 
 const entry: RendererEntry = {
-  activate({ React, host }): ActivateResult {
+  activate({ React }): ActivateResult {
     // MUST run before the panel renders — primes the react / jsx-runtime shims.
     setHostReact(React);
 
@@ -34,9 +34,10 @@ const entry: RendererEntry = {
           keywords: ['hello', 'greet', 'ping'],
           run: () => h.toast('Hello from the GUS module')
         }
-      ],
-      // Sidebar nav badge: number of open projects (cheap + synchronous).
-      navBadge: (h: ModuleHost) => h.listProjects().length
+      ]
+      // No nav badge: the previous one just showed the open-project count,
+      // which has nothing to do with GUS. A real badge would track live GUS
+      // state (e.g. assigned work items) — until that exists, no badge.
     };
   }
 };

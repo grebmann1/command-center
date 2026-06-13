@@ -1523,7 +1523,7 @@ function GusCard({
   );
 }
 const entry = {
-  activate({ React, host }) {
+  activate({ React }) {
     setHostReact(React);
     return {
       panel: GusPanel,
@@ -1536,9 +1536,10 @@ const entry = {
           keywords: ["hello", "greet", "ping"],
           run: () => h.toast("Hello from the GUS module")
         }
-      ],
-      // Sidebar nav badge: number of open projects (cheap + synchronous).
-      navBadge: (h) => h.listProjects().length
+      ]
+      // No nav badge: the previous one just showed the open-project count,
+      // which has nothing to do with GUS. A real badge would track live GUS
+      // state (e.g. assigned work items) — until that exists, no badge.
     };
   }
 };
