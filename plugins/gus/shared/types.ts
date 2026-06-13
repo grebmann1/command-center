@@ -198,3 +198,89 @@ export function isClosedStatus(status: string): boolean {
     s === 'deferred'
   );
 }
+
+/**
+ * CDC trigger configuration. Stored extension-local in ctx.storage under the
+ * 'cdcTriggers' key. Polls GUS work items on an interval and launches a
+ * persona session when a watched item changes.
+ */
+export interface CdcTrigger {
+  /** Stable trigger id (UUID or slug). */
+  id: string;
+  /** Display name. */
+  name: string;
+  /** Default disabled until the user explicitly enables + scopes it. */
+  enabled: boolean;
+  /** The project to launch sessions in. */
+  projectId: string;
+  /** GUS object to watch (fixed to ADM_Work__c for v1). */
+  object: 'ADM_Work__c';
+  /** Change types to fire on. */
+  changeType: Array<'CREATE' | 'UPDATE'>;
+  /**
+   * Fields to watch (cost boundary — REQUIRE at least one). An UPDATE on a
+   * field not in this list does not fire the trigger.
+   */
+  fields: string[];
+  /** SOQL scope: restrict to assignee 'me' and/or a specific scrum team. */
+  scope: {
+    /** 'me' resolves to the authed user's userId; null = no assignee filter. */
+    assignee?: 'me' | null;
+    /** Scrum team id; null = no team filter. */
+    scrumTeam?: string | null;
+  };
+  /** Poll interval (e.g. "2m", "30s"). Min 1m. */
+  pollEvery: string;
+  /** Launch config: persona + prompt template. */
+  launch: {
+    /** Persona id to launch (see host.listPersonas()). */
+    personaId: string;
+    /**
+     * Prompt template with {{Field}} token substitution from the work item
+     * (e.g. "Investigate {{Name}} ({{Status__c}}). {{Subject__c}}").
+     */
+    promptTemplate: string;
+  };
+  /**
+   * When true (default), queue matches via inbox for human review. When false,
+   * auto-launch sessions (use with caution).
+   */
+  requireConfirm: boolean;
+}
+
+/**
+ * Last-seen state per trigger, keyed by work-item Id. Stored under the
+ * 'cdcLastSeen' key in ctx.storage. Used to diff polls and detect genuine
+ * changes (vs. seeing the same work item again).
+ */
+export interface CdcLastSeen {
+  /** Trigger id → { workItemId → { modstamp, fieldValues } }. */
+  [triggerId: string]: {
+    [workItemId: string]: {
+      /** SystemModstamp from the last poll. */
+      modstamp: string;
+      /** The watched field values at last poll (for field-level diffing). */
+      fields: Record<string, unknown>;
+    };
+  };
+}
+
+/**
+ * A pending CDC match (queued for confirmation). Renderer fetches these via
+ * the 'cdcGetPending' capability and displays Launch buttons.
+ */
+export interface CdcPendingMatch {
+  /** Match id (ephemeral, for this queuing session). */
+  matchId: string;
+  /** The trigger that fired. */
+  triggerId: string;
+  triggerName: string;
+  /** The work item that matched. */
+  workItem: GusWorkItem;
+  /** Resolved prompt (template with substitutions applied). */
+  resolvedPrompt: string;
+  /** Persona id to launch. */
+  personaId: string;
+  /** When this match was detected. */
+  detectedAt: string;
+}

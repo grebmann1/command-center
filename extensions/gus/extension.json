@@ -10,7 +10,7 @@
   "engines": {
     "cctcApi": "^1.0.0"
   },
-  "permissions": ["exec"],
+  "permissions": ["exec", "session:launch", "inbox:push"],
   "permissionScopes": {
     "execAllowlist": ["sf"]
   }

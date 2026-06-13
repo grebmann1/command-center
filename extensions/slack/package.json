@@ -1,0 +1,17 @@
+{
+  "name": "@cctc-ext/slack",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Slack integration — automatic lifecycle notifications + formalized agent schedules.",
+  "scripts": {
+    "build:renderer": "BUILD_TARGET=renderer vite build",
+    "build:main": "BUILD_TARGET=main vite build",
+    "build": "npm run build:renderer && npm run build:main",
+    "package": "node scripts/package.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "react": "^18"
+  }
+}

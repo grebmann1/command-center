@@ -1,0 +1,17 @@
+{
+  "id": "slack",
+  "title": "Slack",
+  "icon": "MessageSquare",
+  "titleLabel": "Slack",
+  "entry": {
+    "main": "main.mjs",
+    "renderer": "renderer.js"
+  },
+  "engines": {
+    "cctcApi": "^1.0.0"
+  },
+  "permissions": ["net", "storage", "inbox:push"],
+  "permissionScopes": {
+    "egressAllowlist": ["slack.com", "hooks.slack.com", "api.slack.com"]
+  }
+}

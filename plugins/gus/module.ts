@@ -32,5 +32,5 @@ export const gusModule: AppModule = {
   // single store read via the host), as the contract requires.
   navBadge: (host) => host.listProjects().length,
   // Declared, not yet enforced (curated-trust phase). See AppModule.permissions.
-  permissions: ['storage', 'projects:read', 'session:launch', 'external:open']
+  permissions: ['storage', 'projects:read', 'session:launch', 'external:open', 'inbox:push']
 };

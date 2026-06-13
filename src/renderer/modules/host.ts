@@ -6,7 +6,7 @@
 
 import type { ModuleHost } from '@shared/module-api';
 import type { HostEvents, ExtensionPermission } from '@cctc/extension-sdk/renderer';
-import { useData, useUi } from '../store';
+import { useData, useUi, usePersonas } from '../store';
 import { toSessionInfo } from './sessionInfo';
 import { sanitizeExtraArgs } from '@shared/launch-sanitize';
 
@@ -219,10 +219,17 @@ export function createModuleHost(moduleId: string): ModuleHost {
     },
     listProjects: () =>
       useData.getState().projects.map((p) => ({ id: p.id, name: p.name, path: p.path })),
+    listPersonas: () =>
+      usePersonas.getState().personas.map((p) => ({
+        id: p.id,
+        name: p.name,
+        icon: p.icon,
+        description: p.description
+      })),
     selectProject: (projectId: string | null) => {
       useUi.getState().selectProject(projectId);
     },
-    launchSession: async ({ projectId, extraArgs, title, cwd }) => {
+    launchSession: async ({ projectId, personaId, extraArgs, title, cwd }) => {
       // Gate: session:launch (advisory) + sanitize extraArgs against the denylist
       // (--dangerously-skip-permissions, --mcp-config, …) so a disk ext can't
       // launch an auto-approving / hijacked agent in the user's repo (design §1c).
@@ -243,11 +250,24 @@ export function createModuleHost(moduleId: string): ModuleHost {
             .pushToast(`${moduleId}: blocked unsafe launch flags: ${removed.join(', ')}`, 'error');
         }
       }
-      // Mirror CommandPalette.launch: spawn a claude tab, then bring the shell
+      // A persona's baseProfile (if it declares one) becomes the base profile;
+      // otherwise launch the bare `claude` profile as before. Core re-resolves
+      // the persona's full flag layer from personaId at create time (single
+      // source of truth in pty.ts) — the extension only names it.
+      const persona = personaId
+        ? usePersonas.getState().personas.find((p) => p.id === personaId)
+        : undefined;
+      const baseProfile = persona?.baseProfile ?? 'claude';
+      // Mirror CommandPalette.launch: spawn a tab, then bring the shell
       // to it (nav → projects, select the project + new tab, show terminals).
       const session = await useData
         .getState()
-        .createTerminal(projectId, 'claude', 80, 24, { extraArgs: safeArgs, title, cwd });
+        .createTerminal(projectId, baseProfile, 80, 24, {
+          personaId: persona?.id,
+          extraArgs: safeArgs,
+          title,
+          cwd
+        });
       if (!session) return null;
       const ui = useUi.getState();
       ui.setNav('projects');

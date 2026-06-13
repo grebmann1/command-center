@@ -24,10 +24,12 @@ import {
   CalendarClock,
   Users,
   UserCheck,
-  X
+  X,
+  Clock
 } from 'lucide-react';
 import type { ModuleHost } from '@cctc/extension-sdk/renderer';
 import { GusDetailModal } from './GusDetailModal';
+import { CdcPanel } from './CdcPanel';
 import {
   BOARD_COLUMNS,
   BACKLOG_COLUMNS,
@@ -46,8 +48,8 @@ const STORAGE_SPRINT_KEY = 'selectedSprintId';
 const STORAGE_MODE_KEY = 'boardMode';
 const STORAGE_TEAM_KEY = 'selectedTeamId';
 
-/** Which board the panel shows: the user's own work, or a team's backlog. */
-type BoardMode = 'work' | 'backlog';
+/** Which view the panel shows: work board, backlog, or CDC triggers. */
+type PanelMode = 'work' | 'backlog' | 'cdc';
 /** How long the undo toast stays actionable before the write is committed. */
 const UNDO_WINDOW_MS = 6000;
 
@@ -67,7 +69,7 @@ type SprintSel = 'all' | 'current' | string;
  */
 interface GusCache {
   /** Selections, so the restored board matches what the user last looked at. */
-  mode: BoardMode;
+  mode: PanelMode;
   sprintSel: SprintSel;
   teamSel: string | null;
   includeClosed: boolean;
@@ -98,7 +100,7 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
   const [items, setItems] = useState<GusWorkItem[]>(cache?.items ?? []);
   const [sprints, setSprints] = useState<GusSprint[]>(cache?.sprints ?? []);
   const [sprintSel, setSprintSel] = useState<SprintSel>(cache?.sprintSel ?? 'all');
-  const [mode, setMode] = useState<BoardMode>(cache?.mode ?? 'work');
+  const [mode, setMode] = useState<PanelMode>(cache?.mode ?? 'work');
   const [teams, setTeams] = useState<GusTeam[]>(cache?.teams ?? []);
   const [teamSel, setTeamSel] = useState<string | null>(cache?.teamSel ?? null);
   // Backlog-only: restrict to one record type (Bug / User Story / …). null = all.
@@ -229,7 +231,9 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
   // refetch is actually needed vs. when the cache already holds the right set.
   const loadKey = useMemo(
     () =>
-      mode === 'backlog'
+      mode === 'cdc'
+        ? 'cdc' // CDC mode has no board items
+        : mode === 'backlog'
         ? `backlog|${teamSel ?? ''}|${includeClosed}`
         : `work|${effectiveSprintId ?? 'all'}|${includeClosed}`,
     [mode, teamSel, includeClosed, effectiveSprintId]
@@ -341,7 +345,7 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
     void host.storage.set(STORAGE_SPRINT_KEY, value === 'all' ? '' : value);
   };
 
-  const selectMode = (value: BoardMode) => {
+  const selectMode = (value: PanelMode) => {
     setMode(value);
     setTypeSel(null); // type filter is backlog-only; don't carry it across modes
     setMineOnly(false); // ditto the "mine only" cut
@@ -510,6 +514,13 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
     [mode, teams, teamSel]
   );
 
+  // CDC mode: delegate to CdcPanel entirely. It renders its own back control
+  // (onExit) so the mode isn't a dead end — the shared tab strip below only
+  // renders in work/backlog, hence `mode` narrows to those two afterward.
+  if (mode === 'cdc') {
+    return <CdcPanel host={host} onExit={() => selectMode('work')} />;
+  }
+
   return (
     <section className="gus-panel">
       <header className="gus-header">
@@ -541,27 +552,29 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
 
       <div className="gus-body">
         <aside className="gus-rail">
-          <div className="gus-search">
-            <Search size={13} className="gus-search-icon" aria-hidden />
-            <input
-              type="text"
-              placeholder="Filter work…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            {query && (
-              <button
-                type="button"
-                className="gus-search-clear"
-                aria-label="Clear filter"
-                onClick={() => setQuery('')}
-              >
-                <X size={12} />
-              </button>
-            )}
-          </div>
+          {(mode === 'work' || mode === 'backlog') && (
+            <div className="gus-search">
+              <Search size={13} className="gus-search-icon" aria-hidden />
+              <input
+                type="text"
+                placeholder="Filter work…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              {query && (
+                <button
+                  type="button"
+                  className="gus-search-clear"
+                  aria-label="Clear filter"
+                  onClick={() => setQuery('')}
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+          )}
 
-          <div className="gus-mode-switch" role="tablist" aria-label="Board mode">
+          <div className="gus-mode-switch" role="tablist" aria-label="View mode">
             <button
               type="button"
               role="tab"
@@ -579,6 +592,21 @@ export default function GusPanel({ host }: { host: ModuleHost }) {
               onClick={() => selectMode('backlog')}
             >
               Backlog
+            </button>
+            {/* This strip only renders in work/backlog (CDC mode early-returns
+                above), so the CDC tab here is never the active one — it's the
+                entry point INTO CDC mode. aria-selected is therefore always
+                false; `mode` is already narrowed past 'cdc'. */}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={false}
+              className="gus-mode-tab"
+              onClick={() => selectMode('cdc')}
+              title="Change Data Capture triggers"
+            >
+              <Clock size={13} aria-hidden />
+              CDC
             </button>
           </div>
 

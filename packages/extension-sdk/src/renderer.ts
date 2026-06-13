@@ -35,6 +35,25 @@ export interface SessionInfo {
 }
 
 /**
+ * A SMALL, stable projection of a launchable persona, surfaced by
+ * {@link ModuleHost.listPersonas}. Deliberately not core's full `Persona` — an
+ * extension only needs to know a persona exists, its id (to pass to
+ * {@link ModuleHost.launchSession}), and enough to label it in a picker. The
+ * persona's actual flags are resolved core-side at launch, so they never cross
+ * the isolation boundary.
+ */
+export interface PersonaInfo {
+  /** Stable persona id; pass to `launchSession({ personaId })`. */
+  id: string;
+  /** Display name. */
+  name: string;
+  /** Lucide icon name, if the persona declares one. */
+  icon?: string;
+  /** One-line description, if any. */
+  description?: string;
+}
+
+/**
  * The event catalogue an extension can subscribe to via {@link ModuleHost.on}.
  * Each key maps to a **read-only notification** core already emits; payloads are
  * plain, JSON-serialisable objects (they cross the IPC boundary or derive from
@@ -166,10 +185,28 @@ export interface ModuleHost {
    */
   launchSession(opts: {
     projectId: string;
+    /**
+     * Launch as this persona (see {@link ModuleHost.listPersonas}). Core
+     * resolves the persona to its flag layer host-side — the extension only
+     * names it, so persona resolution stays single-sourced and the flags never
+     * cross the isolation boundary. The persona's `baseProfile` (if any) becomes
+     * the base; `extraArgs` are still appended last and win over the persona.
+     * Unknown id = launched as the bare `claude` profile (no persona).
+     */
+    personaId?: string;
     extraArgs?: string[];
     title?: string;
     cwd?: string;
   }): Promise<{ id: string } | null>;
+
+  /**
+   * List the launchable personas available in the shell (builtin ⊕ user ⊕
+   * project), as small {@link PersonaInfo} projections. Lets an extension offer
+   * a persona picker (e.g. "investigate this bug as…") without reaching into
+   * core stores. The full persona flags stay core-side; pass a chosen `id` to
+   * {@link ModuleHost.launchSession}.
+   */
+  listPersonas(): PersonaInfo[];
 
   /**
    * Subscribe to a host event (see {@link HostEvents}). The handler fires with

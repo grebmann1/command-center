@@ -33,6 +33,9 @@ import {
   type GusWorkDetail,
   type GusChatterPost,
   type GusAttachment,
+  type CdcTrigger,
+  type CdcLastSeen,
+  type CdcPendingMatch,
   isClosedStatus
 } from '../shared/types.js';
 
@@ -290,6 +293,131 @@ function mapWorkDetail(r: RawWorkDetail): GusWorkDetail {
   };
 }
 
+/**
+ * Parse a poll interval string (e.g. "2m", "30s", "1h") into milliseconds.
+ * Mirrors src/shared/parse-every.ts pattern but extension-local to avoid core deps.
+ * Returns null on invalid input; coerces below 1m up to 1m.
+ */
+export function parsePollEvery(every: string): number | null {
+  const MIN_MS = 60_000; // 1 minute floor
+  const UNIT_MS: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
+  const trimmed = (every ?? '').trim().toLowerCase();
+  if (!trimmed) return null;
+  const re = /(\d+(?:\.\d+)?)(ms|s|m|h)/g;
+  let total = 0;
+  let consumed = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(trimmed)) !== null) {
+    const value = parseFloat(match[1]);
+    const unit = match[2];
+    const ms = UNIT_MS[unit];
+    if (!ms) return null;
+    total += value * ms;
+    consumed += match[0].length;
+  }
+  if (total <= 0 || consumed !== trimmed.length) return null;
+  return Math.max(MIN_MS, Math.round(total));
+}
+
+/**
+ * Substitute {{Field}} tokens in a prompt template with values from a work item.
+ * E.g. "Investigate {{Name}} ({{Status__c}})" becomes "Investigate W-123 (New)".
+ */
+/**
+ * Substitute `{{Field}}` tokens in a prompt template. Resolves each token
+ * against the RAW Salesforce row FIRST (so a user writes the SF field names the
+ * trigger's `fields` list and the panel hint use — `{{Name}}`, `{{Status__c}}`,
+ * `{{Subject__c}}`), then falls back to the mapped {@link GusWorkItem}'s
+ * convenience keys (`name`, `status`, `subject`). An unresolved token becomes
+ * the empty string. Passing only the mapped item still resolves the lowercase
+ * keys, so the function is usable without a raw row.
+ */
+export function substitutePrompt(
+  template: string,
+  item: GusWorkItem,
+  raw?: Record<string, unknown>
+): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, field) => {
+    const rawVal = raw ? raw[field] : undefined;
+    const val = rawVal != null ? rawVal : (item as unknown as Record<string, unknown>)[field];
+    return val != null ? String(val) : '';
+  });
+}
+
+/**
+ * CDC watcher state. Module-scoped so the teardown can clean up all timers.
+ * Each armed trigger has a setInterval timer ID stored here.
+ */
+const cdcTimers = new Map<string, number>();
+
+/**
+ * Detect CDC matches by diffing fresh rows against last-seen state.
+ * Pure function: takes raw query results + trigger config + last-seen map,
+ * returns matched work items + updated last-seen map.
+ */
+export function detectCdcMatches(
+  rows: RawWork[],
+  trigger: CdcTrigger,
+  lastSeen: Record<string, { modstamp: string; fields: Record<string, unknown> }>
+): {
+  matches: GusWorkItem[];
+  /** Raw SF row for each matched item, keyed by id — so prompt-template tokens
+   *  can resolve against SF field names (`Status__c`) the panel advertises. */
+  rawById: Record<string, Record<string, unknown>>;
+  nextLastSeen: Record<string, { modstamp: string; fields: Record<string, unknown> }>;
+} {
+  const matches: GusWorkItem[] = [];
+  const rawById: Record<string, Record<string, unknown>> = {};
+  const nextLastSeen = { ...lastSeen };
+
+  for (const row of rows) {
+    const id = row.Id;
+    const modstamp = (row as unknown as Record<string, unknown>).SystemModstamp as string | undefined;
+    const seen = nextLastSeen[id];
+    const isNew = !seen;
+    const isUpdate = seen && seen.modstamp !== modstamp;
+
+    // Check if any watched field changed (UPDATE filter).
+    let fieldChanged = false;
+    if (isUpdate) {
+      for (const field of trigger.fields) {
+        const oldVal = seen.fields[field];
+        const newVal = (row as unknown as Record<string, unknown>)[field];
+        if (oldVal !== newVal) {
+          fieldChanged = true;
+          break;
+        }
+      }
+    }
+
+    // Match if: (CREATE and new) or (UPDATE and changed field).
+    const matchCreate = trigger.changeType.includes('CREATE') && isNew;
+    const matchUpdate = trigger.changeType.includes('UPDATE') && isUpdate && fieldChanged;
+    if (matchCreate || matchUpdate) {
+      matches.push(mapWork(row));
+      rawById[id] = row as unknown as Record<string, unknown>;
+    }
+
+    // Update last-seen for this row.
+    nextLastSeen[id] = {
+      modstamp: modstamp ?? '',
+      fields: trigger.fields.reduce((acc, f) => {
+        acc[f] = (row as unknown as Record<string, unknown>)[f];
+        return acc;
+      }, {} as Record<string, unknown>)
+    };
+  }
+
+  return { matches, rawById, nextLastSeen };
+}
+
+/**
+ * Pending CDC matches (requireConfirm=true). Renderer fetches these via
+ * cdcGetPending and displays Launch buttons. Module-scoped so it survives
+ * multiple capability calls.
+ */
+let pendingMatches: CdcPendingMatch[] = [];
+
 export const gusMainModule: MainModule = {
   id: 'gus',
   setup(ctx) {
@@ -465,7 +593,185 @@ export const gusMainModule: MainModule = {
           author: r.ContentDocument?.CreatedBy?.Name ?? undefined,
           createdDate: r.ContentDocument?.CreatedDate ?? undefined
         }));
+      },
+
+      /**
+       * CDC capabilities — poll-based trigger watcher. The renderer calls cdcArm
+       * on mount to start watchers for enabled triggers; cdcDisarm to stop them.
+       */
+
+      /** List all CDC triggers (from ctx.storage). */
+      async cdcListTriggers(): Promise<CdcTrigger[]> {
+        const triggers = (await ctx.storage.get<CdcTrigger[]>('cdcTriggers')) ?? [];
+        return triggers;
+      },
+
+      /** Save/update a trigger. Arms it if it's enabled. */
+      async cdcSaveTrigger(trigger: CdcTrigger): Promise<{ ok: true }> {
+        const triggers = (await ctx.storage.get<CdcTrigger[]>('cdcTriggers')) ?? [];
+        const idx = triggers.findIndex((t) => t.id === trigger.id);
+        if (idx >= 0) {
+          triggers[idx] = trigger;
+        } else {
+          triggers.push(trigger);
+        }
+        ctx.storage.set('cdcTriggers', triggers);
+
+        // Re-arm if enabled; disarm if disabled.
+        if (trigger.enabled) {
+          cdcArm(trigger, exec, ctx, log);
+        } else {
+          cdcDisarm(trigger.id);
+        }
+        return { ok: true };
+      },
+
+      /** Delete a trigger (disarms it first). */
+      async cdcDeleteTrigger(id: string): Promise<{ ok: true }> {
+        cdcDisarm(id);
+        const triggers = (await ctx.storage.get<CdcTrigger[]>('cdcTriggers')) ?? [];
+        ctx.storage.set('cdcTriggers', triggers.filter((t) => t.id !== id));
+        return { ok: true };
+      },
+
+      /** Arm all enabled triggers (called by renderer on mount). */
+      async cdcArmAll(): Promise<{ ok: true }> {
+        const triggers = (await ctx.storage.get<CdcTrigger[]>('cdcTriggers')) ?? [];
+        for (const t of triggers) {
+          if (t.enabled) {
+            cdcArm(t, exec, ctx, log);
+          }
+        }
+        return { ok: true };
+      },
+
+      /** Disarm all triggers (e.g. before hot-reload). */
+      async cdcDisarmAll(): Promise<{ ok: true }> {
+        for (const id of cdcTimers.keys()) {
+          cdcDisarm(id);
+        }
+        return { ok: true };
+      },
+
+      /** Get pending matches (requireConfirm=true queue). */
+      async cdcGetPending(): Promise<CdcPendingMatch[]> {
+        return pendingMatches;
+      },
+
+      /** Clear a pending match (after user launches or dismisses it). */
+      async cdcClearPending(matchId: string): Promise<{ ok: true }> {
+        pendingMatches = pendingMatches.filter((m) => m.matchId !== matchId);
+        return { ok: true };
       }
     };
+  },
+
+  /**
+   * Teardown: clean up all CDC timers. Called when the extension is disabled,
+   * uninstalled, or hot-reloaded. Prevents orphaned timers.
+   */
+  teardown() {
+    for (const timerId of cdcTimers.values()) {
+      clearInterval(timerId);
+    }
+    cdcTimers.clear();
   }
 };
+
+/**
+ * Arm a CDC trigger: start a setInterval that polls the SOQL query at the
+ * trigger's pollEvery rate, diffs against last-seen, and fires on changes.
+ */
+function cdcArm(
+  trigger: CdcTrigger,
+  exec: NonNullable<MainModuleContext['exec']>,
+  ctx: MainModuleContext,
+  log: MainModuleContext['log']
+): void {
+  // Disarm first if already armed (re-arm on config change).
+  cdcDisarm(trigger.id);
+
+  const intervalMs = parsePollEvery(trigger.pollEvery);
+  if (!intervalMs) {
+    log(`CDC trigger ${trigger.id}: invalid pollEvery "${trigger.pollEvery}"`);
+    return;
+  }
+
+  const poll = async () => {
+    try {
+      // Resolve identity for 'me' scope.
+      const identity = await loadIdentity(exec, log);
+
+      // Build SOQL: SELECT watched fields + SystemModstamp WHERE scope.
+      const fields = ['Id', 'Name', 'SystemModstamp', ...trigger.fields];
+      const uniqueFields = Array.from(new Set(fields));
+      const where: string[] = [];
+      if (trigger.scope.assignee === 'me') {
+        where.push(`Assignee__r.Id = '${soqlEscape(identity.userId)}'`);
+      }
+      if (trigger.scope.scrumTeam) {
+        where.push(`Scrum_Team__c = '${soqlEscape(trigger.scope.scrumTeam)}'`);
+      }
+      const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const soql = `SELECT ${uniqueFields.join(', ')} FROM ${trigger.object} ${whereClause} ORDER BY SystemModstamp DESC LIMIT 100`;
+
+      const rows = await sfQuery<RawWork & { SystemModstamp?: string }>(exec, soql, log);
+
+      // Load last-seen state for this trigger.
+      const lastSeenAll = (await ctx.storage.get<CdcLastSeen>('cdcLastSeen')) ?? {};
+      const lastSeen = lastSeenAll[trigger.id] ?? {};
+
+      // Detect matches and compute next last-seen state.
+      const { matches, rawById, nextLastSeen } = detectCdcMatches(rows, trigger, lastSeen);
+
+      // Persist updated last-seen.
+      lastSeenAll[trigger.id] = nextLastSeen;
+      ctx.storage.set('cdcLastSeen', lastSeenAll);
+
+      // Fire: queue or notify for each match.
+      if (matches.length > 0) {
+        log(`CDC trigger ${trigger.id}: ${matches.length} match(es)`);
+        for (const item of matches) {
+          const prompt = substitutePrompt(trigger.launch.promptTemplate, item, rawById[item.id]);
+          if (trigger.requireConfirm) {
+            // Queue for renderer to display.
+            pendingMatches.push({
+              matchId: `${trigger.id}-${item.id}-${Date.now()}`,
+              triggerId: trigger.id,
+              triggerName: trigger.name,
+              workItem: item,
+              resolvedPrompt: prompt,
+              personaId: trigger.launch.personaId,
+              detectedAt: new Date().toISOString()
+            });
+          } else {
+            // Auto-launch note: the MAIN module can't call host.launchSession
+            // (that's renderer-only). For requireConfirm=false, the renderer
+            // must poll cdcGetPending and auto-launch or we need a different
+            // mechanism. For v1, we REQUIRE requireConfirm=true (default).
+            log(`CDC trigger ${trigger.id}: auto-launch not implemented (requireConfirm must be true)`);
+          }
+        }
+      }
+    } catch (err) {
+      log(`CDC trigger ${trigger.id} poll failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  // Poll immediately, then on interval.
+  void poll();
+  const timerId = setInterval(() => void poll(), intervalMs) as unknown as number;
+  cdcTimers.set(trigger.id, timerId);
+  log(`CDC trigger ${trigger.id} armed (poll every ${intervalMs}ms)`);
+}
+
+/**
+ * Disarm a CDC trigger: clear its interval timer.
+ */
+function cdcDisarm(id: string): void {
+  const timerId = cdcTimers.get(id);
+  if (timerId) {
+    clearInterval(timerId);
+    cdcTimers.delete(id);
+  }
+}
