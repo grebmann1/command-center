@@ -1,0 +1,17 @@
+{
+  "id": "cu",
+  "title": "Fleet",
+  "icon": "Bot",
+  "titleLabel": "Claude Unleashed",
+  "entry": {
+    "main": "main.mjs",
+    "renderer": "renderer.js"
+  },
+  "engines": {
+    "cctcApi": "^1.0.0"
+  },
+  "permissions": ["exec"],
+  "permissionScopes": {
+    "execAllowlist": ["claude-unleashed"]
+  }
+}
